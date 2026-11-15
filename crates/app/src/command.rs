@@ -53,6 +53,21 @@ pub enum Command {
         /// Where to go.
         to: Location,
     },
+    /// Go where a path typed into the path bar leads (SPEC.md *A file's
+    /// path*, *A path that exists only in part*). A folder's path is
+    /// [`Command::Navigate`]. A file's path shows the file's folder in the
+    /// pane's active tab and selects the file once it is listed. A path
+    /// whose beginning exists and whose rest does not shows the deepest
+    /// folder of it that exists, and the tab says what is missing
+    /// (`Tab::missing`); nothing is created. Where the provider cannot say
+    /// what the path is, and where nothing of it exists, this is
+    /// `Navigate`, with the failure it has always had.
+    GoTo {
+        /// The pane.
+        pane: PaneId,
+        /// The typed path, expanded, on the provider it was typed for.
+        to: Location,
+    },
     /// Open an entry of the pane's active tab, as *Opening files* says: a
     /// folder navigates the pane to it; a local file the archive provider
     /// can browse navigates into it as a location (`archive:` with the
@@ -488,6 +503,21 @@ pub enum Command {
         /// Whether this is the drag's first step in the pane.
         first: bool,
     },
+    /// A step along the pane's time slider: navigates like `Navigate` to a
+    /// point of the pane's timeline, or back to its live folder, but
+    /// records history only on the first step of a run (`first: true`), so
+    /// one Back returns to where the run started. A point that does not
+    /// hold the folder shows its nearest existing parent and a notice.
+    TimeTravel {
+        /// The pane.
+        pane: PaneId,
+        /// The point's location, or the live folder.
+        to: Location,
+        /// Whether this is the first step of a run.
+        first: bool,
+    },
+    /// Switch the pane's time slider on or off.
+    ToggleTimeline(PaneId),
     /// Pin to the side panel, undoable; `at` is the position in the Pinned
     /// list, `None` the end.
     Pin {
@@ -608,6 +638,11 @@ pub enum Event {
         /// What changed, already applied to the model.
         change: FsChange,
     },
+    /// What is known about a pane's timeline changed; the model holds it.
+    Timeline {
+        /// The pane.
+        pane: PaneId,
+    },
     /// A decorator produced badges or cells.
     Decorated {
         /// The pane.
@@ -644,6 +679,16 @@ pub enum Event {
         /// The selected ids in view order.
         ids: Vec<EntryId>,
     },
+    /// A reveal selected its entries in the pane, now that they are
+    /// listed: `rick reveal`, and a file's path typed into the path bar.
+    /// The UI brings the first one into view and puts the cursor on it;
+    /// [`Event::SelectionChanged`] came just before.
+    Revealed {
+        /// The pane.
+        pane: PaneId,
+        /// The selected ids in view order.
+        ids: Vec<EntryId>,
+    },
     /// A preview finished opening.
     PreviewReady {
         /// The pane.
@@ -674,6 +719,17 @@ pub enum Event {
         plugin: Option<String>,
         /// The file's mode string and `owner:group`, `-rw-r--r--
         /// serge:serge`, for a local file where the platform has them.
+        permissions: Option<String>,
+    },
+    /// The pane's selection is an empty file — 0 bytes by its listing, and
+    /// a first read returned nothing — which is given to no previewer; the
+    /// pane shows the File info card of SPEC.md's *An empty file*,
+    /// centred, with *Move to trash*.
+    PreviewEmpty {
+        /// The pane.
+        pane: PaneId,
+        /// The file's mode string and `owner:group`, as in
+        /// [`Event::PreviewNone`].
         permissions: Option<String>,
     },
     /// The preview just opened for the pane shows a prefix of a file on a
@@ -902,6 +958,7 @@ impl fmt::Debug for Event {
             Self::Decorated { pane, items } => {
                 pane_struct(f, "Decorated", *pane, "items", &items.len())
             }
+            Self::Timeline { pane } => f.debug_struct("Timeline").field("pane", pane).finish(),
             Self::JobProgress { id, progress } => f
                 .debug_struct("JobProgress")
                 .field("id", id)
@@ -920,6 +977,7 @@ impl fmt::Debug for Event {
             Self::SelectionChanged { pane, ids } => {
                 pane_struct(f, "SelectionChanged", *pane, "ids", ids)
             }
+            Self::Revealed { pane, ids } => pane_struct(f, "Revealed", *pane, "ids", ids),
             Self::PreviewReady { pane, .. } => f
                 .debug_struct("PreviewReady")
                 .field("pane", pane)
@@ -935,6 +993,9 @@ impl fmt::Debug for Event {
             }
             Self::PreviewNone { pane, plugin, .. } => {
                 pane_struct(f, "PreviewNone", *pane, "plugin", plugin)
+            }
+            Self::PreviewEmpty { pane, permissions } => {
+                pane_struct(f, "PreviewEmpty", *pane, "permissions", permissions)
             }
             Self::PreviewPrefix {
                 pane,

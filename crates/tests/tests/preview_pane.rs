@@ -153,6 +153,22 @@ fn field_labels(harness: &Harness<'_, RickUi>) -> Vec<String> {
         .collect()
 }
 
+/// Clicks *Copy* in the preview pane's toolbar. The button is named
+/// *Copy*, and *Copied* for a moment after a click (SPEC.md *Copy
+/// buttons*).
+fn click_copy(harness: &mut Harness<'_, RickUi>) {
+    let pane_rect = harness
+        .state()
+        .inspector_rect()
+        .unwrap_or_else(|| panic!("pane"));
+    harness
+        .query_all_by_label("Copy")
+        .chain(harness.query_all_by_label("Copied"))
+        .find(|node| pane_rect.contains(node.rect().center()))
+        .unwrap_or_else(|| panic!("no Copy in the pane"))
+        .click();
+}
+
 /// The value of the File info card's row `label`.
 fn field(harness: &Harness<'_, RickUi>, label: &str) -> String {
     harness
@@ -834,6 +850,110 @@ fn fitted_frames_are_centred_and_actual_size_pans_by_dragging() {
     );
 }
 
+/// Issue 220 (SPEC.md *Audio and video*): a video filmed upright is shown
+/// upright inside the pane as it is. Its frame is taller than wide, fitted
+/// and centred with the pane's background at its sides, and the pane, its
+/// toolbar with the transport and its status bar are exactly where a clip
+/// that lies has them.
+#[cfg(feature = "gstreamer")]
+#[test]
+fn an_upright_video_is_letterboxed_and_the_pane_and_its_transport_stay() {
+    use ext_preview_media::fixtures::encode;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    // Both are stored 640 × 480; the second says it is turned by a quarter.
+    let encoded = encode::mp4(&dir.path().join("lying.mp4"), 30, 640, 480)
+        .and_then(|()| encode::mp4_turned(&dir.path().join("upright.mp4"), 30, 640, 480, 90));
+    if let Err(error) = encoded {
+        eprintln!("mp4 fixtures: {error}; not shown here");
+        assert!(
+            std::env::var_os("RICK_REQUIRE_GSTREAMER").is_none(),
+            "GStreamer required but {error}"
+        );
+        return;
+    }
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let mut harness = window(
+        &fake,
+        dir.path(),
+        egui::vec2(1100.0, 700.0),
+        500.0,
+        vec![Arc::new(ext_preview_media::MediaPreview::new())],
+    );
+    let pane = harness.state().app().model().focused;
+
+    // The pane, its parts, its toolbar, and the frame with its pixel size.
+    let shown = |harness: &mut Harness<'_, RickUi>, name: &str| {
+        select(harness, name);
+        for _ in 0..3 {
+            harness.step();
+        }
+        let slot = harness
+            .state()
+            .previews()
+            .get(pane)
+            .unwrap_or_else(|| panic!("slot"));
+        assert!(slot.has_frame(), "{name}: {slot:?}");
+        (
+            harness.state().inspector_rect(),
+            harness.state().preview_rects(),
+            harness.state().preview_toolbar().to_vec(),
+            slot.frame_size(0),
+            slot.frame_rect()
+                .unwrap_or_else(|| panic!("{name}: no frame rect")),
+        )
+    };
+    let (lying_pane, lying_rects, lying_toolbar, lying_size, lying) =
+        shown(&mut harness, "lying.mp4");
+    let (pane_rect, rects, toolbar, size, upright) = shown(&mut harness, "upright.mp4");
+
+    // The frames: as stored, and turned.
+    assert_eq!(lying_size, Some((640, 480)));
+    assert_eq!(
+        size,
+        Some((480, 640)),
+        "the upright clip's frame is upright"
+    );
+
+    // Nothing of the pane moved for it: not the pane, not the toolbar and
+    // the transport in it, not the content area, not the status bar.
+    assert!(pane_rect.is_some());
+    assert_eq!(pane_rect, lying_pane, "the pane");
+    assert_eq!(rects, lying_rects, "the pane's parts");
+    assert_eq!(toolbar, lying_toolbar, "the toolbar and its transport");
+    assert!(
+        toolbar.iter().any(|item| item.label.starts_with("Play")),
+        "the transport is in the toolbar: {toolbar:?}"
+    );
+
+    // Fitted into the content and centred, the pane's background at its
+    // sides; the lying clip takes the width instead.
+    let content = rects.content.unwrap_or_else(|| panic!("content"));
+    let scale = (content.width() / 480.0)
+        .min(content.height() / 640.0)
+        .min(1.0);
+    assert!(
+        (upright.width() - 480.0 * scale).abs() < 1.0
+            && (upright.height() - 640.0 * scale).abs() < 1.0,
+        "three to four, fitted: {upright:?} in {content:?}"
+    );
+    assert!(
+        (upright.center() - content.center()).length() < 1.5,
+        "{upright:?} centred in {content:?}"
+    );
+    assert!(
+        content.contains_rect(upright.shrink(0.5)),
+        "inside the content: {upright:?} in {content:?}"
+    );
+    assert!(
+        upright.left() - content.left() > 8.0 && content.right() - upright.right() > 8.0,
+        "bands at its sides: {upright:?} in {content:?}"
+    );
+    assert!(
+        lying.width() > lying.height() && lying.width() > upright.width(),
+        "the lying clip is wider: {lying:?}"
+    );
+}
+
 /// Presses the primary button at `from`, moves to `to` in small steps and
 /// releases.
 fn drag(harness: &mut Harness<'_, RickUi>, from: egui::Pos2, to: egui::Pos2) {
@@ -1134,6 +1254,157 @@ fn select_unclaimed(harness: &mut Harness<'_, RickUi>, name: &str) {
 /// permissions; and its one button is *Open with…*. *Open as hex* is gone:
 /// with the hex view loaded it takes such a file by itself (the test
 /// below).
+/// The names the focused pane lists.
+fn listed(harness: &Harness<'_, RickUi>) -> Vec<String> {
+    let model = harness.state().app().model();
+    model
+        .active_tab(model.focused)
+        .map(|(_, t)| t.listing.rows().map(|e| e.name.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// Acceptance (issue 219, item 5; SPEC.md *An empty file*): a file of 0
+/// bytes is given to no previewer, the hex view included. The pane shows
+/// the File info card, centred: the type, the size and *This file is
+/// empty* under the name, the rows of *No previewer*, and one button,
+/// **Move to trash**, a secondary one. The button is the action: the file
+/// goes to the trash, and Undo brings it back.
+#[test]
+// One file from its card to the trash and back.
+#[allow(clippy::too_many_lines)]
+fn an_empty_file_shows_the_card_with_move_to_trash_and_goes_to_no_previewer() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("empty.txt"), b"").unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("empty.bin"), b"").unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("notes.txt"), b"some text\n").unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    // With the hex view loaded every other file has a previewer.
+    let mut extensions = previewers();
+    extensions.push(Arc::new(ext_preview_hex::HexPreview::new()));
+    let mut harness = window(
+        &fake,
+        dir.path(),
+        egui::vec2(1300.0, 700.0),
+        520.0,
+        extensions,
+    );
+    let pane = harness.state().app().model().focused;
+
+    for name in ["empty.txt", "empty.bin"] {
+        select_unclaimed(&mut harness, name);
+        let slot = harness
+            .state()
+            .previews()
+            .get(pane)
+            .unwrap_or_else(|| panic!("slot"));
+        assert_eq!(
+            slot.placeholder().map(|p| p.empty),
+            Some(true),
+            "{name} is empty"
+        );
+        assert!(!slot.has_frame(), "{name}: no hex dump, no frame");
+        assert!(slot.text_view().is_none(), "{name}: no text view");
+        assert!(slot.error().is_none(), "{name}: not an error");
+        for _ in 0..3 {
+            harness.step();
+        }
+        // The head: the type, the size and why there is nothing to show.
+        assert!(in_pane(&harness, name) >= 1, "the name of {name}");
+        assert_eq!(
+            harness
+                .query_all_by_label_contains("  ·  0 B  ·  This file is empty")
+                .count(),
+            1,
+            "the head of {name}"
+        );
+        assert!(
+            harness
+                .query_all_by_label_contains("Binary file")
+                .next()
+                .is_none(),
+            "{name} is not called binary for being empty"
+        );
+        assert!(
+            harness
+                .query_all_by_label_contains("(empty file)")
+                .next()
+                .is_none(),
+            "{name}: the hex view's line is not reached"
+        );
+        // The rows of *No previewer*, and the one button.
+        for label in ["Location", "Modified"] {
+            assert_eq!(in_pane(&harness, label), 1, "the {label} row of {name}");
+        }
+        assert_eq!(in_pane(&harness, "Move to trash"), 1, "{name}");
+        assert!(harness.query_by_label("Open with…").is_none(), "{name}");
+    }
+
+    // The button is a secondary one: on `bg/control`, not `accent/button`.
+    let scheme = ui_egui::theme::scheme_of(&harness.ctx);
+    let pane_rect = harness
+        .state()
+        .inspector_rect()
+        .unwrap_or_else(|| panic!("pane"));
+    let button = harness
+        .query_all_by_label("Move to trash")
+        .map(|n| n.rect())
+        .find(|r| pane_rect.contains(r.center()))
+        .unwrap_or_else(|| panic!("no button"));
+    let fills: Vec<egui::Color32> = harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(r) if (r.rect.center() - button.center()).length() < 1.0 => {
+                Some(r.fill)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fills, [scheme.bg_control], "a secondary button");
+
+    // A file with something in it has its previewer as before.
+    select(&mut harness, "notes.txt");
+    settle(&mut harness);
+    assert!(
+        harness
+            .state()
+            .previews()
+            .get(pane)
+            .is_some_and(|slot| slot.placeholder().is_none() && slot.text_view().is_some()),
+        "notes.txt is shown as text"
+    );
+
+    // Move to trash removes the file; Undo brings it back.
+    select_unclaimed(&mut harness, "empty.bin");
+    for _ in 0..3 {
+        harness.step();
+    }
+    click_in_pane(&mut harness, "Move to trash");
+    let started = Instant::now();
+    while listed(&harness).iter().any(|n| n == "empty.bin") {
+        settle(&mut harness);
+        assert!(started.elapsed() < Duration::from_secs(10), "not trashed");
+    }
+    assert!(
+        !dir.path().join("empty.bin").exists(),
+        "gone from the folder"
+    );
+    harness
+        .state_mut()
+        .app_mut()
+        .handle(app::Command::Undo, &mut Vec::new());
+    let started = Instant::now();
+    while !listed(&harness).iter().any(|n| n == "empty.bin") {
+        settle(&mut harness);
+        assert!(started.elapsed() < Duration::from_secs(10), "not restored");
+    }
+    assert!(
+        dir.path().join("empty.bin").exists(),
+        "Undo brought it back"
+    );
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn a_file_no_previewer_claims_shows_the_centred_card_with_open_with_alone() {
@@ -1580,7 +1851,7 @@ fn copy_puts_the_whole_text_on_the_clipboard_and_the_raw_source_for_markdown() {
     // A code file: its full text.
     select(&mut harness, "main.rs");
     let pane = harness.state().app().model().focused;
-    click_in_pane(&mut harness, icons::COPY);
+    click_copy(&mut harness);
     assert_eq!(wait_clipboard(&mut harness, &fake), code);
 
     // Past the loaded window: the whole file all the same.
@@ -1595,7 +1866,7 @@ fn copy_puts_the_whole_text_on_the_clipboard_and_the_raw_source_for_markdown() {
             .is_some_and(|l| l.pages[0].len() < big.len()),
         "the pane loaded a window, not the file"
     );
-    click_in_pane(&mut harness, icons::COPY);
+    click_copy(&mut harness);
     let started = Instant::now();
     loop {
         settle(&mut harness);
@@ -1613,7 +1884,7 @@ fn copy_puts_the_whole_text_on_the_clipboard_and_the_raw_source_for_markdown() {
     // Markdown: the raw source, not the rendered document.
     fake.set_text("").unwrap_or_else(|e| panic!("{e}"));
     select(&mut harness, "README.md");
-    click_in_pane(&mut harness, icons::COPY);
+    click_copy(&mut harness);
     let started = Instant::now();
     loop {
         settle(&mut harness);
@@ -1918,7 +2189,7 @@ fn an_svg_is_rasterised_at_the_pane_size_and_again_after_a_resize_and_copy_gives
     );
 
     // Copy: the raw source.
-    click_in_pane(&mut harness, icons::COPY);
+    click_copy(&mut harness);
     let started = Instant::now();
     loop {
         settle(&mut harness);
@@ -1964,7 +2235,7 @@ fn an_svg_is_rasterised_at_the_pane_size_and_again_after_a_resize_and_copy_gives
         "{}",
         harness.state().preview_status()
     );
-    click_in_pane(&mut harness, icons::COPY);
+    click_copy(&mut harness);
     let started = Instant::now();
     loop {
         settle(&mut harness);

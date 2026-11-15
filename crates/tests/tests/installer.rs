@@ -12,6 +12,16 @@
 //! reading a 300 MB archive is a job the action returns from at once,
 //! cancellable without a trace; and the plugin loads through the host
 //! with its three points.
+//!
+//! Issue 223: *Run* on an AppImage, and Enter on it, set the execute bit
+//! and start the file in its folder; one built for another machine is
+//! refused untouched. *Install as application…* on an AppImage reads its
+//! name, icon and version out of the file, installs the one file under
+//! `current`, updates it from a file of another name without touching the
+//! desktop entry, and uninstalls it without a trace, the downloads left
+//! as they were. On a machine without `libfuse.so.2`, an AppImage on the
+//! older runtime is not started by *Run* or Enter, which show the warning
+//! instead, and its install works and carries the warning.
 
 use std::fs;
 use std::io::{self, Read, Write as _};
@@ -22,7 +32,9 @@ use std::time::{Duration, Instant};
 
 use app::{App, Command, Config, Event};
 use ext::{ActionId, Form, Invocation, Level, UiHost, Value, Values};
-use ext_installer::fixtures::Fixture;
+use ext_installer::fixtures::{
+    AppImageFixture, Fixture, other_machine, this_machine, tiny_appimage, tiny_elf,
+};
 use ext_installer::record::{Layout, Record};
 use model::{JobState, SelectionChange};
 use platform::{ConfigDir, Fake};
@@ -35,6 +47,8 @@ use types::Progress;
 struct Scripted {
     form: Mutex<Vec<(&'static str, Value)>>,
     forms: AtomicUsize,
+    /// The texts shown, as (title, text).
+    shown: Mutex<Vec<(String, String)>>,
 }
 
 impl Scripted {
@@ -46,6 +60,14 @@ impl Scripted {
     fn forms_shown(&self) -> usize {
         self.forms.load(Ordering::SeqCst)
     }
+
+    /// The texts shown so far, as (title, text).
+    fn shown(&self) -> Vec<(String, String)> {
+        self.shown
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
 }
 
 impl UiHost for Scripted {
@@ -56,7 +78,12 @@ impl UiHost for Scripted {
     fn prompt(&self, _title: &str, default: &str) -> Option<String> {
         Some(default.to_owned())
     }
-    fn show(&self, _title: &str, _text: &str) {}
+    fn show(&self, title: &str, text: &str) {
+        self.shown
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((title.to_owned(), text.to_owned()));
+    }
     fn form(&self, form: Form) -> Option<Values> {
         self.forms.fetch_add(1, Ordering::SeqCst);
         let mut values = form.defaults();
@@ -82,12 +109,18 @@ struct Driver {
 
 impl Driver {
     fn new(start: &Path) -> Self {
+        Self::with(start, ext_installer::InstallerExtension::new())
+    }
+
+    /// The app with this installer loaded: the plugin as it ships, or one
+    /// on a machine whose libraries the test names.
+    fn with(start: &Path, installer: ext_installer::InstallerExtension) -> Self {
         let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
         let ui = Arc::new(Scripted::default());
         let app = App::new(Config {
             platform: fake.clone(),
             ui: ui.clone(),
-            extensions: vec![Arc::new(ext_installer::InstallerExtension::new())],
+            extensions: vec![Arc::new(installer)],
             config_dir: Some(fake.config_dir()),
             start: Some(local(start)),
         });
@@ -172,6 +205,35 @@ impl Driver {
             pane: self.pane,
             change: SelectionChange::Set(ids),
         });
+    }
+
+    /// Opens the entry named `name`, as Enter and a double-click do.
+    fn open(&mut self, name: &str) -> Vec<Event> {
+        let id = self
+            .tab()
+            .listing
+            .rows()
+            .find(|e| e.name == name)
+            .map_or_else(|| panic!("no entry {name} in {:?}", self.names()), |e| e.id);
+        self.step(Command::Open {
+            pane: self.pane,
+            id,
+        })
+    }
+
+    /// Whether `action` is offered for the selection, as the context menu
+    /// asks.
+    fn offers(&self, action: &'static str) -> bool {
+        let ctx = self
+            .app
+            .action_ctx(self.pane, Invocation::ContextMenu)
+            .unwrap_or_else(|| panic!("no active tab"));
+        self.app
+            .registry()
+            .actions()
+            .iter()
+            .find(|a| a.id() == ActionId(action))
+            .is_some_and(|a| a.availability(&ctx) == ext::Availability::Enabled)
     }
 
     fn navigate(&mut self, to: types::Location) {
@@ -417,6 +479,286 @@ fn install_launch_update_collide_path_mode_and_uninstall_through_the_app() {
 
     // The filesystem diff: the home holds what it held before.
     assert_eq!(files_under(&home), before, "nothing of Rick's remains");
+}
+
+/// Acceptance (issue 223, item 2), through the app with the plugin
+/// loaded. An AppImage without the execute bit has *Run* in its menu, by
+/// its name or by the magic in its header alone; *Run* starts it detached
+/// in its folder, and the bit is set afterwards. Enter and a double-click
+/// do exactly what *Run* does (decided 2026-11-15). A program that is no
+/// AppImage and an archive have no *Run*, and an AppImage built for
+/// another machine is refused: nothing is started and its bit stays off.
+#[test]
+fn run_and_enter_start_an_appimage_through_the_app() {
+    if !ext_installer::supported() {
+        eprintln!("the installer is Linux only; skipping");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().canonicalize().unwrap_or_else(|e| panic!("{e}"));
+    let write = |name: &str, bytes: &[u8], mode: u32| {
+        let path = root.join(name);
+        fs::write(&path, bytes).unwrap_or_else(|e| panic!("{e}"));
+        platform::fs::set_unix_mode(&path, mode).unwrap_or_else(|e| panic!("{e}"));
+        path
+    };
+    let mode = |path: &Path| {
+        platform::fs::unix_mode(path)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .map(|mode| mode & 0o7777)
+    };
+    let image = tiny_appimage(this_machine(), 2, &[]);
+    let downloaded = write("Fix.AppImage", &image, 0o644);
+    let entered = write("fix-entered", &image, 0o600);
+    let other = write(
+        "Other.AppImage",
+        &tiny_appimage(other_machine(), 2, &[]),
+        0o644,
+    );
+    write("fix-tool", &tiny_elf(this_machine(), &[]), 0o644);
+    Fixture::GuiWithDesktop
+        .write(&root)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut driver = Driver::new(&root);
+
+    // Run, from the menu.
+    driver.select(&["fix-tool"]);
+    assert!(!driver.offers("installer.run"), "no AppImage");
+    driver.select(&[Fixture::GuiWithDesktop.file_name()]);
+    assert!(!driver.offers("installer.run"), "an archive");
+    driver.select(&["Fix.AppImage"]);
+    assert!(driver.offers("installer.run"));
+    let events = driver.run("installer.run");
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    assert_eq!(
+        driver.fake.ran(),
+        [(downloaded.clone(), Vec::new(), root.clone())]
+    );
+    assert_eq!(mode(&downloaded), Some(0o744));
+    assert_eq!(fs::read(&downloaded).ok(), Some(image));
+
+    // Enter, on one the magic alone tells.
+    driver.select(&["fix-entered"]);
+    assert!(driver.offers("installer.run"));
+    let events = driver.open("fix-entered");
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    assert_eq!(driver.fake.ran().len(), 2);
+    assert_eq!(
+        driver.fake.ran()[1],
+        (entered.clone(), Vec::new(), root.clone())
+    );
+    assert_eq!(mode(&entered), Some(0o700));
+    assert!(
+        driver.fake.opened().is_empty(),
+        "nothing went to the system"
+    );
+
+    // Another machine's: said so, and nothing more.
+    for events in [
+        {
+            driver.select(&["Other.AppImage"]);
+            driver.run("installer.run")
+        },
+        driver.open("Other.AppImage"),
+    ] {
+        let said = errors(&events);
+        assert!(
+            said.iter().any(|text| text.contains("built for")),
+            "{said:?}"
+        );
+    }
+    assert_eq!(driver.fake.ran().len(), 2, "nothing more was started");
+    assert_eq!(mode(&other), Some(0o644));
+}
+
+/// Acceptance (issue 223, item 3), through the app with the plugin
+/// loaded. An AppImage has *Run* and *Install as application…* in its
+/// menu. The install reads the file in the job *Reading AppImage…* and
+/// lands where an archive's lands: the one file under
+/// `~/.local/opt/<id>/<version>/`, `current`, the record, the AppImage's
+/// own desktop entry and icon. The launcher's entry starts the app
+/// through `current`, the app shows in Installed Apps, an update from a
+/// file of another name leaves the desktop entry as it is, and Uninstall
+/// leaves the home as it was. The downloaded files keep their bytes and
+/// stay without the execute bit.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn an_appimage_installs_updates_and_uninstalls_through_the_app() {
+    if !ext_installer::supported() {
+        eprintln!("the installer is Linux only; skipping");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().canonicalize().unwrap_or_else(|e| panic!("{e}"));
+    let first = AppImageFixture::Entry
+        .write(&root)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let second = AppImageFixture::UpdateV2
+        .write(&root)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let downloaded = fs::read(&first).unwrap_or_else(|e| panic!("{e}"));
+    let mode = |path: &Path| {
+        platform::fs::unix_mode(path)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .map(|mode| mode & 0o7777)
+    };
+    let mut d = Driver::new(&root);
+    let home = d.fake.home_dir();
+    let before = files_under(&home);
+    let layout = d.layout();
+
+    // Both entries, and the install.
+    d.select(&[AppImageFixture::Entry.file_name()]);
+    assert!(d.offers("installer.run") && d.offers("installer.install"));
+    d.ui.answer_form(Vec::new());
+    let events = d.run("installer.install");
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    assert!(
+        d.app
+            .model()
+            .jobs
+            .values()
+            .any(|job| job.name == ext_installer::actions::READING_APPIMAGE),
+        "the file is read in a job of its own: {:?}",
+        d.app.model().jobs
+    );
+    assert_eq!(d.current("fixapp"), "2.1.0");
+    let installed = layout
+        .version_dir("fixapp", "2.1.0")
+        .join("fixapp.AppImage");
+    assert_eq!(fs::read(&installed).ok().as_ref(), Some(&downloaded));
+    assert_eq!(mode(&installed), Some(0o755));
+    let record = d.record("fixapp");
+    assert_eq!(record.name, "Fixapp");
+    assert_eq!(record.main_executable, "fixapp.AppImage");
+    assert_eq!(record.external_files.len(), 2, "the entry and the icon");
+    assert!(layout.icon_path("fixapp", "64x64", "png").is_file());
+
+    // The launcher's entry starts the app, through current.
+    let desktop_path = layout.desktop_path("fixapp");
+    let desktop = fs::read(&desktop_path).unwrap_or_else(|e| panic!("{e}"));
+    let entry = ext_installer::desktop::DesktopEntry::parse(&String::from_utf8_lossy(&desktop));
+    let exec = entry.get("Exec").unwrap_or_default().to_owned();
+    let through = layout.current("fixapp").join("fixapp.AppImage");
+    assert_eq!(exec, format!("\"{}\" %U", through.display()));
+    assert_eq!(entry.get("Icon"), Some("fixapp"));
+    let status = std::process::Command::new(&through)
+        .status()
+        .unwrap_or_else(|e| panic!("running {}: {e}", through.display()));
+    assert!(status.success(), "{status}");
+
+    // The download is where it was and as it was.
+    assert_eq!(fs::read(&first).ok().as_ref(), Some(&downloaded));
+    assert_eq!(mode(&first), Some(0o644));
+    assert!(d.fake.ran().is_empty(), "the install ran nothing");
+
+    // Installed Apps lists it.
+    d.navigate(ext_installer::location());
+    assert_eq!(d.names(), ["Fixapp"]);
+
+    // The next version, from a file with another name: an update, and the
+    // desktop entry is not touched.
+    d.navigate(local(&root));
+    d.select(&[AppImageFixture::UpdateV2.file_name()]);
+    d.ui.answer_form(Vec::new());
+    let events = d.run("installer.install");
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    assert_eq!(d.current("fixapp"), "2.2.0");
+    let record = d.record("fixapp");
+    assert_eq!(record.previous_version.as_deref(), Some("2.1.0"));
+    assert_eq!(record.source_archive, "update-v2.AppImage");
+    assert_eq!(fs::read(&desktop_path).ok().as_ref(), Some(&desktop));
+    assert!(installed.is_file(), "one previous version is kept");
+
+    // Uninstall: the home is what it was, the downloads are still there.
+    d.navigate(ext_installer::location());
+    d.select(&["Fixapp"]);
+    let events = d.run("installer.uninstall");
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    assert_eq!(files_under(&home), before, "nothing of Rick's remains");
+    assert!(first.is_file() && second.is_file());
+    assert_eq!(mode(&second), Some(0o644));
+}
+
+/// Acceptance (issue 223, item 4), through the app, on a machine without
+/// `libfuse.so.2`. An AppImage on the older runtime is not started: *Run*
+/// shows *FUSE 2 is required to run this AppImage* with the install lines
+/// and the link, and so does Enter, which does what *Run* does. One on a
+/// runtime that does not need the library runs with no warning. The
+/// install of the first works all the same and its closing summary
+/// carries the warning.
+#[test]
+fn an_appimage_on_the_older_runtime_warns_of_fuse2_through_the_app() {
+    if !ext_installer::supported() {
+        eprintln!("the installer is Linux only; skipping");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().canonicalize().unwrap_or_else(|e| panic!("{e}"));
+    AppImageFixture::Fuse2
+        .write(&root)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let fine = AppImageFixture::Entry
+        .write(&root)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut d = Driver::with(
+        &root,
+        ext_installer::InstallerExtension::with_libraries(ext_installer::install::Libraries::of(
+            &[],
+        )),
+    );
+
+    // Run, then Enter: the warning, and nothing started.
+    d.select(&[AppImageFixture::Fuse2.file_name()]);
+    let events = d.run("installer.run");
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    let events = d.open(AppImageFixture::Fuse2.file_name());
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    assert!(d.fake.ran().is_empty(), "nothing is started");
+    let shown = d.ui.shown();
+    assert_eq!(shown.len(), 2, "{shown:?}");
+    for (title, text) in &shown {
+        assert_eq!(title, "FUSE 2 is required to run this AppImage");
+        for line in [
+            "sudo apt install libfuse2",
+            "sudo apt install libfuse2t64",
+            "sudo dnf install fuse-libs",
+            "sudo pacman -S fuse2",
+            "https://docs.appimage.org/user-guide/troubleshooting/fuse.html",
+        ] {
+            assert!(text.contains(line), "{line:?} is not in:\n{text}");
+        }
+    }
+
+    // The static runtime is never held back.
+    d.open(AppImageFixture::Entry.file_name());
+    assert_eq!(d.fake.ran(), [(fine, Vec::new(), root.clone())]);
+    assert_eq!(d.ui.shown().len(), 2, "no further warning");
+
+    // The install works, and says why the app will not start yet.
+    d.select(&[AppImageFixture::Fuse2.file_name()]);
+    d.ui.answer_form(Vec::new());
+    let events = d.run("installer.install");
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    assert_eq!(d.current("fixfuse"), "1.0.0");
+    let said: Vec<&String> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::JobProgress {
+                progress: Progress::Message(message),
+                ..
+            } => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        said.last().is_some_and(|summary| {
+            summary.starts_with("Fixfuse 1.0.0 installed.")
+                && summary.contains("FUSE 2 is required to run this AppImage")
+                && summary.contains("sudo apt install libfuse2")
+        }),
+        "{said:?}"
+    );
 }
 
 /// Pseudo-random bytes, so a stored gzip stays as large as its contents.

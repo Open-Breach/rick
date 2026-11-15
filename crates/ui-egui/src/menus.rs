@@ -1,5 +1,7 @@
 //! Menus: the burger menu and the context menu built from the action
-//! registry.
+//! registry. A card that would be taller than the window has room for is
+//! as tall as fits and its entries scroll ([`context_popup`], SPEC.md *A
+//! menu that does not fit*).
 
 use std::sync::Arc;
 
@@ -9,6 +11,7 @@ use ext::{Action, ActionCtx, ActionGroup, Availability, Invocation};
 use types::Entry;
 
 use egui::Align;
+use egui::containers::menu::{MenuConfig, MenuState, SubMenu};
 
 use crate::icons;
 use crate::keys::{Intent, KeyMap};
@@ -25,6 +28,383 @@ const APP_MENU_GAP: f32 = 6.0;
 const APP_MENU_PAD: f32 = 6.0;
 /// The least content width of a submenu of the application menu.
 const SUBMENU_WIDTH: f32 = 200.0;
+/// How far a menu card stays from the window's top and bottom edges
+/// (SPEC.md *A menu that does not fit*).
+pub const CLEAR: f32 = 8.0;
+
+/// The window being drawn, inside the frame Rick draws around it.
+#[derive(Clone, Copy)]
+struct Window(egui::Rect);
+
+fn window_id(ctx: &egui::Context) -> egui::Id {
+    egui::Id::new(("menu-window", ctx.viewport_id()))
+}
+
+/// Tells the menus where the window is whose content is drawn next: the
+/// rectangle inside Rick's own window frame, whose edges the cards keep
+/// clear of. The shell calls it for every window, every frame.
+pub fn set_window(ctx: &egui::Context, window: egui::Rect) {
+    let id = window_id(ctx);
+    ctx.data_mut(|d| d.insert_temp(id, Window(window)));
+}
+
+/// The room a menu card has: the window less [`CLEAR`] at its top and at
+/// its bottom.
+fn room(ctx: &egui::Context) -> egui::Rect {
+    let id = window_id(ctx);
+    ctx.data(|d| d.get_temp::<Window>(id))
+        .map_or_else(|| ctx.content_rect(), |window| window.0)
+        .shrink2(egui::vec2(0.0, CLEAR))
+}
+
+/// The top a card `height` tall gets when it is held within `within`, the
+/// way egui holds an area on the screen: moved up from beyond the bottom
+/// edge, then down from beyond the top one.
+fn held(top: f32, height: f32, within: egui::Rangef) -> f32 {
+    let over = (height - within.span()).max(0.0);
+    top.min(within.max + over - height).max(within.min - over)
+}
+
+/// How far the anchor of a card has to move, down when positive, for the
+/// card to lie within its [`room`]. `placed` is where egui puts the card
+/// by its anchor, before it holds it on the screen: a card egui would
+/// leave within 8 px of the window's edge, or push against it, ends 8 px
+/// clear of it instead. Where the card is placed does not change
+/// otherwise.
+fn lift(ctx: &egui::Context, placed: egui::Rect) -> f32 {
+    let on_screen = held(placed.top(), placed.height(), ctx.content_rect().y_range());
+    held(on_screen, placed.height(), room(ctx).y_range()) - placed.top()
+}
+
+/// A menu's popup, kept in the window (SPEC.md *A menu that does not
+/// fit*): its card stays [`CLEAR`] from the window's top and bottom
+/// edges. `gap` is the popup's own. The entries go in [`scrolling`], which
+/// keeps the card no taller than that room.
+fn fitted<'a>(ctx: &egui::Context, popup: egui::Popup<'a>, gap: f32) -> egui::Popup<'a> {
+    // Its first frame only measures it, and has to remember where the
+    // pointer was; from the second on the size is known.
+    if ctx.read_response(popup.get_id()).is_none() {
+        return popup;
+    }
+    let (Some(size), Some(anchor)) = (popup.get_expected_size(), popup.get_anchor_rect()) else {
+        return popup;
+    };
+    let align = popup.get_best_align();
+    let lift = lift(ctx, align.align_rect(&anchor, size, gap));
+    if lift.abs() < 0.5 {
+        return popup;
+    }
+    popup
+        .anchor(anchor.translate(egui::vec2(0.0, lift)))
+        .align(align)
+        .align_alternatives(&[])
+}
+
+/// The popup of a context menu on `response`: the card of [`menu_style`],
+/// kept in the window. Its content is [`context_menu`].
+pub fn context_popup(response: &egui::Response) -> egui::Popup<'_> {
+    fitted(
+        &response.ctx,
+        egui::Popup::context_menu(response).style(menu_style),
+        0.0,
+    )
+}
+
+/// The menu card on a right-click of `response`, for a menu that is not
+/// built from a pane's selection: a row, a section header or a drive card
+/// of the side panel, a row of an overview. It is the card of the file
+/// list's context menu (SPEC.md *Context menu*) — 260 px wide, its entries
+/// 30 px high with an icon slot before the label, its groups set apart by
+/// hairlines — kept in the window and scrolling where it does not fit.
+/// `entries` adds them with [`item`], [`greyed_item`], [`check_item`],
+/// [`item_of`] and [`divider`].
+pub fn card(response: &egui::Response, entries: impl FnOnce(&mut egui::Ui)) {
+    context_popup(response).show(|ui| card_contents(ui, entries));
+}
+
+/// What stands in a [`card`]: `entries` at the card's width, scrolling
+/// where they are more than the window has room for. For a menu that is
+/// opened by something else than [`card`] and [`card_under`] — a menu
+/// button — and styled with [`menu_style`].
+pub fn card_contents(ui: &mut egui::Ui, entries: impl FnOnce(&mut egui::Ui)) {
+    scrolling(ui, |ui| {
+        card_width(ui);
+        entries(ui);
+    });
+}
+
+/// [`card`] hanging under `button`, which opens it with a click.
+pub fn card_under(button: &egui::Response, entries: impl FnOnce(&mut egui::Ui)) {
+    fitted(
+        &button.ctx,
+        egui::Popup::menu(button).style(menu_style),
+        0.0,
+    )
+    .show(|ui| card_contents(ui, entries));
+}
+
+/// An entry of a [`card`]: `icon` in its slot — the slot stays where the
+/// entry has none — and `label`.
+pub fn item(ui: &mut egui::Ui, icon: Option<&str>, label: &str) -> egui::Response {
+    entry(ui, icon, label, None, false)
+}
+
+/// An entry of a [`card`] that is there and cannot be used now, in
+/// `text/placeholder`, with `reason` as its tooltip.
+pub fn greyed_item(ui: &mut egui::Ui, icon: Option<&str>, label: &str, reason: &str) {
+    greyed_entry(ui, icon, label, None, reason);
+}
+
+/// An entry of a [`card`] that is on or off: the tick in its icon slot
+/// while it is `on`, and a checkbox to a screen reader.
+pub fn check_item(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
+    let row = entry_button(
+        ui,
+        on.then_some(icons::DONE),
+        label,
+        None,
+        Tone::Plain,
+        None,
+        CONTEXT,
+    );
+    let response = ui.add(row);
+    let spoken = label.to_owned();
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, spoken.clone())
+    });
+    response
+}
+
+/// An entry of a [`card`] for `action`, with the icon, the label and the
+/// tone the file list's menu gives it.
+pub fn item_of(ui: &mut egui::Ui, action: &dyn ext::Action) -> egui::Response {
+    let id = action.id().0;
+    entry(
+        ui,
+        action_icon(id),
+        &menu_label(action),
+        None,
+        is_destructive(id),
+    )
+}
+
+/// The hairline between two groups of a [`card`].
+pub fn divider(ui: &mut egui::Ui) {
+    separator(ui);
+}
+
+/// The entries a drive has in its card's menu and in its row of an
+/// overview (SPEC.md *This Machine*), after the ones that open it: under
+/// a hairline *Eject*, for a drive that can be taken out, and *Format…*,
+/// for a removable or a local one — greyed, with the reason as its
+/// tooltip, where no disk utility is installed; then, under another,
+/// *Properties*.
+pub fn drive_items(
+    ui: &mut egui::Ui,
+    volume: &model::Volume,
+    format_tool: bool,
+    requests: &mut Vec<Request>,
+) {
+    let mount_point = &volume.mount_point;
+    let formattable = matches!(
+        volume.kind,
+        model::VolumeKind::Removable | model::VolumeKind::Fixed
+    );
+    if volume.is_removable() || formattable {
+        divider(ui);
+    }
+    if volume.is_removable() && item(ui, Some(icons::EJECT), &t!("panel-eject-drive")).clicked() {
+        requests.push(Request::Command(Command::Eject(mount_point.clone())));
+        ui.close();
+    }
+    if formattable {
+        let label = t!("panel-format");
+        if !format_tool {
+            greyed_item(ui, None, &label, &t!("panel-no-disk-utility"));
+        } else if item(ui, None, &label).clicked() {
+            requests.push(Request::Command(Command::Format(mount_point.clone())));
+            ui.close();
+        }
+    }
+    divider(ui);
+    if item(ui, Some(icons::INFO), &t!("properties")).clicked() {
+        requests.push(Request::DriveProperties(mount_point.clone()));
+        ui.close();
+    }
+}
+
+/// What an entry of the breadcrumb bar's menu asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BarPick {
+    /// Go where this text leads, as if it had been typed and confirmed.
+    Paste(String),
+    /// Copy the folder's path.
+    CopyPath,
+    /// Edit the path.
+    Edit,
+}
+
+/// The menu of the breadcrumb bar (SPEC.md *The bar's menu*), on `bar`:
+/// **Paste from clipboard**, greyed with the reason as its tooltip while
+/// `clipboard` holds no text, **Copy path** and **Edit path**. `opened`
+/// is a right-click anywhere on the bar this frame, which opens it at the
+/// pointer. Returns the entry that was clicked.
+pub fn path_bar_menu(
+    bar: &egui::Response,
+    opened: bool,
+    clipboard: Option<&str>,
+    keys: &KeyMap,
+) -> Option<BarPick> {
+    let popup = egui::Popup::context_menu(bar)
+        .style(menu_style)
+        .open_memory(opened.then_some(egui::SetOpenCommand::Bool(true)));
+    let mut pick = None;
+    fitted(&bar.ctx, popup, 0.0).show(|ui| {
+        scrolling(ui, |ui| {
+            card_width(ui);
+            let paste = t!("pane-paste-from-clipboard");
+            match clipboard.map(str::trim).filter(|text| !text.is_empty()) {
+                Some(text) => {
+                    if entry(ui, Some(icons::PASTE), &paste, None, false).clicked() {
+                        pick = Some(BarPick::Paste(text.to_owned()));
+                        ui.close();
+                    }
+                }
+                None => greyed_entry(
+                    ui,
+                    Some(icons::PASTE),
+                    &paste,
+                    None,
+                    &t!("pane-clipboard-no-text"),
+                ),
+            }
+            if entry(ui, Some(icons::COPY), &t!("pane-copy-path"), None, false).clicked() {
+                pick = Some(BarPick::CopyPath);
+                ui.close();
+            }
+            let edit = entry(
+                ui,
+                Some(icons::EDIT),
+                &t!("pane-edit-path"),
+                keys.text_for(Intent::FocusPath),
+                false,
+            );
+            if edit.clicked() {
+                pick = Some(BarPick::Edit);
+                ui.close();
+            }
+        });
+    });
+    pick
+}
+
+/// One workspace tab in the list of all of them ([`all_tabs`]).
+#[derive(Debug, Clone, Copy)]
+pub struct TabEntry<'a> {
+    /// The tab's icon.
+    pub icon: &'a str,
+    /// The tab's title.
+    pub title: &'a str,
+    /// Whether it is the tab the window shows.
+    pub active: bool,
+}
+
+/// The list of every workspace tab of a window (SPEC.md *Tabs that
+/// outgrow the row*), hanging from the dropdown `button` that stands after
+/// the tabs the row has room for: a 260 px card with one row per tab in
+/// their order — the icon and the title, cut with an ellipsis — the active
+/// one marked as the active entry. A list longer than the window scrolls.
+/// Returns the index of the tab that was chosen.
+pub fn all_tabs(button: &egui::Response, tabs: &[TabEntry<'_>]) -> Option<usize> {
+    let mut chosen = None;
+    fitted(
+        &button.ctx,
+        egui::Popup::menu(button).style(menu_style),
+        0.0,
+    )
+    .show(|ui| {
+        card_width(ui);
+        scrolling(ui, |ui| {
+            for (at, tab) in tabs.iter().enumerate() {
+                if tab_entry(ui, tab).clicked() {
+                    chosen = Some(at);
+                    ui.close();
+                }
+            }
+        });
+    });
+    chosen
+}
+
+/// One row of [`all_tabs`]: the icon in its slot and the title on one
+/// line, on `bg/selected-soft` in `text/on-selected` for the active tab —
+/// the active entry of a menu — and on the same fill under the pointer.
+fn tab_entry(ui: &mut egui::Ui, tab: &TabEntry<'_>) -> egui::Response {
+    let scheme = theme::scheme(ui);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), CONTEXT.height),
+        egui::Sense::click(),
+    );
+    let (title, active) = (tab.title.to_owned(), tab.active);
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, title.clone())
+    });
+    if tab.active || response.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            theme::metrics(ui.ctx()).corner_radius(),
+            scheme.bg_selected_soft,
+        );
+    }
+    let (colour, icon_colour) = if tab.active {
+        (scheme.text_on_selected, scheme.text_on_selected)
+    } else {
+        (scheme.text_primary, scheme.icon_default)
+    };
+    ui.painter().text(
+        egui::pos2(rect.left() + ENTRY_PAD_X + ICON / 2.0, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        tab.icon,
+        egui::FontId::proportional(ICON),
+        icon_colour,
+    );
+    // One line: a long title is cut with an ellipsis at the card's edge.
+    let left = rect.left() + ENTRY_PAD_X + ICON + ICON_GAP;
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        tab.title.to_owned(),
+        egui::FontId::proportional(TEXT_BODY),
+        colour,
+    );
+    job.wrap.max_width = (rect.right() - ENTRY_PAD_X - left).max(0.0);
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('…');
+    let galley = ui.painter().layout_job(job);
+    ui.painter().galley(
+        egui::pos2(left, rect.center().y - galley.size().y / 2.0),
+        galley,
+        colour,
+    );
+    response
+}
+
+/// A menu card's entries. They scroll where the card would be taller
+/// than its [`room`]: the card is then as tall as fits (SPEC.md *A menu
+/// that does not fit*).
+fn scrolling(ui: &mut egui::Ui, entries: impl FnOnce(&mut egui::Ui)) {
+    // What the card has around its entries: its padding and its border.
+    let around = ui.spacing().menu_margin.sum().y + 2.0 * ui.visuals().window_stroke.width;
+    let most = (room(ui.ctx()).height() - around).max(0.0);
+    // The room is the card's whole measure. An area does not know its
+    // content before it has drawn it once and offers 400 px meanwhile,
+    // which is what a scroll area would settle for: asked for at least
+    // the room where it has to scroll, it takes the room, and a menu
+    // that fits in it is as tall as its entries.
+    egui::ScrollArea::vertical()
+        .max_height(most)
+        .min_scrolled_height(most)
+        .show(ui, entries);
+}
 
 /// The burger menu at the top of the window, the application menu
 /// (SPEC.md *Menu*): the menu button, a tool button, and under it — left
@@ -92,10 +472,14 @@ pub fn burger(
     } else {
         response.on_hover_text(name)
     };
-    egui::Popup::menu(&response)
-        .gap(APP_MENU_GAP)
-        .style(app_menu_style)
-        .show(|ui| app_menu(ui, requests, pane, app, keys, version));
+    fitted(
+        ui.ctx(),
+        egui::Popup::menu(&response)
+            .gap(APP_MENU_GAP)
+            .style(app_menu_style),
+        APP_MENU_GAP,
+    )
+    .show(|ui| scrolling(ui, |ui| app_menu(ui, requests, pane, app, keys, version)));
 }
 
 /// One group of the application menu's extension actions: the core ones
@@ -565,6 +949,7 @@ fn action_icon(id: &str) -> Option<&'static str> {
         "core.open_default" => icons::FOLDER_OPEN,
         "core.open_with" => icons::OPEN_WITH,
         "core.open_in_editor" => icons::EDIT,
+        "core.set_desktop_background" => icons::MONITOR,
         "core.mount" => icons::MOUNT,
         "core.open_containing" | "core.open_containing_tab" => icons::FOLDER,
         "core.reveal" => icons::REVEAL,
@@ -585,6 +970,7 @@ fn action_icon(id: &str) -> Option<&'static str> {
         "core.hash" => icons::HASH,
         // `DOWNLOAD_SIMPLE`: what comes down to the machine.
         "core.download" | "installer.install" => icons::INSTALL,
+        "installer.run" => icons::PLAY,
         _ => return None,
     })
 }
@@ -622,6 +1008,7 @@ const FILE_GROUPS: &[&[&str]] = &[
         "core.reveal",
         "core.pin",
         "core.unpin",
+        "core.set_desktop_background",
     ],
     &[
         "core.cut",
@@ -817,13 +1204,26 @@ fn submenu_in(
     } else {
         app_menu_style
     };
-    let (response, _) = egui::containers::menu::SubMenuButton::from_button(button)
-        .config(egui::containers::menu::MenuConfig::new().style(style))
-        .ui(ui, |ui| {
-            if rows.fixed {
-                card_width(ui);
-            }
-            content(ui);
+    // egui's `SubMenuButton`, taken apart so that the card can be kept in
+    // the window: the row, lit like an open entry while its submenu is
+    // open, and the submenu hung on it.
+    let id = SubMenu::id_from_widget_id(ui.next_auto_id());
+    let open = MenuState::from_ui(ui, |state, _| state.open_item == Some(id));
+    let inactive = ui.style().visuals.widgets.inactive;
+    if open {
+        ui.style_mut().visuals.widgets.inactive = ui.style().visuals.widgets.open;
+    }
+    let response = ui.add(button);
+    ui.style_mut().visuals.widgets.inactive = inactive;
+    SubMenu::default()
+        .config(MenuConfig::new().style(style))
+        .show(ui, &submenu_anchor(ui, &response), |ui| {
+            scrolling(ui, |ui| {
+                if rows.fixed {
+                    card_width(ui);
+                }
+                content(ui);
+            });
         });
     let spoken = format!(
         "{label} {}",
@@ -831,6 +1231,37 @@ fn submenu_in(
     );
     response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken.clone()));
+}
+
+/// The response a submenu hangs on: the row's, with the rectangle egui
+/// anchors the card to moved so that the card lies within its [`room`].
+/// The row keeps its own rectangle for everything else.
+fn submenu_anchor(ui: &egui::Ui, row: &egui::Response) -> egui::Response {
+    let mut anchor = row.clone();
+    let id = SubMenu::id_from_widget_id(row.id);
+    let Some(size) = egui::AreaState::load(ui.ctx(), id).and_then(|area| area.size) else {
+        return anchor;
+    };
+    // Where `SubMenu::show` puts the card: beside the row, the first
+    // entry on the row's line, or the first of egui's other places in
+    // which it fits the screen.
+    let margin = egui::Frame::menu(ui.style()).total_margin().sum();
+    let gap = margin.x / 2.0 + 2.0;
+    let hung_on = row.interact_rect.expand2(egui::vec2(0.0, margin.y / 2.0));
+    let beside = egui::RectAlign::RIGHT_START;
+    let align = egui::RectAlign::find_best_align(
+        std::iter::once(beside)
+            .chain(beside.symmetries())
+            .chain(egui::RectAlign::MENU_ALIGNS),
+        ui.ctx().content_rect(),
+        hung_on,
+        gap,
+        size,
+    )
+    .unwrap_or(beside);
+    let lift = lift(ui.ctx(), align.align_rect(&hung_on, size, gap));
+    anchor.interact_rect = anchor.interact_rect.translate(egui::vec2(0.0, lift));
+    anchor
 }
 
 /// A hairline between two groups, with 4 px of air on each side.
@@ -1008,8 +1439,18 @@ fn paste_entry(
 /// tooltip instead: *Paste* while the clipboard is empty — on a folder it
 /// pastes into that folder — and an entry the location's capabilities rule
 /// out (New folder, New file and Download…).
-#[allow(clippy::too_many_lines)]
 pub fn context_menu(
+    ui: &mut egui::Ui,
+    cx: &mut PaneCx<'_>,
+    action_ctx: &ActionCtx,
+    entry_of: Option<&Entry>,
+) {
+    scrolling(ui, |ui| context_entries(ui, cx, action_ctx, entry_of));
+}
+
+/// The entries of [`context_menu`].
+#[allow(clippy::too_many_lines)]
+fn context_entries(
     ui: &mut egui::Ui,
     cx: &mut PaneCx<'_>,
     action_ctx: &ActionCtx,
@@ -1197,4 +1638,26 @@ pub fn context_menu(
         t!("menu-folder-properties")
     };
     intent_entry(ui, cx, Some(icons::INFO), &label, Intent::Inspect);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::held;
+
+    /// SPEC.md *A menu that does not fit*: a card is held in its room the
+    /// way egui holds an area on the screen, so that a card that fits
+    /// stays where it is placed and one that does not ends inside.
+    #[test]
+    fn a_card_is_held_within_its_room() {
+        let room = egui::Rangef::new(8.0, 392.0);
+        // It fits where it is placed: it stays.
+        assert!((held(100.0, 200.0, room) - 100.0).abs() < f32::EPSILON);
+        // It would run past the bottom: it ends on the room's bottom.
+        assert!((held(300.0, 200.0, room) - 192.0).abs() < f32::EPSILON);
+        // It would start above the top: it starts on the room's top.
+        assert!((held(-20.0, 200.0, room) - 8.0).abs() < f32::EPSILON);
+        // As tall as the room: it fills it, wherever it was placed.
+        assert!((held(150.0, 384.0, room) - 8.0).abs() < f32::EPSILON);
+        assert!((held(0.0, 384.0, room) - 8.0).abs() < f32::EPSILON);
+    }
 }

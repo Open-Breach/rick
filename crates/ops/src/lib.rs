@@ -58,6 +58,7 @@ mod conflict;
 mod containing;
 mod core_toml;
 mod create;
+mod desktop;
 mod download;
 mod edit;
 pub mod hash;
@@ -81,7 +82,7 @@ use ext::{
     Registry, Version,
 };
 use platform::Platform;
-use types::{Entry, Error, ExtId, Location};
+use types::{Entry, EntryKind, Error, ExtId, Location};
 use vfs::Mounts;
 
 pub use clipboard::{ClipMode, Clipboard};
@@ -151,6 +152,25 @@ impl State {
         self.mounts
             .resolve(loc)
             .map_or_default(|p| p.capabilities(loc))
+    }
+
+    /// The OS path of `loc` to hand to the system: a local location's
+    /// own, or the one its provider names ([`ext::Provider::local_path`]),
+    /// as a file in a ZFS snapshot has.
+    fn os_path(&self, loc: &Location) -> Result<PathBuf, Error> {
+        if loc.provider == vfs_local::PROVIDER_ID {
+            return local_path(loc);
+        }
+        self.mounts
+            .resolve(loc)
+            .ok()
+            .and_then(|p| p.local_path(loc))
+            .ok_or(Error::Unsupported("only local entries can be used here"))
+    }
+
+    /// Whether `entry` is a file the system can open: one with an OS path.
+    fn has_os_path(&self, entry: &Entry) -> bool {
+        entry.kind != EntryKind::Dir && self.os_path(&location_of(entry)).is_ok()
     }
 
     /// `Hidden` unless the provider at `loc` offers `needed`.
@@ -271,6 +291,7 @@ impl Extension for Core {
         reg.action(Arc::new(open::CopyPathAndName(Arc::clone(s))));
         reg.action(Arc::new(open::OpenDefault(Arc::clone(s))));
         reg.action(Arc::new(open::OpenInEditor(Arc::clone(s))));
+        reg.action(Arc::new(desktop::SetDesktopBackground(Arc::clone(s))));
         reg.action(Arc::new(download::Download(Arc::clone(s))));
         reg.action(Arc::new(open::Reveal(Arc::clone(s))));
         reg.action(Arc::new(containing::OpenContaining));

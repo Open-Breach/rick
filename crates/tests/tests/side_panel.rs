@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::{By, Queryable as _};
+use egui_kittest::kittest::{By, NodeT as _, Queryable as _};
 use ext::{ActionId, Extension};
 use model::{JobState, Section, SelectionChange};
 use platform::{ConfigDir, Fake, Trash as _};
@@ -717,17 +717,10 @@ fn this_machine_shows_utilisation_the_header_opens_the_overview_and_eject_works(
         h.state().app().model().volumes.len() == 2
     }));
     click_row(&mut harness, "STICK", egui::PointerButton::Secondary);
-    // The menu's Eject: not the table's button, not the card's.
-    let table = pane_rect(&harness);
-    let item = harness
-        .query_all(
-            By::new()
-                .label_contains("Eject")
-                .predicate(|n| n.label().is_some_and(|l| !l.contains("STICK"))),
-        )
-        .map(|n| n.rect())
-        .find(|r| !table.contains(r.center()))
-        .map_or_else(|| panic!("no Eject in the menu"), |r| r.center());
+    // The menu's Eject, by its name: the card's button is *Eject STICK*
+    // and the table's has its glyph. The menu is a card 260 px wide, which
+    // reaches over the table, so its place does not tell it apart.
+    let item = harness.get_by_label("Eject").rect().center();
     click_at(&mut harness, item, egui::PointerButton::Primary);
     assert!(step_until(&mut harness, Duration::from_secs(5), |_| {
         fake.ejected().len() == 2
@@ -1543,4 +1536,473 @@ fn a_read_only_drives_card_has_no_percentage_and_its_bar_says_read_only() {
     }
     // The eject button is there too: the drive is removable.
     harness.get_by_label("Eject LIVE");
+}
+
+/// Opens the Properties dialogue of the drive whose card is named `name`,
+/// from the card's context menu.
+fn drive_properties(harness: &mut Harness<'_, RickUi>, name: &str) {
+    click_row(harness, name, egui::PointerButton::Secondary);
+    harness.get_by_label("Properties").click();
+    // A modal takes a few frames to find its size and then its place.
+    for _ in 0..8 {
+        harness.step();
+    }
+}
+
+/// Closes the open dialogue with Escape.
+fn close_dialogue(harness: &mut Harness<'_, RickUi>) {
+    // A copy button's answer, *Copied*, is a tooltip for a second and a
+    // half, and Escape is its to take while it shows.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while harness.query_all_by_label("Copied").next().is_some() {
+        assert!(Instant::now() < deadline, "the copy button's answer stays");
+        harness.step();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    harness.key_press(egui::Key::Escape);
+    harness.step();
+    harness.step();
+    assert_eq!(harness.state().drive_properties().mount_point(), None);
+}
+
+/// Acceptance (issue 221, item 6; SPEC.md *This Machine* and *A drive*
+/// under *Properties dialogue*): *Properties* in the context menu of a
+/// drive card, with *Eject* and *Format…*, opens the Properties dialogue
+/// in its drive variant — the drive's name and *Removable drive · vfat* in
+/// the header, one page without tabs, **Volume**, **Capacity** and
+/// **Flags**, and the actions there are in the footer. *Properties* on the
+/// system drive and on a USB stick shows the groups; *Eject* is there for
+/// the stick only.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn properties_of_a_drive_shows_its_volume_its_capacity_and_its_flags() {
+    let dir = tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let stick = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let mut system = volume("System", dir.path(), platform::VolumeKind::Fixed);
+    system.device = Some("/dev/nvme0n1p2".into());
+    fake.add_volume(system);
+    let mut removable = volume("STICK", stick.path(), platform::VolumeKind::Removable);
+    removable.fs_type = "vfat".into();
+    removable.device = Some("/dev/sdb1".into());
+    removable.total = Some(16 << 30);
+    removable.free = Some(4 << 30);
+    fake.add_volume(removable);
+    let mut harness = harness_with(dir.path(), &fake.config_dir(), fake.clone(), Vec::new());
+    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().volumes.len() == 2
+    }));
+
+    // The card's menu: Eject and Format…, then Properties.
+    click_row(&mut harness, "STICK", egui::PointerButton::Secondary);
+    let y =
+        |harness: &Harness<'_, RickUi>, label: &str| harness.get_by_label(label).rect().center().y;
+    let eject = harness
+        .query_all_by_label_contains("Eject")
+        .map(|n| n.rect().center().y)
+        .fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        y(&harness, "Open in new tab") < eject
+            && eject < y(&harness, "Format…")
+            && y(&harness, "Format…") < y(&harness, "Properties"),
+        "Open in new tab, Eject, Format…, Properties"
+    );
+    harness.get_by_label("Properties").click();
+    // A modal takes a few frames to find its size and then its place.
+    for _ in 0..8 {
+        harness.step();
+    }
+    assert_eq!(
+        harness.state().drive_properties().mount_point(),
+        Some(stick.path())
+    );
+
+    // The header, and one page without the segmented control.
+    harness.get_by_label("Removable drive  ·  vfat");
+    assert!(harness.query_by_label("General").is_none());
+    assert!(harness.query_by_label("Permissions").is_none());
+    // Volume, with the paths and their copy buttons.
+    for label in [
+        "VOLUME",
+        "Label",
+        "File system",
+        "Mount point",
+        "Device",
+        "/dev/sdb1",
+        "Copy mount point",
+        "Copy device",
+    ] {
+        harness.get_by_label(label);
+    }
+    harness.get_by_label(&stick.path().display().to_string());
+    assert!(harness.query_by_label("Drive letter").is_none());
+    // Capacity: 16 GiB, 12 of them used, and the bar's percentage.
+    for label in [
+        "CAPACITY", "Total", "Used", "Free", "16.0 GiB", "12.0 GiB", "4.0 GiB",
+    ] {
+        harness.get_by_label(label);
+    }
+    let usage = harness.get_by_label("Usage");
+    assert_eq!(usage.accesskit_node().value().as_deref(), Some("75%"));
+    // Flags: not read-only, removable.
+    harness.get_by_label("FLAGS");
+    let flag = |harness: &Harness<'_, RickUi>, label: &str| {
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::CheckBox, label)
+            .accesskit_node()
+            .toggled()
+    };
+    assert_eq!(
+        flag(&harness, "Read-only"),
+        Some(egui::accesskit::Toggled::False)
+    );
+    assert_eq!(
+        flag(&harness, "Removable"),
+        Some(egui::accesskit::Toggled::True)
+    );
+    // The footer: Eject and Format… at the left, Close.
+    // The lowest button of a name: the header has a Close of its own.
+    let button = |harness: &Harness<'_, RickUi>, label: &str| {
+        harness
+            .query_all_by_role_and_label(egui::accesskit::Role::Button, label)
+            .map(|n| n.rect())
+            .max_by(|a, b| a.top().total_cmp(&b.top()))
+            .unwrap_or_else(|| panic!("no button {label}"))
+    };
+    let (eject, format, close) = (
+        button(&harness, "Eject"),
+        button(&harness, "Format…"),
+        button(&harness, "Close"),
+    );
+    assert!(
+        eject.right() < format.left() && format.right() < close.left(),
+        "{eject:?}, {format:?}, {close:?}"
+    );
+
+    // A path's copy button puts the path on the clipboard.
+    let copy = harness.get_by_label("Copy device").rect().center();
+    click_at(&mut harness, copy, egui::PointerButton::Primary);
+    for _ in 0..3 {
+        harness.step();
+    }
+    assert_eq!(fake.clipboard_text().as_deref(), Some("/dev/sdb1"));
+
+    // Format… opens the system's tool on the drive; the dialogue stays.
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::Button, "Format…")
+        .click();
+    harness.step();
+    settle(&mut harness);
+    assert_eq!(fake.format_opened(), [stick.path().to_path_buf()]);
+    assert!(harness.state().drive_properties().mount_point().is_some());
+    close_dialogue(&mut harness);
+
+    // The system drive: the same groups, no Eject, and not removable.
+    drive_properties(&mut harness, "System");
+    harness.get_by_label("Local drive  ·  ext4");
+    for label in ["VOLUME", "CAPACITY", "FLAGS", "/dev/nvme0n1p2", "Format…"] {
+        harness.get_by_label(label);
+    }
+    assert_eq!(
+        flag(&harness, "Removable"),
+        Some(egui::accesskit::Toggled::False)
+    );
+    assert!(
+        harness
+            .query_by_role_and_label(egui::accesskit::Role::Button, "Eject")
+            .is_none(),
+        "Eject is for a removable drive only"
+    );
+    close_dialogue(&mut harness);
+
+    // Eject from the stick's dialogue: the platform ejects, and the
+    // dialogue closed as it did.
+    drive_properties(&mut harness, "STICK");
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::Button, "Eject")
+        .click();
+    harness.step();
+    assert_eq!(harness.state().drive_properties().mount_point(), None);
+    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().volumes.len() == 1
+    }));
+    assert_eq!(fake.ejected(), [stick.path().to_path_buf()]);
+}
+
+/// A value the platform does not give is left out, not shown empty; a
+/// read-only medium has the full muted bar and no percentage, and of the
+/// two actions only the one it has; a drive that
+/// is unmounted takes its dialogue with it; and a row of the This Machine
+/// overview has *Properties* as the card has.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn a_drives_properties_leave_out_what_the_platform_does_not_give() {
+    let dir = tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    fake.add_volume(volume("data", dir.path(), platform::VolumeKind::Fixed));
+    // A share the system reports no size and no device for.
+    let share = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let mut nas = volume("nas", share.path(), platform::VolumeKind::Network);
+    nas.fs_type = String::new();
+    nas.total = None;
+    nas.free = None;
+    fake.add_volume(nas);
+    // A mounted disc: read-only, full by design.
+    let disc = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let mut optical = volume("Install disc", disc.path(), platform::VolumeKind::Optical);
+    optical.fs_type = "iso9660".into();
+    optical.free = Some(0);
+    optical.read_only = true;
+    fake.add_volume(optical);
+    let mut harness = harness_with(dir.path(), &fake.config_dir(), fake.clone(), Vec::new());
+    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().volumes.len() == 3
+    }));
+
+    // The disc, from the overview's row: read-only, the bar without a
+    // percentage, nothing to eject or format.
+    click_row(&mut harness, "This Machine", egui::PointerButton::Primary);
+    settle(&mut harness);
+    let table = pane_rect(&harness);
+    let row = harness
+        .query_all_by_label_contains("Install disc")
+        .map(|n| n.rect())
+        .find(|r| table.contains(r.center()))
+        .map_or_else(|| panic!("no row for the disc"), |r| r.center());
+    click_at(&mut harness, row, egui::PointerButton::Secondary);
+    harness.get_by_label("Properties").click();
+    for _ in 0..3 {
+        harness.step();
+    }
+    assert_eq!(
+        harness.state().drive_properties().mount_point(),
+        Some(disc.path())
+    );
+    harness.get_by_label("Optical disc  ·  iso9660");
+    let usage = harness.get_by_label("Usage");
+    assert_eq!(usage.accesskit_node().value().as_deref(), Some("Read-only"));
+    assert_eq!(
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Read-only")
+            .accesskit_node()
+            .toggled(),
+        Some(egui::accesskit::Toggled::True)
+    );
+    assert!(
+        harness.query_by_label("Device").is_none(),
+        "no device given"
+    );
+    // A disc is taken out, so it has Eject; there is nothing to format.
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, "Eject");
+    assert!(
+        harness
+            .query_by_role_and_label(egui::accesskit::Role::Button, "Format…")
+            .is_none(),
+        "no Format… for an optical disc"
+    );
+
+    // Unmounted while its dialogue shows: the dialogue goes with it.
+    fake.remove_volume(disc.path());
+    fake.mounts_changed();
+    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().drive_properties().mount_point().is_none()
+    }));
+
+    // The share, from its row among the drives of the Network overview:
+    // the kind alone in the header, no file system row, no device and no
+    // Capacity group at all.
+    click_row(&mut harness, "Network", egui::PointerButton::Primary);
+    settle(&mut harness);
+    assert_eq!(location(&harness), Virtual::Network.location());
+    let row = harness
+        .query_all_by_label_contains("nas")
+        .map(|n| n.rect())
+        .find(|r| pane_rect(&harness).contains(r.center()))
+        .map_or_else(|| panic!("no row for the share"), |r| r.center());
+    click_at(&mut harness, row, egui::PointerButton::Secondary);
+    harness.get_by_label("Properties").click();
+    for _ in 0..3 {
+        harness.step();
+    }
+    // The overview's table behind the dialogue has headings of its own:
+    // what counts is what stands in the dialogue, between its header and
+    // its footer.
+    let top = harness.get_by_label("Network drive").rect().top();
+    let bottom = harness
+        .query_all_by_role_and_label(egui::accesskit::Role::Button, "Close")
+        .map(|n| n.rect().bottom())
+        .fold(f32::NEG_INFINITY, f32::max);
+    let in_dialogue = |label: &str| {
+        harness
+            .query_all_by_label(label)
+            .any(|n| (top..bottom).contains(&n.rect().center().y))
+    };
+    for label in [
+        "VOLUME",
+        "Label",
+        "Mount point",
+        "Copy mount point",
+        "FLAGS",
+    ] {
+        assert!(in_dialogue(label), "{label}");
+    }
+    for absent in [
+        "File system",
+        "Device",
+        "CAPACITY",
+        "Total",
+        "Used",
+        "Free",
+        "Usage",
+    ] {
+        assert!(!in_dialogue(absent), "no {absent}");
+    }
+}
+
+/// The entries of the open menu named `labels`, top to bottom, held to the
+/// menu card of the file list (SPEC.md *Context menu*): each 30 px high
+/// and as wide as a 260 px card inside its 7 px padding, all at one left
+/// edge, in the order given. Returns their rectangles.
+fn card_entries(harness: &Harness<'_, RickUi>, labels: &[&str]) -> Vec<egui::Rect> {
+    let rects: Vec<egui::Rect> = labels
+        .iter()
+        .map(|label| {
+            harness
+                .query_all_by_label(label)
+                .map(|n| n.rect())
+                .find(|r| (r.height() - 30.0).abs() < 1.0 && (r.width() - 246.0).abs() < 2.0)
+                .unwrap_or_else(|| {
+                    let found: Vec<egui::Rect> = harness
+                        .query_all_by_label(label)
+                        .map(|n| n.rect())
+                        .collect();
+                    panic!("{label} is no entry of a menu card: {found:?}")
+                })
+        })
+        .collect();
+    for pair in rects.windows(2) {
+        assert!(
+            (pair[0].left() - pair[1].left()).abs() < 0.5,
+            "one left edge: {rects:?}"
+        );
+        assert!(
+            pair[0].bottom() <= pair[1].top() + 0.5,
+            "in order: {rects:?}"
+        );
+    }
+    rects
+}
+
+/// The room between the entries of a card, top to bottom: none inside a
+/// group, the 9 px of a hairline between two groups.
+fn card_gaps(rects: &[egui::Rect]) -> Vec<f32> {
+    rects
+        .windows(2)
+        .map(|pair| (pair[1].top() - pair[0].bottom()).round())
+        .collect()
+}
+
+/// Closes the open menu with Escape.
+fn close_menu(harness: &mut Harness<'_, RickUi>) {
+    harness.key_press(egui::Key::Escape);
+    harness.step();
+    harness.step();
+    assert!(harness.query_by_label("Open in new tab").is_none());
+}
+
+/// The right-click menus of the side panel, and of a row of an overview,
+/// are the menu card every other menu is (SPEC.md *Context menu* and
+/// *Sizes*): a card 260 px wide whose entries are 30 px high with the icon
+/// in its slot before the label, the groups set apart by hairlines. They
+/// were the toolkit's plain menu, as narrow as their longest word, with
+/// the glyph written into the label.
+#[test]
+fn the_side_panels_menus_are_the_menu_card_of_the_file_list() {
+    let dir = tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let stick = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fake.add_volume(volume("data", dir.path(), platform::VolumeKind::Fixed));
+    fake.add_volume(volume(
+        "STICK",
+        stick.path(),
+        platform::VolumeKind::Removable,
+    ));
+    let mut harness = harness_with(dir.path(), &fake.config_dir(), fake.clone(), Vec::new());
+    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().volumes.len() == 2
+    }));
+
+    // A place: Open in new tab, then Edit… and Remove under a hairline.
+    click_row(&mut harness, "Documents", egui::PointerButton::Secondary);
+    harness.step();
+    let entries = card_entries(&harness, &["Open in new tab", "Edit…", "Remove"]);
+    assert_eq!(card_gaps(&entries), [9.0, 0.0]);
+    close_menu(&mut harness);
+
+    // A section's header: Open in new tab alone, on the same card.
+    click_row(&mut harness, "This Machine", egui::PointerButton::Secondary);
+    harness.step();
+    card_entries(&harness, &["Open in new tab"]);
+    close_menu(&mut harness);
+
+    // A drive card: Open in new tab; Eject and Format…; Properties.
+    click_row(&mut harness, "STICK", egui::PointerButton::Secondary);
+    harness.step();
+    let entries = card_entries(
+        &harness,
+        &["Open in new tab", "Eject", "Format…", "Properties"],
+    );
+    assert_eq!(card_gaps(&entries), [9.0, 0.0, 9.0]);
+    close_menu(&mut harness);
+    // A drive that is not taken out has no Eject, and no gap for it.
+    click_row(&mut harness, "data", egui::PointerButton::Secondary);
+    harness.step();
+    let entries = card_entries(&harness, &["Open in new tab", "Format…", "Properties"]);
+    assert_eq!(card_gaps(&entries), [9.0, 9.0]);
+    close_menu(&mut harness);
+
+    // Without a disk utility Format… is there, greyed, and does nothing.
+    fake.set_format_tool(false);
+    click_row(&mut harness, "STICK", egui::PointerButton::Secondary);
+    harness.step();
+    let entries = card_entries(
+        &harness,
+        &["Open in new tab", "Eject", "Format…", "Properties"],
+    );
+    click_at(
+        &mut harness,
+        entries[2].center(),
+        egui::PointerButton::Primary,
+    );
+    harness.step();
+    assert_eq!(fake.format_opened(), Vec::<PathBuf>::new());
+    close_menu(&mut harness);
+    fake.set_format_tool(true);
+
+    // A row of the This Machine overview: the same card, with Open first.
+    click_row(&mut harness, "This Machine", egui::PointerButton::Primary);
+    settle(&mut harness);
+    let table = pane_rect(&harness);
+    let row = harness
+        .query_all_by_label_contains("STICK")
+        .map(|n| n.rect())
+        .find(|r| table.contains(r.center()))
+        .map_or_else(|| panic!("no row for the stick"), |r| r.center());
+    click_at(&mut harness, row, egui::PointerButton::Secondary);
+    harness.step();
+    let entries = card_entries(
+        &harness,
+        &["Open", "Open in new tab", "Eject", "Format…", "Properties"],
+    );
+    assert_eq!(card_gaps(&entries), [0.0, 9.0, 0.0, 9.0]);
+    // An entry of the card does what the entry did: Eject ejects.
+    click_at(
+        &mut harness,
+        entries[2].center(),
+        egui::PointerButton::Primary,
+    );
+    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().volumes.len() == 1
+    }));
+    assert_eq!(fake.ejected(), [stick.path().to_path_buf()]);
 }

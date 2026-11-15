@@ -28,7 +28,7 @@ use serde::{Deserialize, Deserializer};
 use crate::keys::Intent;
 use crate::licences::{self, LicencesPage};
 use crate::shell::Request;
-use crate::{icons, theme, widgets};
+use crate::{copy_button, icons, theme, widgets};
 
 /// The dialog's width.
 pub const WIDTH: f32 = 520.0;
@@ -957,9 +957,7 @@ impl AboutDialog {
                             .layout(egui::Layout::left_to_right(Align::Center)),
                     );
                     buttons.spacing_mut().item_spacing.x = 10.0;
-                    if widgets::icon_button(&mut buttons, Some(icons::COPY), &copy, false, true)
-                        .clicked()
-                    {
+                    if copy_button::labelled(&mut buttons, &copy, true).clicked() {
                         asked.copy = true;
                     }
                     if widgets::button(&mut buttons, &whats_new, false, true).clicked() {

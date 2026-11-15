@@ -47,12 +47,13 @@ everywhere=(
   "installer|Installer|provider, decorator, action"
 )
 case "${RUNNER_OS:-$(uname -s)}" in
-  Linux)   here=("search-tracker|Tracker|search-index" "search-baloo|Baloo|search-index")
+  Linux)   here=("search-tracker|Tracker|search-index" "search-baloo|Baloo|search-index"
+                 "zfs|ZFS|provider, decorator, action")
            elsewhere=(search-windows search-spotlight) ;;
   macOS|Darwin) here=("search-spotlight|Spotlight|search-index")
-           elsewhere=(search-windows search-tracker search-baloo) ;;
+           elsewhere=(search-windows search-tracker search-baloo zfs) ;;
   Windows) here=("search-windows|Windows Search|search-index")
-           elsewhere=(search-spotlight search-tracker search-baloo) ;;
+           elsewhere=(search-spotlight search-tracker search-baloo zfs) ;;
   *) echo "unknown platform ${RUNNER_OS:-$(uname -s)}"; exit 1 ;;
 esac
 

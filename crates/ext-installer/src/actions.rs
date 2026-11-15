@@ -1,10 +1,11 @@
-//! The actions: *Install as application…* on an archive with its form,
-//! *Installed Apps…* opening the view (from the palette and the burger
-//! menu's *Installer* submenu), and the per-row actions of the view
-//! (Open install folder, Launch, Update from archive…, Revert to previous
-//! version, Edit launcher…, Uninstall…, Repair, Forget, Remove staging
-//! folder). Everything long runs as a job: reading the archive is the job
-//! *Reading archive…*, whose end opens the install form
+//! The actions: *Install as application…* on an archive or an AppImage
+//! with its form, *Run* on an AppImage, *Installed Apps…* opening the view
+//! (from the palette and the burger menu's *Installer* submenu), and the
+//! per-row actions of the view (Open install folder, Launch, Update from
+//! archive…, Revert to previous version, Edit launcher…, Uninstall…,
+//! Repair, Forget, Remove staging folder). Everything long runs as a job:
+//! reading the archive is the job *Reading archive…*, or *Reading
+//! AppImage…*, whose end opens the install form
 //! ([`ActionOutcome::Later`]), and confirming the form starts the install
 //! job.
 
@@ -22,16 +23,21 @@ use ext::{
 };
 use types::{CancelToken, Entry, EntryKind, Error, Location, Progress, ProviderId};
 
+use crate::appimage;
 use crate::archive::{Format, OnProgress};
 use crate::detect::{self, CATEGORIES, Detected};
 use crate::error::{InstallError, err};
-use crate::install::{self, CommandLink, IconSource, Plan};
+use crate::install::{self, CommandLink, IconSource, Libraries, Plan};
 use crate::provider::AppsProvider;
 use crate::record::{Installed, Kind, Layout, PathMode, Scan, glob_matches};
 use crate::{is_view, location};
 
 /// Install the selected archive as an application.
 pub const INSTALL: ActionId = ActionId("installer.install");
+/// Run the selected AppImage as it is. The application names this id: Enter
+/// and a double-click on an AppImage run this action
+/// (specs/ext-installer.md "AppImages").
+pub const RUN: ActionId = ActionId("installer.run");
 /// Open the Installed Apps view.
 pub const APPS: ActionId = ActionId("installer.apps");
 /// Open the selected app's install folder.
@@ -85,6 +91,14 @@ const CMD_KEYS: [&str; 16] = [
 /// runs again.
 type Stamp = (u64, Option<SystemTime>);
 
+/// What a listing says of a file's size and modification time: a file
+/// whose header was looked at is looked at again only when they change.
+type Listed = (Option<u64>, Option<SystemTime>);
+
+/// How many answers about files being AppImages are kept before the list
+/// starts over.
+const APPIMAGES_KEPT: usize = 256;
+
 /// The actions' shared state: the view's provider and the detections of
 /// the archives looked at, so a second look at an unchanged file opens
 /// the form without reading it again.
@@ -92,6 +106,12 @@ pub struct Installer {
     /// The view, whose last scan the actions read.
     pub provider: Arc<AppsProvider>,
     detections: Mutex<HashMap<PathBuf, (Stamp, Arc<Detected>)>>,
+    /// Whether the files asked about carry the AppImage magic: a menu asks
+    /// on every frame, and a file's header is read once.
+    appimages: Mutex<HashMap<PathBuf, (Listed, bool)>>,
+    /// The libraries a test puts in the place of the machine's; `None`
+    /// everywhere else.
+    libraries: Option<Libraries>,
 }
 
 impl std::fmt::Debug for Installer {
@@ -113,7 +133,50 @@ impl Installer {
         Self {
             provider,
             detections: Mutex::new(HashMap::new()),
+            appimages: Mutex::new(HashMap::new()),
+            libraries: None,
         }
+    }
+
+    /// The actions' state on a machine that has exactly `libraries`: a
+    /// test's stand-in for the system's loader cache and library folders.
+    #[cfg(any(test, feature = "fixtures"))]
+    #[must_use]
+    pub fn with_libraries(provider: Arc<AppsProvider>, libraries: Libraries) -> Self {
+        Self {
+            libraries: Some(libraries),
+            ..Self::new(provider)
+        }
+    }
+
+    /// The machine's shared libraries, looked up anew: a library installed
+    /// while Rick runs is found the next time it is asked for.
+    #[must_use]
+    pub fn libraries(&self) -> Libraries {
+        self.libraries.clone().unwrap_or_else(Libraries::system)
+    }
+
+    /// Whether the local file `entry`, at `path`, is an AppImage: by its
+    /// name, or by the magic in its ELF header, which is read once for a
+    /// file as it was listed.
+    #[must_use]
+    pub fn is_appimage(&self, path: &Path, entry: &Entry) -> bool {
+        if appimage::has_extension(&entry.name) {
+            return true;
+        }
+        let listed: Listed = (entry.size, entry.modified);
+        let mut kept = lock(&self.appimages);
+        if let Some((as_listed, answer)) = kept.get(path)
+            && *as_listed == listed
+        {
+            return *answer;
+        }
+        let answer = appimage::magic_of(path).is_some();
+        if kept.len() >= APPIMAGES_KEPT {
+            kept.clear();
+        }
+        kept.insert(path.to_path_buf(), (listed, answer));
+        answer
     }
 
     /// The detection kept from an earlier look at the file at `path`, when
@@ -163,7 +226,7 @@ pub const INSTALL_RICK_COMMAND: &str = "install-rick";
 pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: INSTALL_COMMAND,
-        help: "Install a tar or zip archive as an application (Linux)",
+        help: "Install a tar or zip archive or an AppImage as an application (Linux)",
     },
     CommandSpec {
         name: INSTALL_RICK_COMMAND,
@@ -184,6 +247,7 @@ pub fn commands(installer: &Arc<Installer>) -> Vec<Arc<dyn CliCommand>> {
 #[must_use]
 pub fn all(installer: &Arc<Installer>) -> Vec<Arc<dyn Action>> {
     vec![
+        Arc::new(Run(Arc::clone(installer))),
         Arc::new(Install(Arc::clone(installer))),
         Arc::new(Apps),
         Arc::new(OpenFolder(Arc::clone(installer))),
@@ -215,6 +279,39 @@ fn selected_archive(ctx: &ActionCtx) -> Option<PathBuf> {
     }
     Format::by_name(&entry.name)?;
     local_path(&Location::new(entry.id.provider, entry.path.clone()))
+}
+
+/// The one selected local file *Install as application…* takes, when the
+/// selection is exactly that: an AppImage, which is asked for first and
+/// never goes through the archive detection, or an archive.
+fn selected_source(installer: &Installer, ctx: &ActionCtx) -> Option<PathBuf> {
+    selected_appimage(installer, ctx).or_else(|| selected_archive(ctx))
+}
+
+/// What a file handed to the installer by its path must be.
+const SOURCE_KINDS: &str =
+    "the file must be a tar (gz, xz, bz2, zst) or zip archive or an AppImage";
+
+/// Whether the file at `path` is one the installer takes: an AppImage or
+/// an archive by its name.
+fn is_source(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map_or_default(|n| n.to_string_lossy().into_owned());
+    appimage::is_appimage(path, &name) || Format::by_name(&name).is_some()
+}
+
+/// The one selected local file that is an AppImage, when the selection is
+/// exactly that.
+fn selected_appimage(installer: &Installer, ctx: &ActionCtx) -> Option<PathBuf> {
+    let [entry] = ctx.selection.as_slice() else {
+        return None;
+    };
+    if entry.id.provider != ProviderId::LOCAL || entry.kind != EntryKind::File {
+        return None;
+    }
+    let path = local_path(&Location::new(entry.id.provider, entry.path.clone()))?;
+    installer.is_appimage(&path, entry).then_some(path)
 }
 
 /// The one selected row of the view, as an installed app.
@@ -322,7 +419,9 @@ fn chosen_main(values: &Values, detected: &Detected) -> Option<usize> {
     .filter(|i| *i < detected.candidates.len())
 }
 
-/// Builds the plan and the summary from the form's values.
+/// Builds the plan and the summary from the form's values. `libraries` is
+/// the machine's: an AppImage that needs FUSE 2 where there is none gets
+/// the warning as a row, which holds nothing back.
 #[allow(clippy::too_many_lines)]
 #[must_use]
 pub fn assemble(
@@ -331,6 +430,7 @@ pub fn assemble(
     scan: &Scan,
     layout: &Layout,
     forced_update_of: Option<&Installed>,
+    libraries: &Libraries,
 ) -> Assembled {
     let mut rows: Vec<PreviewRow> = Vec::new();
     let mut row = |from: &str, to: String, problem: Option<String>| {
@@ -341,32 +441,49 @@ pub fn assemble(
         });
     };
 
-    // The archive itself.
+    // The archive itself, or the AppImage: one file, copied as it is.
+    let appimage = detected.format == Format::AppImage;
+    let machines = |found: u16| {
+        (
+            crate::elf::machine_name(found),
+            crate::elf::current_machine()
+                .map_or_else(|| "unknown".to_owned(), crate::elf::machine_name),
+        )
+    };
     let archive_problem = if detected.source {
         Some(InstallError::Source.to_string())
     } else if let Some(found) = detected.arch_mismatch {
-        Some(
-            InstallError::Architecture {
-                found: crate::elf::machine_name(found),
-                running: crate::elf::current_machine()
-                    .map_or_else(|| "unknown".to_owned(), crate::elf::machine_name),
-            }
-            .to_string(),
-        )
+        let (found, running) = machines(found);
+        Some(if appimage {
+            InstallError::AppImageArchitecture { found, running }.to_string()
+        } else {
+            InstallError::Architecture { found, running }.to_string()
+        })
     } else if detected.candidates.is_empty() {
         Some("the archive holds no program this machine can run".to_owned())
     } else {
         None
     };
-    let mut archive_text = format!("{} ({})", detected.archive_name(), detected.format.name());
-    if !detected.hostile.is_empty() {
-        let _ = write!(
-            archive_text,
-            "; {} entries with unsafe paths will be left out",
-            detected.hostile.len()
+    if appimage {
+        row(
+            "AppImage",
+            format!(
+                "{}, copied as it is; nothing in it is run",
+                detected.archive_name()
+            ),
+            archive_problem,
         );
+    } else {
+        let mut archive_text = format!("{} ({})", detected.archive_name(), detected.format.name());
+        if !detected.hostile.is_empty() {
+            let _ = write!(
+                archive_text,
+                "; {} entries with unsafe paths will be left out",
+                detected.hostile.len()
+            );
+        }
+        row("Archive", archive_text, archive_problem);
     }
-    row("Archive", archive_text, archive_problem);
 
     // Update or new install.
     let update_of: Option<Installed> = forced_update_of.cloned().or_else(|| {
@@ -441,8 +558,13 @@ pub fn assemble(
         files_problem,
     );
 
-    let main_index = chosen_main(values, detected);
-    let main = main_index.map(|i| detected.candidates[i].rel.clone());
+    // An AppImage is its own main executable, under a name that stays the
+    // same from one version to the next.
+    let main = if appimage {
+        Some(format!("{id}.AppImage"))
+    } else {
+        chosen_main(values, detected).map(|i| detected.candidates[i].rel.clone())
+    };
     row(
         "Main executable",
         main.clone()
@@ -488,10 +610,10 @@ pub fn assemble(
             format!(
                 "{} ({})",
                 desktop_path.display(),
-                if detected.desktop.is_some() {
-                    "the vendor's, with Exec and Icon through current"
-                } else {
-                    "generated"
+                match (&detected.desktop, appimage) {
+                    (Some(_), true) => "the AppImage's own, with Exec and Icon through current",
+                    (Some(_), false) => "the vendor's, with Exec and Icon through current",
+                    (None, _) => "generated",
                 }
             ),
             problem,
@@ -618,6 +740,11 @@ pub fn assemble(
             None,
         );
     }
+    // The install works without FUSE 2; the app will not start without it,
+    // and the user is told before installing.
+    if detected.needs_fuse2 && !libraries.has(appimage::FUSE2) {
+        row("Warning", appimage::FUSE2_WARNING.to_owned(), None);
+    }
 
     let plan = (rows.iter().all(|r| r.problem.is_none()) && main.is_some()).then(|| Plan {
         layout: layout.clone(),
@@ -636,7 +763,16 @@ pub fn assemble(
         } else {
             Some(wm_class)
         },
-        vendor_desktop: detected.desktop.as_ref().map(|d| d.rel.clone()),
+        vendor_desktop: detected
+            .desktop
+            .as_ref()
+            .filter(|_| !appimage)
+            .map(|d| d.rel.clone()),
+        desktop_text: detected
+            .desktop
+            .as_ref()
+            .filter(|_| appimage)
+            .map(|d| d.entry.text()),
         commands,
         path_mode,
         bin_dir: (path_mode == PathMode::Path).then_some(bin_dir).flatten(),
@@ -664,6 +800,7 @@ pub fn install_form(
     layout: &Layout,
     update_of: Option<&Installed>,
     forced: bool,
+    libraries: &Libraries,
 ) -> Form {
     let matched = update_of;
     let id = matched.map_or_else(|| detected.app_id(), |m| m.record.id.clone());
@@ -707,12 +844,26 @@ pub fn install_form(
         (Some(_), false) => t!("installer-update"),
         (None, _) => t!("installer-install"),
     };
-    let mut form = Form::new(title, ok)
-        .header(header)
-        .note(t!(
+    let appimage = detected.format == Format::AppImage;
+    let footer = if appimage {
+        t!(
+            "installer-appimage-note",
+            name = detected.archive_name().as_str()
+        )
+    } else {
+        t!(
             "installer-archive-note",
             name = detected.archive_name().as_str()
-        ))
+        )
+    };
+    let version_missing = if appimage {
+        t!("installer-version-missing-appimage")
+    } else {
+        t!("installer-version-missing")
+    };
+    let mut form = Form::new(title, ok)
+        .header(header)
+        .note(footer)
         .preview_title(t!("installer-what-rick-will-do"))
         .field(Field::text(
             K_NAME,
@@ -728,7 +879,7 @@ pub fn install_form(
                 &detected.version,
                 t!("installer-version-hint"),
             )
-            .required(t!("installer-version-missing")),
+            .required(version_missing),
         )
         .field(Field::segmented(
             K_SCOPE,
@@ -757,15 +908,18 @@ pub fn install_form(
             0
         }
     };
-    form = form.field(
-        Field::choice(
-            K_EXE,
-            t!("installer-main-executable"),
-            exe_options,
-            exe_selected,
-        )
-        .mono(),
-    );
+    // An AppImage is the one program: there is nothing to pick.
+    if !appimage {
+        form = form.field(
+            Field::choice(
+                K_EXE,
+                t!("installer-main-executable"),
+                exe_options,
+                exe_selected,
+            )
+            .mono(),
+        );
+    }
     // One list: (none) — or what a missing icon becomes — then every PNG
     // and SVG of the archive, best first, the best preselected only when
     // detection trusts it.
@@ -796,7 +950,12 @@ pub fn install_form(
     form = form.field(Field::preview_here());
     // The commands: a toolchain's `bin/` under *Commands to link*, a GUI
     // application's one command under Advanced options.
-    let main = detected.main_rel().unwrap_or("");
+    let appimage_main = format!("{id}.AppImage");
+    let main = if appimage {
+        appimage_main.as_str()
+    } else {
+        detected.main_rel().unwrap_or("")
+    };
     let offered = offered_commands(detected, detected.kind, &id, main);
     let mut command_fields: Vec<Field> = Vec::new();
     for (i, command) in offered.iter().enumerate() {
@@ -808,10 +967,11 @@ pub fn install_form(
         } else {
             &command.target
         };
+        // An AppImage gets no command unless it is asked for.
         command_fields.push(Field::check(
             key,
             format!("Link command {} → current/{target}", command.name),
-            true,
+            !appimage,
         ));
     }
     if offered.len() > CMD_KEYS.len() {
@@ -922,6 +1082,7 @@ pub fn install_form(
     let preview_scan = scan.clone();
     let preview_layout = layout.clone();
     let preview_forced = forced.then(|| update_of.cloned()).flatten();
+    let preview_libraries = libraries.clone();
     form.preview(Arc::new(move |values: &Values| {
         assemble(
             values,
@@ -929,6 +1090,7 @@ pub fn install_form(
             &preview_scan,
             &preview_layout,
             preview_forced.as_ref(),
+            &preview_libraries,
         )
         .rows
     }))
@@ -981,8 +1143,9 @@ fn spawn_install(
     let handle = jobs.spawn_named(name, move |job| async move {
         let progress = job.progress.clone();
         let cancel = job.cancel.clone();
+        let libraries = installer.libraries();
         let result = ext::blocking(move || {
-            install::install(&plan, &scan, &*platform, &progress, &cancel).map(drop)
+            install::install(&plan, &scan, &*platform, &libraries, &progress, &cancel).map(drop)
         })
         .await;
         installer.provider.set_busy(&staging, false);
@@ -993,6 +1156,9 @@ fn spawn_install(
 
 /// The name of the job that reads an archive for its install form.
 pub const READING_ARCHIVE: &str = "Reading archive…";
+
+/// The name of the job that reads an AppImage for its install form.
+pub const READING_APPIMAGE: &str = "Reading AppImage…";
 
 /// Opens the install form once the archive is read and, on confirmation,
 /// runs the install job. Reading the archive is the job *Reading archive…*
@@ -1022,12 +1188,27 @@ fn install_through_form(
             let layout = installer.provider.user_layout();
             let forced = update_of.is_some();
             let matched = update_of.clone().or_else(|| matching(&scan, &detected));
-            let form = install_form(&detected, &scan, &layout, matched.as_ref(), forced);
+            let libraries = installer.libraries();
+            let form = install_form(
+                &detected,
+                &scan,
+                &layout,
+                matched.as_ref(),
+                forced,
+                &libraries,
+            );
             let then = Continuation::new(label, move |values| {
                 let Some(values) = values else {
                     return Ok(ActionOutcome::Done);
                 };
-                let assembled = assemble(&values, &detected, &scan, &layout, update_of.as_ref());
+                let assembled = assemble(
+                    &values,
+                    &detected,
+                    &scan,
+                    &layout,
+                    update_of.as_ref(),
+                    &libraries,
+                );
                 if let Some(problem) = assembled.problem() {
                     return Err(err(InstallError::Invalid(problem.to_owned())));
                 }
@@ -1047,7 +1228,15 @@ fn install_through_form(
     }
     let installer = Arc::clone(installer);
     let archive = archive.to_path_buf();
-    jobs.spawn_named(READING_ARCHIVE, move |job| async move {
+    let listed_as = archive
+        .file_name()
+        .map_or_default(|n| n.to_string_lossy().into_owned());
+    let reading = if appimage::is_appimage(&archive, &listed_as) {
+        READING_APPIMAGE
+    } else {
+        READING_ARCHIVE
+    };
+    jobs.spawn_named(reading, move |job| async move {
         let total = std::fs::metadata(&archive).ok().map(|m| m.len());
         let progress = job.progress.clone();
         let cancel = job.cancel.clone();
@@ -1091,13 +1280,8 @@ impl CliCommand for InstallCommand {
             ctx.cwd.join(path)
         };
         let path = std::fs::canonicalize(&path).unwrap_or(path);
-        let name = path
-            .file_name()
-            .map_or_default(|n| n.to_string_lossy().into_owned());
-        if Format::by_name(&name).is_none() {
-            return Err(Error::Unsupported(
-                "the archive must be a tar (gz, xz, bz2, zst) or zip file",
-            ));
+        if !is_source(&path) {
+            return Err(Error::Unsupported(SOURCE_KINDS));
         }
         if !std::fs::metadata(&path).map_err(Error::from_io)?.is_file() {
             return Err(Error::Unsupported("the archive must be a file"));
@@ -1161,6 +1345,7 @@ impl CliCommand for InstallRickCommand {
             let progress = job.progress.clone();
             let cancel = job.cancel.clone();
             let provider = Arc::clone(&installer.provider);
+            let libraries = installer.libraries();
             let result = ext::blocking(move || {
                 let index = crate::archive::scan(
                     &folder,
@@ -1179,7 +1364,7 @@ impl CliCommand for InstallRickCommand {
                     .map(|app| app.record.clone());
                 let plan =
                     install::rick_plan(layout, &folder, &version, Arc::new(index), update_of);
-                install::install(&plan, &scan, &*platform, &progress, &cancel).map(drop)
+                install::install(&plan, &scan, &*platform, &libraries, &progress, &cancel).map(drop)
             })
             .await;
             installer.provider.set_busy(&staging, false);
@@ -1189,7 +1374,7 @@ impl CliCommand for InstallRickCommand {
     }
 }
 
-/// *Install as application…* on a selected archive.
+/// *Install as application…* on a selected archive or AppImage.
 pub struct Install(Arc<Installer>);
 
 impl Action for Install {
@@ -1206,7 +1391,7 @@ impl Action for Install {
         None
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        if !crate::supported() || selected_archive(ctx).is_none() {
+        if !crate::supported() || selected_source(&self.0, ctx).is_none() {
             Availability::Hidden
         } else {
             Availability::Enabled
@@ -1221,10 +1406,60 @@ impl Action for Install {
         if !crate::supported() {
             return Err(err(InstallError::Unsupported));
         }
-        let archive = selected_archive(&ctx).ok_or(Error::Unsupported(
-            "select one tar or zip archive on the local disk",
+        let archive = selected_source(&self.0, &ctx).ok_or(Error::Unsupported(
+            "select one tar or zip archive or one AppImage on the local disk",
         ))?;
         Ok(install_through_form(&self.0, &archive, None, jobs))
+    }
+}
+
+/// *Run* on a selected AppImage: starts it as it is, with the checks of
+/// [`appimage::run`]. Nothing is installed. Where the file needs FUSE 2
+/// and the machine does not have it, nothing is started and the warning
+/// is shown: what is missing, the install line of each distribution and
+/// where to read more.
+pub struct Run(Arc<Installer>);
+
+impl Action for Run {
+    fn id(&self) -> ActionId {
+        RUN
+    }
+    fn label(&self) -> String {
+        t!("installer-run")
+    }
+    fn group(&self) -> ActionGroup {
+        GROUP
+    }
+    fn default_shortcut(&self) -> Option<Shortcut> {
+        None
+    }
+    fn availability(&self, ctx: &ActionCtx) -> Availability {
+        if !crate::supported() || selected_appimage(&self.0, ctx).is_none() {
+            Availability::Hidden
+        } else {
+            Availability::Enabled
+        }
+    }
+    fn run(
+        &self,
+        ctx: ActionCtx,
+        _jobs: &JobRunner,
+        ui: &dyn UiHost,
+    ) -> Result<ActionOutcome, Error> {
+        if !crate::supported() {
+            return Err(err(InstallError::Unsupported));
+        }
+        let path = selected_appimage(&self.0, &ctx)
+            .ok_or(Error::Unsupported("select one AppImage on the local disk"))?;
+        let platform = self.0.provider.platform();
+        match appimage::run(&**platform, &self.0.libraries(), &path)? {
+            appimage::Ran::Started => {}
+            appimage::Ran::NeedsFuse2 => ui.show(
+                &t!("installer-fuse2-title"),
+                &t!("installer-fuse2-text", link = appimage::FUSE_DOCUMENTATION),
+            ),
+        }
+        Ok(ActionOutcome::Done)
     }
 }
 
@@ -1393,10 +1628,8 @@ impl Action for Update {
         if !archive.is_file() {
             return Err(Error::NotFound);
         }
-        if Format::by_name(text).is_none() {
-            return Err(Error::Unsupported(
-                "the archive must be a tar (gz, xz, bz2, zst) or zip file",
-            ));
+        if !is_source(&archive) {
+            return Err(Error::Unsupported(SOURCE_KINDS));
         }
         Ok(install_through_form(
             &self.0,

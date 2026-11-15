@@ -1,7 +1,7 @@
 [package]
 name = "ext-installer"
 version.workspace = true
-description = "Rick's tarball installer: Install as application on a tar or zip archive, a versioned layout under ~/.local/opt with a current symlink, desktop entry, icon and commands on the PATH, update with one previous version kept, revert, uninstall, repair and the Installed Apps view; Linux only, as a plugin."
+description = "Rick's installer for tarballs and AppImages: Install as application on a tar or zip archive or an AppImage, a versioned layout under ~/.local/opt with a current symlink, desktop entry, icon and commands on the PATH, update with one previous version kept, revert, uninstall, repair and the Installed Apps view, and Run on an AppImage with the FUSE 2 check; Linux only, as a plugin."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -37,6 +37,9 @@ flate2 = { workspace = true }
 liblzma = { workspace = true }
 bzip2 = { workspace = true }
 zstd = { workspace = true }
+# An AppImage's image is read by this crate too, never by running the file
+# (specs/ext-installer.md "AppImages").
+backhand = { workspace = true }
 
 [dev-dependencies]
 ext-installer = { path = ".", features = ["fixtures"] }

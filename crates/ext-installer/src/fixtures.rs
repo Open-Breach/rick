@@ -1,8 +1,10 @@
 //! The test fixtures of specs/ext-installer.md, generated on demand so no
 //! binary is committed: the spec's ten small archives, each exercising one
 //! detection or safety rule, plus a JetBrains-shaped one for the name rule,
-//! with tiny ELF programs that exit 0 when run on this machine. Built with
-//! the `fixtures` feature and in the crate's tests.
+//! with tiny ELF programs that exit 0 when run on this machine; and the
+//! spec's AppImages, the same tiny program with the AppImage magic in its
+//! header and a small SquashFS image behind it. Built with the `fixtures`
+//! feature and in the crate's tests.
 
 // Fixture bytes are small by construction: the casts between the ELF
 // header's widths and the buffers' lengths cannot truncate.
@@ -10,6 +12,10 @@
 
 use std::io::{self, Cursor, Write};
 use std::path::{Path, PathBuf};
+
+use backhand::compression::{CompressionAction, CompressionOptions, Compressor, Lz4};
+use backhand::kind::Kind;
+use backhand::{BackhandError, FilesystemCompressor, FilesystemWriter, NodeHeader, SuperBlock};
 
 use crate::elf::{EM_AARCH64, EM_X86_64};
 
@@ -103,6 +109,35 @@ pub fn tiny_elf(machine: u16, needed: &[&str]) -> Vec<u8> {
 
 fn align(value: u64, to: u64) -> u64 {
     value.div_ceil(to) * to
+}
+
+/// The runtime of a fixture AppImage of type `kind` (1 or 2): the tiny
+/// program of [`tiny_elf`] with the AppImage magic, `AI` and the type, at
+/// offset 8 of its header, and with its section header table declared
+/// empty at the end of the file, so the ELF ends where the file does and
+/// an image appended to it starts there. It still exits 0 when run: the
+/// kernel reads neither the padding nor the section headers.
+#[must_use]
+pub fn tiny_appimage(machine: u16, kind: u8, needed: &[&str]) -> Vec<u8> {
+    tiny_appimage_opening(machine, kind, needed, &[])
+}
+
+/// The runtime of [`tiny_appimage`] with `opens` among its bytes, each
+/// name a string behind the program and inside the ELF: what a runtime
+/// that opens a library by its name carries, as the older AppImage
+/// runtime carries `libfuse.so.2`, which is no needed library of it.
+#[must_use]
+pub fn tiny_appimage_opening(machine: u16, kind: u8, needed: &[&str], opens: &[&str]) -> Vec<u8> {
+    let mut out = tiny_elf(machine, needed);
+    for name in opens {
+        out.extend_from_slice(name.as_bytes());
+        out.push(0);
+    }
+    out[8..11].copy_from_slice(&[b'A', b'I', kind]);
+    let end = out.len() as u64;
+    out[0x28..0x30].copy_from_slice(&end.to_le_bytes()); // e_shoff
+    out[0x3a..0x3c].copy_from_slice(&64u16.to_le_bytes()); // e_shentsize
+    out
 }
 
 /// The machine of this process, for a fixture that must run here; x86-64
@@ -520,5 +555,310 @@ impl TarBuild {
     fn finish(mut self) -> io::Result<Vec<u8>> {
         self.builder.finish()?;
         self.builder.into_inner()
+    }
+}
+
+/// One entry of a fixture image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Inside<'a> {
+    /// A regular file with these bytes.
+    File(&'a [u8]),
+    /// A symbolic link to this target.
+    Link(&'a str),
+}
+
+fn image_io(error: backhand::BackhandError) -> io::Error {
+    io::Error::other(error)
+}
+
+/// zstd for the writer of a fixture image. The SquashFS crate is built
+/// without zstd of its own (the installer hands it the workspace's when
+/// it reads), and its hook is not told which compression an image asks
+/// for when it writes: this compressor packs with zstd whatever it is
+/// asked, and is set for a zstd image and no other. It goes away with
+/// the reader's adapter in `appimage`, once `backhand` asks for the
+/// `zstd` the workspace has.
+struct ZstdWriter;
+
+impl CompressionAction for ZstdWriter {
+    type Error = BackhandError;
+    type Compressor = Compressor;
+    type FilesystemCompressor = FilesystemCompressor;
+    type SuperBlock = SuperBlock;
+
+    fn decompress(
+        &self,
+        bytes: &[u8],
+        out: &mut Vec<u8>,
+        _: Compressor,
+    ) -> Result<(), BackhandError> {
+        zstd::bulk::Decompressor::new()?.decompress_to_buffer(bytes, out)?;
+        Ok(())
+    }
+
+    fn compress(
+        &self,
+        bytes: &[u8],
+        _: FilesystemCompressor,
+        _: u32,
+    ) -> Result<Vec<u8>, BackhandError> {
+        Ok(zstd::bulk::compress(bytes, 3)?)
+    }
+}
+
+static ZSTD_WRITER: ZstdWriter = ZstdWriter;
+
+/// A SquashFS image holding `entries` by their paths, the folders above
+/// them included, compressed with `compressor`. It is written by the
+/// writer of the crate that reads it; no time of the day goes into it, so
+/// the same entries give the same bytes.
+///
+/// # Errors
+///
+/// The writer's error, as an I/O error.
+pub fn squashfs(entries: &[(&str, Inside<'_>)], compressor: Compressor) -> io::Result<Vec<u8>> {
+    let mut image = FilesystemWriter::default();
+    // LZ4 is the one compressor whose options an image must carry.
+    let options = (compressor == Compressor::Lz4).then_some(CompressionOptions::Lz4(Lz4 {
+        version: 1,
+        flags: 0,
+    }));
+    image.set_compressor(FilesystemCompressor::new(compressor, options).map_err(image_io)?);
+    if compressor == Compressor::Zstd {
+        image.set_kind(Kind::new_v4(&ZSTD_WRITER));
+    }
+    image.set_time(0);
+    image.set_no_padding();
+    let header = NodeHeader::new(0o755, 0, 0, 0);
+    for (path, entry) in entries {
+        if let Some((folder, _)) = path.rsplit_once('/') {
+            image.push_dir_all(folder, header).map_err(image_io)?;
+        }
+        match entry {
+            Inside::File(bytes) => image.push_file(Cursor::new(*bytes), path, header),
+            Inside::Link(target) => image.push_symlink(*target, path, header),
+        }
+        .map_err(image_io)?;
+    }
+    let mut out = Cursor::new(Vec::new());
+    image.write(&mut out).map_err(image_io)?;
+    Ok(out.into_inner())
+}
+
+/// An AppImage of type 2 for `machine`: the runtime of [`tiny_appimage`],
+/// whose dynamic section names `needed`, and behind it a gzip-compressed
+/// SquashFS image of `entries`.
+///
+/// # Errors
+///
+/// The image writer's error, as an I/O error.
+pub fn appimage(
+    machine: u16,
+    needed: &[&str],
+    entries: &[(&str, Inside<'_>)],
+) -> io::Result<Vec<u8>> {
+    appimage_behind(tiny_appimage(machine, 2, needed), entries)
+}
+
+/// An AppImage of type 2 with this `runtime` at its head and behind it a
+/// gzip-compressed SquashFS image of `entries`.
+///
+/// # Errors
+///
+/// The image writer's error, as an I/O error.
+pub fn appimage_behind(
+    mut runtime: Vec<u8>,
+    entries: &[(&str, Inside<'_>)],
+) -> io::Result<Vec<u8>> {
+    runtime.extend(squashfs(entries, Compressor::Gzip)?);
+    Ok(runtime)
+}
+
+/// A desktop entry as an AppImage carries one at its top: the app `name`
+/// under the lower-case command and icon `id`, with `X-AppImage-Version`
+/// when `version` is given.
+#[must_use]
+pub fn appimage_desktop(name: &str, id: &str, version: Option<&str>) -> String {
+    let mut text = format!(
+        "[Desktop Entry]\nType=Application\nName={name}\nComment=A fixture\nExec={id} %U\n\
+         TryExec={id}\nIcon={id}\nCategories=Utility;\nStartupWMClass={name}\n"
+    );
+    if let Some(version) = version {
+        text.push_str("X-AppImage-Version=");
+        text.push_str(version);
+        text.push('\n');
+    }
+    text
+}
+
+/// An AppStream metainfo file listing `releases` in that order, with one
+/// more inside a comment, which is no release.
+#[must_use]
+pub fn appimage_metainfo(id: &str, releases: &[&str]) -> String {
+    use std::fmt::Write as _;
+    let mut text = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<component type=\"desktop-application\">\n  \
+         <id>org.example.{id}</id>\n  <releases>\n    <!-- <release version=\"99.0\"/> -->\n"
+    );
+    for (i, version) in releases.iter().enumerate() {
+        let _ = writeln!(
+            text,
+            "    <release version=\"{version}\" date=\"2026-0{}-01\"/>",
+            (i % 9) + 1
+        );
+    }
+    text.push_str("  </releases>\n</component>\n");
+    text
+}
+
+/// The fixture AppImages of the spec's table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AppImageFixture {
+    /// Type 2: the desktop entry of `Fixapp` with `X-AppImage-Version`
+    /// 2.1.0, `.DirIcon` linking to `fixapp.png` in the image, and a
+    /// metainfo naming 2.0.5.
+    Entry,
+    /// `Fixmeta`: an entry without a version, a metainfo listing 1.3.2 and
+    /// then 1.4.0.
+    Metainfo,
+    /// `Fixname`: an entry without a version and no metainfo, as
+    /// `Fixname-3.2.1-x86_64.AppImage`.
+    FileName,
+    /// `Fixnone`: no version in the entry, no metainfo, none in the name.
+    NoVersion,
+    /// The magic of type 1 and no SquashFS image.
+    Type1,
+    /// `Fixmagic` under a name without the extension: the magic alone
+    /// says what it is.
+    MagicOnly,
+    /// `Fixfuse` on a runtime that opens `libfuse.so.2` by name, as the
+    /// older AppImage runtime does; every other fixture's runtime does
+    /// not name it.
+    Fuse2,
+    /// `Fixarch`, built for the other machine.
+    WrongArch,
+    /// `Fixlinks`: `.DirIcon` and the icon the entry names are links that
+    /// point out of the image.
+    OutsideLinks,
+    /// `Fixapp` again, as 2.2.0 under another file name.
+    UpdateV2,
+}
+
+impl AppImageFixture {
+    /// Every AppImage fixture, in the spec's order.
+    pub const ALL: [Self; 10] = [
+        Self::Entry,
+        Self::Metainfo,
+        Self::FileName,
+        Self::NoVersion,
+        Self::Type1,
+        Self::MagicOnly,
+        Self::Fuse2,
+        Self::WrongArch,
+        Self::OutsideLinks,
+        Self::UpdateV2,
+    ];
+
+    /// The file's name, as the spec's table names it.
+    #[must_use]
+    pub fn file_name(self) -> &'static str {
+        match self {
+            Self::Entry => "entry.AppImage",
+            Self::Metainfo => "metainfo.AppImage",
+            Self::FileName => "Fixname-3.2.1-x86_64.AppImage",
+            Self::NoVersion => "no-version.AppImage",
+            Self::Type1 => "type1.AppImage",
+            Self::MagicOnly => "magic-only",
+            Self::Fuse2 => "fuse2.AppImage",
+            Self::WrongArch => "wrong-arch.AppImage",
+            Self::OutsideLinks => "outside-links.AppImage",
+            Self::UpdateV2 => "update-v2.AppImage",
+        }
+    }
+
+    /// The file's bytes.
+    ///
+    /// # Errors
+    ///
+    /// The image writer's error, as an I/O error.
+    pub fn bytes(self) -> io::Result<Vec<u8>> {
+        let png = tiny_png(64);
+        let run = b"#!/bin/sh\nexit 0\n";
+        // The usual image behind a runtime: the entry, the icon it names,
+        // `.DirIcon` linking to that icon, and `AppRun`.
+        let behind = |runtime: Vec<u8>, name: &str, version: Option<&str>, releases: &[&str]| {
+            let id = name.to_ascii_lowercase();
+            let desktop = appimage_desktop(name, &id, version);
+            let icon = format!("{id}.png");
+            let metainfo = appimage_metainfo(&id, releases);
+            let metainfo_at = format!("usr/share/metainfo/{id}.appdata.xml");
+            let mut entries = vec![
+                (format!("{id}.desktop"), Inside::File(desktop.as_bytes())),
+                (icon.clone(), Inside::File(&png)),
+                (".DirIcon".to_owned(), Inside::Link(&icon)),
+                ("AppRun".to_owned(), Inside::File(run)),
+            ];
+            if !releases.is_empty() {
+                entries.push((metainfo_at, Inside::File(metainfo.as_bytes())));
+            }
+            let entries: Vec<(&str, Inside<'_>)> = entries
+                .iter()
+                .map(|(path, e)| (path.as_str(), *e))
+                .collect();
+            appimage_behind(runtime, &entries)
+        };
+        let usual = |machine: u16, name: &str, version: Option<&str>, releases: &[&str]| {
+            behind(tiny_appimage(machine, 2, &[]), name, version, releases)
+        };
+        match self {
+            Self::Entry => usual(this_machine(), "Fixapp", Some("2.1.0"), &["2.0.5"]),
+            Self::Metainfo => usual(this_machine(), "Fixmeta", None, &["1.3.2", "1.4.0"]),
+            Self::FileName => usual(this_machine(), "Fixname", None, &[]),
+            Self::NoVersion => usual(this_machine(), "Fixnone", None, &[]),
+            Self::Type1 => {
+                let mut out = tiny_appimage(this_machine(), 1, &[]);
+                // What follows is no SquashFS image.
+                out.extend_from_slice(&[0u8; 2048]);
+                Ok(out)
+            }
+            Self::MagicOnly => usual(this_machine(), "Fixmagic", Some("0.9.0"), &[]),
+            Self::Fuse2 => behind(
+                tiny_appimage_opening(this_machine(), 2, &[], &["libfuse.so.2"]),
+                "Fixfuse",
+                Some("1.0.0"),
+                &[],
+            ),
+            Self::WrongArch => usual(other_machine(), "Fixarch", Some("1.0.0"), &[]),
+            Self::OutsideLinks => {
+                let desktop = appimage_desktop("Fixlinks", "fixlinks", Some("1.0.0"));
+                appimage(
+                    this_machine(),
+                    &[],
+                    &[
+                        ("fixlinks.desktop", Inside::File(desktop.as_bytes())),
+                        (
+                            ".DirIcon",
+                            Inside::Link("/usr/share/icons/hicolor/48x48/apps/fixlinks.png"),
+                        ),
+                        ("fixlinks.png", Inside::Link("../../outside/fixlinks.png")),
+                        ("AppRun", Inside::File(run)),
+                    ],
+                )
+            }
+            Self::UpdateV2 => usual(this_machine(), "Fixapp", Some("2.2.0"), &["2.2.0"]),
+        }
+    }
+
+    /// Writes the file into `dir` under its name, without the execute
+    /// bit, as a download arrives.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error from writing.
+    pub fn write(self, dir: &Path) -> io::Result<PathBuf> {
+        let path = dir.join(self.file_name());
+        std::fs::write(&path, self.bytes()?)?;
+        ext::platform::fs::set_unix_mode(&path, 0o644)?;
+        Ok(path)
     }
 }

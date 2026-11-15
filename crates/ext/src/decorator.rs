@@ -95,9 +95,85 @@
 //! assert_eq!(decorated[1].1.cells[0], (EXTENSION, CellValue::Text("rs".into())));
 //! assert!(Docs.panel(&entries[0]).is_some());
 //! ```
+//!
+//! # Offering a timeline
+//!
+//! A decorator that knows earlier states of a folder (filesystem snapshots,
+//! backups) says so with [`Decorator::offers_timelines`] and answers
+//! [`Decorator::timeline`] for one location. The kernel calls `timeline` in
+//! a job, only while the pane's time slider is shown, and merges the points
+//! of every decorator that answers, so it may block on a cold cache.
+//!
+//! ```
+//! use std::time::{Duration, SystemTime};
+//!
+//! use ext::{
+//!     ColumnDef, DecorateCtx, Decoration, Decorator, PanelSection, TimePoint, Timeline,
+//! };
+//! use types::{Entry, EntryId, ExtId, Location, ProviderId, VPath};
+//!
+//! /// Nightly backups of everything under `/data`, kept in `backup:/<day>/…`.
+//! struct Nightly;
+//!
+//! impl Decorator for Nightly {
+//!     fn id(&self) -> ExtId {
+//!         ExtId("nightly")
+//!     }
+//!
+//!     fn applies_to(&self, loc: &Location) -> bool {
+//!         loc.path.to_string_lossy().starts_with("/data")
+//!     }
+//!
+//!     fn columns(&self) -> &[ColumnDef] {
+//!         &[]
+//!     }
+//!
+//!     fn decorate(&self, _entries: &[Entry], _ctx: &DecorateCtx) -> Vec<(EntryId, Decoration)> {
+//!         Vec::new()
+//!     }
+//!
+//!     fn panel(&self, _entry: &Entry) -> Option<PanelSection> {
+//!         None
+//!     }
+//!
+//!     fn invalidates_on(&self, _loc: &Location) -> Vec<Location> {
+//!         Vec::new()
+//!     }
+//!
+//!     fn invalidate(&self, _loc: &Location) {}
+//!
+//!     fn offers_timelines(&self) -> bool {
+//!         true
+//!     }
+//!
+//!     fn timeline(&self, loc: &Location) -> Option<Timeline> {
+//!         let day = Duration::from_secs(86_400);
+//!         let points = (1..=2u32)
+//!             .map(|n| TimePoint {
+//!                 time: SystemTime::UNIX_EPOCH + day * n,
+//!                 label: format!("day {n}"),
+//!                 source: "Nightly".into(),
+//!                 location: Location::new(
+//!                     ProviderId("backup"),
+//!                     format!("/{n}{}", loc.path),
+//!                 ),
+//!             })
+//!             .collect();
+//!         Some(Timeline { live: loc.clone(), points })
+//!     }
+//! }
+//!
+//! let docs = Location::new(ProviderId("local"), "/data/docs");
+//! let timeline = Nightly.timeline(&docs).unwrap();
+//! assert_eq!(timeline.points.len(), 2);
+//! assert_eq!(timeline.points[1].location.path, VPath::from("/2/data/docs"));
+//! assert_eq!(timeline.point_at(&docs), None, "the live folder is *Now*");
+//! assert_eq!(timeline.point_at(&timeline.points[0].location.clone()), Some(0));
+//! ```
 
 use std::fmt;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use runtime::JobRunner;
 use smallvec::SmallVec;
@@ -223,6 +299,60 @@ impl fmt::Debug for DecorateCtx {
     }
 }
 
+/// One earlier state of a folder on a [`Timeline`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimePoint {
+    /// When the state was taken.
+    pub time: SystemTime,
+    /// Its name as the source knows it: a snapshot's name.
+    pub label: String,
+    /// The source's name as the time slider shows it: "ZFS".
+    pub source: String,
+    /// The location that shows the folder as it was at `time`.
+    pub location: Location,
+}
+
+/// The earlier states of a folder: what the time slider moves through.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Timeline {
+    /// The folder now, the slider's right end.
+    pub live: Location,
+    /// The earlier states, oldest first once the kernel merged them.
+    pub points: Vec<TimePoint>,
+}
+
+impl Timeline {
+    /// Merges the answers of several sources into one timeline: every
+    /// point, sorted by time (stable, so equal times keep the order of the
+    /// answers), with the first answer's live folder. `None` without any
+    /// point.
+    #[must_use]
+    pub fn merge(answers: impl IntoIterator<Item = Self>) -> Option<Self> {
+        let mut answers = answers.into_iter();
+        let mut merged = answers.next()?;
+        for answer in answers {
+            merged.points.extend(answer.points);
+        }
+        merged.points.sort_by_key(|point| point.time);
+        (!merged.points.is_empty()).then_some(merged)
+    }
+
+    /// The index of the point that shows `location`; `None` for the live
+    /// folder or a location that is no point of this timeline.
+    #[must_use]
+    pub fn point_at(&self, location: &Location) -> Option<usize> {
+        self.points
+            .iter()
+            .position(|point| point.location == *location)
+    }
+
+    /// Whether `location` is the live folder or one of the points.
+    #[must_use]
+    pub fn covers(&self, location: &Location) -> bool {
+        self.live == *location || self.point_at(location).is_some()
+    }
+}
+
 /// Adds badges, columns and panel sections to entries.
 pub trait Decorator: Send + Sync + 'static {
     /// The extension this decorator belongs to.
@@ -251,4 +381,98 @@ pub trait Decorator: Send + Sync + 'static {
     /// [`invalidates_on`](Self::invalidates_on); cached answers for `loc` are
     /// stale and the next `decorate` must look again.
     fn invalidate(&self, loc: &Location);
+
+    /// Whether this decorator can offer timelines at all. Read once, so it
+    /// must not depend on a location; the kernel offers the time slider for
+    /// a location when a decorator that offers timelines
+    /// [`applies_to`](Self::applies_to) it.
+    fn offers_timelines(&self) -> bool {
+        false
+    }
+
+    /// The earlier states of the folder `loc`, or `None` when there are
+    /// none. Runs in a job, never on the UI thread, and only while a time
+    /// slider for `loc` is shown, so it may block; it should answer from a
+    /// cache where it can. `loc` may be the live folder or one of the
+    /// points of its timeline, and both answer with the same timeline.
+    fn timeline(&self, loc: &Location) -> Option<Timeline> {
+        let _ = loc;
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, SystemTime};
+
+    use types::{Location, ProviderId};
+
+    use super::{TimePoint, Timeline};
+
+    fn point(day: u64, label: &str, source: &str) -> TimePoint {
+        TimePoint {
+            time: SystemTime::UNIX_EPOCH + Duration::from_secs(86_400 * day),
+            label: label.into(),
+            source: source.into(),
+            location: Location::new(ProviderId("t"), format!("/{source}/{label}")),
+        }
+    }
+
+    fn live() -> Location {
+        Location::new(ProviderId("local"), "/docs")
+    }
+
+    #[test]
+    fn two_sources_merge_by_time_and_keep_their_source() {
+        let zfs = Timeline {
+            live: live(),
+            points: vec![point(1, "mon", "ZFS"), point(4, "thu", "ZFS")],
+        };
+        let backup = Timeline {
+            live: Location::new(ProviderId("other"), "/"),
+            points: vec![point(2, "tue", "Backup")],
+        };
+        let merged = Timeline::merge([zfs, backup]).unwrap_or_else(|| panic!("merged"));
+        let order: Vec<(&str, &str)> = merged
+            .points
+            .iter()
+            .map(|p| (p.label.as_str(), p.source.as_str()))
+            .collect();
+        assert_eq!(order, [("mon", "ZFS"), ("tue", "Backup"), ("thu", "ZFS")]);
+        assert_eq!(merged.live, live(), "the first answer's live folder");
+    }
+
+    #[test]
+    fn equal_times_keep_the_answers_order_and_nothing_merges_to_none() {
+        let first = Timeline {
+            live: live(),
+            points: vec![point(3, "a", "ZFS")],
+        };
+        let second = Timeline {
+            live: live(),
+            points: vec![point(3, "b", "Backup")],
+        };
+        let merged = Timeline::merge([first, second]).unwrap_or_else(|| panic!("merged"));
+        assert_eq!(merged.points[0].label, "a");
+        assert_eq!(Timeline::merge([]), None);
+        let empty = Timeline {
+            live: live(),
+            points: Vec::new(),
+        };
+        assert_eq!(Timeline::merge([empty]), None, "no point, no timeline");
+    }
+
+    #[test]
+    fn point_at_and_covers() {
+        let timeline = Timeline {
+            live: live(),
+            points: vec![point(1, "a", "ZFS"), point(2, "b", "ZFS")],
+        };
+        let b = timeline.points[1].location.clone();
+        assert_eq!(timeline.point_at(&b), Some(1));
+        assert_eq!(timeline.point_at(&live()), None);
+        assert!(timeline.covers(&live()));
+        assert!(timeline.covers(&b));
+        assert!(!timeline.covers(&Location::new(ProviderId("local"), "/x")));
+    }
 }

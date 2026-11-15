@@ -193,6 +193,43 @@ fn frame_of(sample: &gst::Sample) -> Option<VideoFrame> {
     })
 }
 
+/// The element that turns a video's frames the way its container says.
+const UPRIGHT: &str = "videoflip";
+
+/// The filter that makes every frame of a video upright (SPEC.md *Audio
+/// and video*): the element `name`, `videoflip`, following the
+/// orientation the stream carries — the display matrix of an MP4 or MOV
+/// track, the orientation tag of Matroska — which GStreamer hands on as
+/// the `image-orientation` tag. A stream without one passes untouched.
+///
+/// `None` where the element is missing or does not take the setting, with
+/// a line in the log: the video then plays as it is stored, and plays.
+pub(crate) fn upright(name: &str) -> Option<gst::Element> {
+    let element = match gst::ElementFactory::make(name).build() {
+        Ok(element) => element,
+        Err(error) => {
+            tracing::warn!(element = name, %error, "no element to turn a video by its orientation; it plays as stored");
+            return None;
+        }
+    };
+    if element.find_property("video-direction").is_none() {
+        tracing::warn!(
+            element = name,
+            "the element cannot follow a video's orientation; it plays as stored"
+        );
+        return None;
+    }
+    element.set_property_from_str("video-direction", "auto");
+    Some(element)
+}
+
+/// Whether a stream's `image-orientation` tag turns the picture by a
+/// quarter, either way and mirrored or not: `rotate-90`, `rotate-270`,
+/// `flip-rotate-90` and `flip-rotate-270`.
+pub(crate) fn is_quarter_turn(orientation: &str) -> bool {
+    orientation.ends_with("rotate-90") || orientation.ends_with("rotate-270")
+}
+
 /// The shared state the sink's callback and the transport read and write.
 #[derive(Debug, Default)]
 struct Shared {
@@ -293,6 +330,10 @@ impl Player {
                 )
                 .build();
             builder = builder.property("video-sink", appsink.to_value());
+            // The frames arrive upright: turned as the container says.
+            if let Some(upright) = upright(UPRIGHT) {
+                builder = builder.property("video-filter", upright.to_value());
+            }
         }
         if muted {
             let fake = gst::ElementFactory::make("fakesink")
@@ -560,7 +601,8 @@ impl Transport for Player {
 pub struct Discovered {
     /// Playing time.
     pub duration: Option<Duration>,
-    /// The video frame size.
+    /// The video frame size as it is shown: turned with the picture where
+    /// the stream's orientation turns it by a quarter.
     pub dimensions: Option<(u32, u32)>,
     /// Frames per second.
     pub frame_rate: Option<f64>,
@@ -637,7 +679,17 @@ fn describe_streams(info: &gst_pbutils::DiscovererInfo, out: &mut Discovered) {
             0.0
         };
         if out.dimensions.is_none() && video.width() > 0 {
-            out.dimensions = Some((video.width(), video.height()));
+            // The size as shown: a stream its orientation turns by a
+            // quarter is as wide as it is stored high.
+            let quarter = video.tags().is_some_and(|tags| {
+                tags.get::<gst::tags::ImageOrientation>()
+                    .is_some_and(|turn| is_quarter_turn(turn.get()))
+            });
+            out.dimensions = Some(if quarter {
+                (video.height(), video.width())
+            } else {
+                (video.width(), video.height())
+            });
             if fps_value > 0.0 {
                 out.frame_rate = Some(fps_value);
             }

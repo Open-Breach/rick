@@ -779,17 +779,37 @@ fn clone_form(h: &Harness, context: ActionCtx) -> ext::Form {
     h.ui.last_form()
 }
 
+/// The URL field takes a Git URL from the clipboard through its clipboard
+/// rule, which the dialogue applies when it opens (SPEC.md *Git clone
+/// dialogue*); the action reads the clipboard itself only for the one
+/// case no pattern can tell, the absolute path of a local repository,
+/// and that is what the field is written with. Nothing else is.
 #[test]
-fn the_dialogue_opens_with_a_git_url_from_the_clipboard_and_blank_otherwise() {
+fn the_url_field_carries_the_rule_and_opens_with_a_local_repositorys_path() {
     use platform::Clipboard as _;
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let fake = Arc::new(platform::Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let h = harness_with(Arc::clone(&fake));
-    // Nothing on the clipboard.
+    let url_field = |form: &ext::Form| {
+        form.fields
+            .iter()
+            .find(|field| field.key == "url")
+            .cloned()
+            .unwrap_or_else(|| panic!("no URL field"))
+    };
+    // Nothing on the clipboard: the field is blank, and has the rule.
+    let form = clone_form(&h, ctx(dir.path(), &[]));
+    assert_eq!(form.defaults().text("url"), "");
     assert_eq!(
-        clone_form(&h, ctx(dir.path(), &[])).defaults().text("url"),
-        ""
+        url_field(&form).clipboard.as_deref(),
+        Some(crate::clone::URL_RULE)
     );
+    // No other field takes anything from the clipboard.
+    assert_eq!(
+        form.fields.iter().filter(|f| f.clipboard.is_some()).count(),
+        1
+    );
+
     // A repository and a plain folder beside it, for the paths.
     let local = dir.path().join("local");
     fs::create_dir(&local).unwrap_or_else(|e| panic!("{e}"));
@@ -798,44 +818,36 @@ fn the_dialogue_opens_with_a_git_url_from_the_clipboard_and_blank_otherwise() {
     fs::create_dir(&plain).unwrap_or_else(|e| panic!("{e}"));
     fs::write(plain.join("notes.txt"), "notes").unwrap_or_else(|e| panic!("{e}"));
     let path_of = |path: &Path| path.to_string_lossy().into_owned();
-    for (clipboard, field) in [
-        (
-            "https://github.com/Open-Breach/rick.git".to_owned(),
-            "https://github.com/Open-Breach/rick.git".to_owned(),
-        ),
-        // Copied with the line's end.
-        (
-            "  git@github.com:Open-Breach/rick.git\n".to_owned(),
-            "git@github.com:Open-Breach/rick.git".to_owned(),
-        ),
-        (
-            "file:///srv/git/rick.git".to_owned(),
-            "file:///srv/git/rick.git".to_owned(),
-        ),
-        // A local repository's path, and paths that are none.
+    for (clipboard, written) in [
+        // A local repository's path, copied with the line's end: the one
+        // thing the action writes into the field.
         (format!("{}\n", path_of(&local)), path_of(&local)),
+        // Paths that are no repository.
         (path_of(&plain), String::new()),
         (path_of(&plain.join("notes.txt")), String::new()),
         (path_of(&dir.path().join("gone")), String::new()),
-        ("http://example.com/rick.git".to_owned(), String::new()),
-        ("just some text".to_owned(), String::new()),
+        // A Git URL is the rule's to take, not the action's to write.
         (
-            "git clone https://github.com/Open-Breach/rick.git".to_owned(),
+            "https://github.com/Open-Breach/rick.git".to_owned(),
             String::new(),
         ),
+        (
+            "git@github.com:Open-Breach/rick.git".to_owned(),
+            String::new(),
+        ),
+        ("just some text".to_owned(), String::new()),
     ] {
         fake.set_text(&clipboard).unwrap_or_else(|e| panic!("{e}"));
         let form = clone_form(&h, ctx(dir.path(), &[]));
-        assert_eq!(form.defaults().text("url"), field, "{clipboard:?}");
+        assert_eq!(form.defaults().text("url"), written, "{clipboard:?}");
+        assert!(url_field(&form).clipboard.is_some(), "{clipboard:?}");
     }
-    // Without platform services there is no clipboard to read.
+    // Without platform services there is no clipboard to read; the rule
+    // is the field's all the same.
     let bare = harness();
-    assert_eq!(
-        clone_form(&bare, ctx(dir.path(), &[]))
-            .defaults()
-            .text("url"),
-        ""
-    );
+    let form = clone_form(&bare, ctx(dir.path(), &[]));
+    assert_eq!(form.defaults().text("url"), "");
+    assert!(url_field(&form).clipboard.is_some());
 }
 
 #[test]

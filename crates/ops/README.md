@@ -22,7 +22,11 @@ selection, folders included, into a folder asked for first. Open in
 editor (F4) starts the command of the `editor` setting with the selected
 local files appended, split at spaces outside double quotes, or the
 system's default text editor where the setting is empty; the application
-hands the setting over as `OpenSettings`. Compute hash… (`hash`) reads
+hands the setting over as `OpenSettings`. Set as desktop background
+(`desktop`) is for exactly one selected image file of the local file
+system in a format `platform::DesktopBackground` says the desktop takes,
+hidden otherwise and on a desktop that takes none, and hands the desktop
+the file where it lies, on the application's thread. Compute hash… (`hash`) reads
 every selected file once through its provider in 1 MiB chunks and feeds
 each chunk to MD5, SHA-1, SHA-256 and BLAKE3 in one job with byte progress
 and cancel, filling an `ext::Hashes` slot the Hash dialogue polls; the

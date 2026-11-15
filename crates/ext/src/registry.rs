@@ -186,8 +186,14 @@ use crate::search::SearchIndex;
 /// `CREATE_FILE`, `SEARCH_SUBTREE` and `DOWNLOAD`, and
 /// [`Provider`] gained `unavailable_reason`, the tooltip
 /// of a control a location rules out, and `name_problem`, a new folder's
-/// name checked against the provider's own rules before any request.
-pub const API_VERSION: u32 = 19;
+/// name checked against the provider's own rules before any request; 20 a
+/// decorator can offer a location's earlier states (the time slider, #156):
+/// [`Decorator`] gained `offers_timelines` and `timeline`, both defaulted;
+/// 21 a provider's files can open from where they lie (#156):
+/// [`Provider`] gained `local_path`, defaulted; 22 a form field can take
+/// its value from the clipboard (#221): [`Field`](crate::Field) gained
+/// `clipboard`, the rule `Field::from_clipboard` sets.
+pub const API_VERSION: u32 = 22;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares

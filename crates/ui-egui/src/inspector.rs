@@ -32,6 +32,7 @@ use ext::{Content, ControlValue, Invocation, PreviewControl};
 use model::{PaneId, SettingsChange, TextPreview};
 use types::{Entry, EntryId, ExtId};
 
+use crate::copy_button::{CopyButton, Hover};
 use crate::icons;
 use crate::info_card::{self, Card, Row};
 use crate::preview::{Around, PreviewAct, Previews, Slot};
@@ -187,6 +188,9 @@ pub(crate) fn card_rows(
     rows
 }
 
+/// *Set as desktop background*, the core action the toolbar's button runs.
+const DESKTOP_BACKGROUND: ext::ActionId = ext::ActionId("core.set_desktop_background");
+
 /// What a toolbar control asked for.
 enum Act {
     Setting(SettingsChange),
@@ -201,6 +205,9 @@ enum Act {
     Volume(f32),
     /// Copy the whole file's text to the clipboard.
     Copy,
+    /// Set the file shown as the desktop's background, with the context
+    /// the action runs in.
+    DesktopBackground(ext::ActionCtx),
     Close,
 }
 
@@ -244,6 +251,10 @@ struct View<'a> {
     copy: bool,
     /// The media transport, when the document is media.
     transport: Option<TransportView>,
+    /// What *Set as desktop background* runs with, when the action applies
+    /// to the file shown: the followed pane's selection, which is that
+    /// file. `None` wherever the context menu does not offer the action.
+    background: Option<ext::ActionCtx>,
 }
 
 impl View<'_> {
@@ -424,6 +435,14 @@ fn apply_preview_act(
                 });
             }
         }
+        PreviewAct::Trash => {
+            if let Some(ctx) = app.action_ctx(pane, Invocation::ContextMenu) {
+                requests.push(Request::RunAction {
+                    action: ext::ActionId("core.trash"),
+                    ctx,
+                });
+            }
+        }
         PreviewAct::Download(address) => ctx.open_url(egui::OpenUrl::new_tab(address)),
         // The pane itself stores a table's widths.
         PreviewAct::Columns(_) => {}
@@ -591,6 +610,10 @@ fn apply_acts(
             (Act::Copy, Some(pane)) => {
                 requests.push(Request::Command(Command::PreviewCopy(pane)));
             }
+            (Act::DesktopBackground(ctx), _) => requests.push(Request::RunAction {
+                action: DESKTOP_BACKGROUND,
+                ctx,
+            }),
             (Act::Close, _) => close = true,
             (
                 Act::Page(_)
@@ -680,7 +703,19 @@ fn collect<'a>(ui: &egui::Ui, app: &'a App, previews: &mut Previews) -> View<'a>
         status: slot.map_or_default(|s| s.status().to_vec()),
         copy,
         transport: None,
+        background: None,
     };
+    // One action in two places: the toolbar asks the action itself, with
+    // what the context menu of the file would hand it.
+    view.background = pane
+        .filter(|_| entry.is_some() && shown.is_some())
+        .and_then(|pane| app.action_ctx(pane, Invocation::ContextMenu))
+        .filter(|ctx| {
+            app.registry().actions().iter().any(|action| {
+                action.id() == DESKTOP_BACKGROUND
+                    && action.availability(ctx) == ext::Availability::Enabled
+            })
+        });
     view.transport = pane
         .filter(|_| target.is_some())
         .and_then(|pane| previews.get_mut(pane).transport())
@@ -869,8 +904,21 @@ fn toolbar(
     }
     // Copy closes the middle group of every text-based preview: the whole
     // file's text, the raw source of a rendered one, never the file.
-    if view.copy && button(&mut left, state, icons::COPY, &t!("inspector-copy"), true) {
-        acts.push(Act::Copy);
+    if view.copy {
+        let label = t!("inspector-copy");
+        state.toolbar.push(ToolbarItem {
+            label: label.clone(),
+            on: None,
+        });
+        let colour = left.visuals().widgets.inactive.fg_stroke.color;
+        let copy = CopyButton::new(&label)
+            .glyph(15.0)
+            .hover(Hover::Bare)
+            .colour(colour)
+            .show(&mut left, vec2(24.0, 24.0));
+        if copy.clicked() {
+            acts.push(Act::Copy);
+        }
     }
     info
 }
@@ -979,6 +1027,19 @@ fn standard_controls(
         }
         if toggle(ui, state, icons::ACTUAL_SIZE, "1:1", view.actual_size) {
             acts.push(Act::ActualSize(true));
+        }
+        // After them, for an image the action applies to (SPEC.md
+        // *Toolbar*): absent wherever the context menu's entry is.
+        if let Some(ctx) = &view.background
+            && button(
+                ui,
+                state,
+                icons::MONITOR,
+                &t!("action-set-desktop-background"),
+                true,
+            )
+        {
+            acts.push(Act::DesktopBackground(ctx.clone()));
         }
     }
 }

@@ -3188,6 +3188,214 @@ fn without_the_execute_bit_a_file_opens_with_the_system_default() {
     assert!(h.fake.ran().is_empty(), "nothing is started");
 }
 
+/// An extension standing in for `ext-installer`: its one action goes by
+/// the id of *Run* on an AppImage, applies to a file named `*.AppImage`
+/// and records the files it was run on.
+struct AppImageRunner {
+    manifest: Manifest,
+    ran: Arc<Mutex<Vec<String>>>,
+}
+
+struct FakeAppImageRun(Arc<Mutex<Vec<String>>>);
+
+impl ext::Action for FakeAppImageRun {
+    fn id(&self) -> ActionId {
+        ActionId("installer.run")
+    }
+    fn label(&self) -> String {
+        "Run".to_owned()
+    }
+    fn group(&self) -> ext::ActionGroup {
+        ext::ActionGroup::Extension("Installer")
+    }
+    fn default_shortcut(&self) -> Option<ext::Shortcut> {
+        None
+    }
+    fn availability(&self, ctx: &ext::ActionCtx) -> Availability {
+        match ctx.selection.as_slice() {
+            [entry] if entry.name.ends_with(".AppImage") => Availability::Enabled,
+            _ => Availability::Hidden,
+        }
+    }
+    fn run(
+        &self,
+        ctx: ext::ActionCtx,
+        _: &ext::JobRunner,
+        _: &dyn UiHost,
+    ) -> Result<ext::ActionOutcome, Error> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(ctx.selection.iter().map(|entry| entry.name.clone()));
+        Ok(ext::ActionOutcome::Done)
+    }
+}
+
+impl Extension for AppImageRunner {
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+    fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.action(Arc::new(FakeAppImageRun(Arc::clone(&self.ran))));
+        Ok(())
+    }
+}
+
+/// Enter and a double-click on an AppImage do what *Run* in its context
+/// menu does, with the execute bit and without it (issue 223, decided
+/// 2026-11-15): the installer's action is run on the file, which sets the
+/// bit and makes its checks, and Rick neither starts the file itself nor
+/// hands it to the system. What the action does not take opens as before.
+#[test]
+fn enter_on_an_appimage_runs_the_installers_run() {
+    let ran = Arc::new(Mutex::new(Vec::new()));
+    let mut h = harness_with(vec![Arc::new(AppImageRunner {
+        manifest: Manifest {
+            id: ExtId("fake-installer"),
+            name: "Fake installer",
+            description: "",
+            version: Version::new(0, 1, 0),
+            api_version: API_VERSION,
+            requires: Capabilities::empty(),
+            points: Points::ACTION,
+            platforms: Platforms::ALL,
+            previews: &[],
+            commands: &[],
+        },
+        ran: Arc::clone(&ran),
+    })]);
+    let elf = b"\x7fELF\x02\x01\x01\0AI\x02\0\0\0\0\0";
+    for (name, mode) in [("Downloaded.AppImage", 0o644), ("Marked.AppImage", 0o755)] {
+        let path = h.root.path().join(name);
+        fs::write(&path, elf).unwrap_or_else(|e| panic!("{e}"));
+        platform::fs::set_unix_mode(&path, mode).unwrap_or_else(|e| panic!("{e}"));
+    }
+    h.settle();
+    let seen =
+        |ran: &Mutex<Vec<String>>| ran.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    let open = |h: &mut Harness, name: &str| {
+        let pane = h.app.model().focused;
+        let id = id_of(h, name);
+        h.send(Command::Open { pane, id });
+        h.settle();
+    };
+
+    open(&mut h, "Downloaded.AppImage");
+    assert_eq!(seen(&ran), ["Downloaded.AppImage"]);
+    open(&mut h, "Marked.AppImage");
+    assert_eq!(seen(&ran), ["Downloaded.AppImage", "Marked.AppImage"]);
+    assert!(h.fake.ran().is_empty(), "the action starts it, not Rick");
+    assert!(h.fake.opened().is_empty(), "not handed to the system");
+
+    // What the action does not take is opened as before.
+    open(&mut h, "a.txt");
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.fake.opened() == [h.root.path().join("a.txt")]
+    }));
+    assert_eq!(seen(&ran).len(), 2);
+}
+
+/// Issue 221, item 3 (SPEC.md *Icons view for a folder of media* and
+/// *View mode*), through real listings. A folder of eight photos, a video
+/// and a text file opens in Icons, and going back to its parent shows the
+/// parent in the view it had; a folder of seven photos and three text
+/// files stays as it was; Details chosen inside the media folder stays,
+/// a refresh included, until the tab leaves it. Choosing Large is written
+/// to the settings file, and an application started on that file opens
+/// Icons in Large, by the rule too.
+#[test]
+fn a_folder_of_media_opens_in_icons_in_the_size_chosen_last() {
+    use model::{IconSize, ViewMode};
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let photos = h.root.path().join("photos");
+    let mixed = h.root.path().join("mixed");
+    for dir in [&photos, &mixed] {
+        fs::create_dir(dir).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let put = |dir: &Path, name: &str| {
+        fs::write(dir.join(name), "x").unwrap_or_else(|e| panic!("{e}"));
+    };
+    for i in 0..8 {
+        put(&photos, &format!("photo-{i}.jpg"));
+    }
+    put(&photos, "clip.mp4");
+    put(&photos, "notes.txt");
+    for i in 0..7 {
+        put(&mixed, &format!("photo-{i}.jpg"));
+    }
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        put(&mixed, name);
+    }
+    let go = |h: &mut Harness, to: &Path| {
+        h.send(Command::Navigate {
+            pane,
+            to: local(to),
+        });
+        h.settle();
+    };
+    assert_eq!(h.tab(pane).view, ViewMode::Details);
+
+    // Nine media files in ten: Icons, and the parent as it was.
+    go(&mut h, &photos);
+    assert_eq!(h.tab(pane).view, ViewMode::Icons(IconSize::Medium));
+    h.send(Command::Back(pane));
+    h.settle();
+    assert_eq!(h.tab(pane).view, ViewMode::Details, "the parent's view");
+
+    // Seven in ten: as it was.
+    go(&mut h, &mixed);
+    assert_eq!(h.tab(pane).view, ViewMode::Details);
+
+    // Details by hand inside the media folder stays, a refresh included.
+    go(&mut h, &photos);
+    assert_eq!(h.tab(pane).view, ViewMode::Icons(IconSize::Medium));
+    h.send(Command::SetView {
+        pane,
+        mode: ViewMode::Details,
+    });
+    h.send(Command::Refresh(pane));
+    h.settle();
+    assert_eq!(h.tab(pane).view, ViewMode::Details, "nothing flips back");
+    assert_eq!(h.app.model().settings.icon_size, IconSize::Medium);
+
+    // A size chosen by hand is kept in the settings file.
+    h.send(Command::SetView {
+        pane,
+        mode: ViewMode::Icons(IconSize::Large),
+    });
+    assert_eq!(h.app.model().settings.icon_size, IconSize::Large);
+    let file = h.fake.config_dir().join(SETTINGS_FILE);
+    assert!(
+        wait_until(&mut h, Duration::from_secs(2), |_| {
+            fs::read_to_string(&file).is_ok_and(|t| t.contains("icon_size = \"large\""))
+        }),
+        "the size is in the settings file"
+    );
+    // Leaving puts back the view the tab had before the folder all the
+    // same: what was picked there belonged to the stay.
+    go(&mut h, &mixed);
+    assert_eq!(h.tab(pane).view, ViewMode::Details);
+
+    // Started again on the same configuration, in the media folder.
+    h.app = App::new(Config {
+        platform: h.fake.clone(),
+        ui: h.ui.clone(),
+        extensions: Vec::new(),
+        config_dir: Some(h.fake.config_dir()),
+        start: Some(local(&photos)),
+    });
+    h.settle();
+    let pane = h.app.model().focused;
+    assert_eq!(h.app.model().settings.icon_size, IconSize::Large);
+    assert_eq!(
+        h.tab(pane).view,
+        ViewMode::Icons(IconSize::Large),
+        "the rule opens Icons in the size chosen last"
+    );
+}
+
 /// Acceptance (issue 149, item 6): Open in editor opens the selected
 /// files in the system's default text editor, or with the command the
 /// setting names, split at spaces outside double quotes, the files
@@ -4053,5 +4261,481 @@ mod integration {
             Call::Perform(Item::LauncherEntry, request) if request.binary.is_none()
         )));
         assert_eq!(status(&h, Item::LauncherEntry), Some(ItemStatus::SetUp));
+    }
+}
+
+/// The time slider: reading off the UI thread and
+/// only while shown, merging sources, one history step per run, and the
+/// nearest parent where a point lacks the folder.
+mod timeline {
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicUsize;
+    use std::time::SystemTime;
+
+    use ext::{ColumnDef, DecorateCtx, Decoration, Decorator, PanelSection, TimePoint, Timeline};
+    use model::TimelineState;
+
+    use super::*;
+
+    /// A timeline source over the harness's folder: its points are
+    /// folders `.snaps/<label>` that mirror the tree, so the folder `rel`
+    /// at point `label` is `.snaps/<label>/<rel>`.
+    struct Source {
+        id: &'static str,
+        name: &'static str,
+        root: PathBuf,
+        /// Day and label of each point.
+        points: Vec<(u64, &'static str)>,
+        /// How long an answer takes.
+        delay: Duration,
+        /// How often `timeline` was asked.
+        calls: AtomicUsize,
+    }
+
+    impl Source {
+        fn new(
+            id: &'static str,
+            name: &'static str,
+            root: &Path,
+            points: &[(u64, &'static str)],
+        ) -> Arc<Self> {
+            Arc::new(Self {
+                id,
+                name,
+                root: root.to_path_buf(),
+                points: points.to_vec(),
+                delay: Duration::ZERO,
+                calls: AtomicUsize::new(0),
+            })
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+
+        /// The folder `loc` shows, relative to the root, wherever it is.
+        fn rel(&self, loc: &Location) -> Option<PathBuf> {
+            let path = platform::paths::to_path(&loc.path).ok()?;
+            let rel = path.strip_prefix(&self.root).ok()?.to_path_buf();
+            let mut parts = rel.components();
+            if parts.next().is_some_and(|c| c.as_os_str() == ".snaps") {
+                parts.next()?;
+                return Some(parts.as_path().to_path_buf());
+            }
+            Some(rel)
+        }
+    }
+
+    impl Decorator for Source {
+        fn id(&self) -> ExtId {
+            ExtId(self.id)
+        }
+        fn applies_to(&self, loc: &Location) -> bool {
+            self.rel(loc).is_some()
+        }
+        fn columns(&self) -> &[ColumnDef] {
+            &[]
+        }
+        fn decorate(&self, _: &[Entry], _: &DecorateCtx) -> Vec<(EntryId, Decoration)> {
+            Vec::new()
+        }
+        fn panel(&self, _: &Entry) -> Option<PanelSection> {
+            None
+        }
+        fn invalidates_on(&self, _: &Location) -> Vec<Location> {
+            Vec::new()
+        }
+        fn invalidate(&self, _: &Location) {}
+        fn offers_timelines(&self) -> bool {
+            true
+        }
+        fn timeline(&self, loc: &Location) -> Option<Timeline> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(self.delay);
+            let rel = self.rel(loc)?;
+            let points: Vec<TimePoint> = self
+                .points
+                .iter()
+                .map(|(day, label)| TimePoint {
+                    time: SystemTime::UNIX_EPOCH + Duration::from_secs(day * 86_400),
+                    label: (*label).into(),
+                    source: self.name.into(),
+                    location: local(&self.root.join(".snaps").join(label).join(&rel)),
+                })
+                .collect();
+            // The folder asked about, as the ZFS source answers:
+            // `join` of an empty path would end it with a separator.
+            let live = if rel.as_os_str().is_empty() {
+                local(&self.root)
+            } else {
+                local(&self.root.join(&rel))
+            };
+            (!points.is_empty()).then_some(Timeline { live, points })
+        }
+    }
+
+    struct SourceExtension {
+        manifest: Manifest,
+        sources: Vec<Arc<Source>>,
+    }
+
+    impl Extension for SourceExtension {
+        fn manifest(&self) -> &Manifest {
+            &self.manifest
+        }
+        fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+            for source in &self.sources {
+                reg.decorator(Arc::clone(source) as Arc<dyn Decorator>);
+            }
+            reg.action(Arc::new(TakeSnapshot));
+            Ok(())
+        }
+    }
+
+    /// An action as *Create snapshot* is: it changes the timeline in a
+    /// job and answers "later", for a question that may follow.
+    struct TakeSnapshot;
+
+    impl ext::Action for TakeSnapshot {
+        fn id(&self) -> ActionId {
+            ActionId("sources.snapshot")
+        }
+        fn label(&self) -> String {
+            "Take snapshot".to_owned()
+        }
+        fn group(&self) -> ext::ActionGroup {
+            ext::ActionGroup::Core
+        }
+        fn default_shortcut(&self) -> Option<ext::Shortcut> {
+            None
+        }
+        fn availability(&self, _: &ext::ActionCtx) -> Availability {
+            Availability::Enabled
+        }
+        fn run(
+            &self,
+            _: ext::ActionCtx,
+            jobs: &ext::JobRunner,
+            _: &dyn UiHost,
+        ) -> Result<ext::ActionOutcome, Error> {
+            let (sender, later) = ext::FormLater::channel();
+            jobs.spawn_named("Take snapshot", move |_job| async move {
+                drop(sender);
+                Ok(())
+            });
+            Ok(ext::ActionOutcome::Later(later))
+        }
+    }
+
+    /// A harness whose folder has the points `mon` and `thu` (ZFS) and
+    /// `tue` (Backup); `sub` is missing at `thu`.
+    fn with_sources(delay: Duration) -> (Harness, Arc<Source>, Arc<Source>) {
+        let mut h = harness();
+        let root = h.root.path().to_path_buf();
+        for label in ["mon", "tue", "thu"] {
+            fs::create_dir_all(root.join(".snaps").join(label)).unwrap_or_else(|e| panic!("{e}"));
+            fs::write(
+                root.join(".snaps").join(label).join(format!("{label}.txt")),
+                label,
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+        }
+        fs::create_dir(root.join(".snaps/mon/sub")).unwrap_or_else(|e| panic!("{e}"));
+        let mut zfs = Source::new("zfs", "ZFS", &root, &[(1, "mon"), (4, "thu")]);
+        if let Some(source) = Arc::get_mut(&mut zfs) {
+            source.delay = delay;
+        }
+        let backup = Source::new("backup", "Backup", &root, &[(2, "tue")]);
+        let extension: Arc<dyn Extension> = Arc::new(SourceExtension {
+            manifest: Manifest {
+                id: ExtId("sources"),
+                name: "Timeline sources",
+                description: "",
+                version: Version::new(0, 1, 0),
+                api_version: API_VERSION,
+                requires: Capabilities::empty(),
+                points: Points::DECORATOR.union(Points::ACTION),
+                platforms: Platforms::ALL,
+                previews: &[],
+                commands: &[],
+            },
+            sources: vec![Arc::clone(&zfs), Arc::clone(&backup)],
+        });
+        drop(h.app);
+        h.app = App::new(Config {
+            platform: h.fake.clone(),
+            ui: h.ui.clone(),
+            extensions: vec![extension],
+            config_dir: Some(h.fake.config_dir()),
+            start: Some(local(&root)),
+        });
+        h.settle();
+        (h, zfs, backup)
+    }
+
+    fn labels(h: &Harness, pane: model::PaneId) -> Vec<(String, String)> {
+        h.app
+            .model()
+            .timeline_points(pane)
+            .map(|(t, _)| {
+                t.points
+                    .iter()
+                    .map(|p| (p.label.clone(), p.source.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_hidden_bar_asks_no_source() {
+        let (mut h, zfs, backup) = with_sources(Duration::ZERO);
+        let pane = h.app.model().focused;
+        let sub = h.root.path().join("sub");
+        h.send(Command::Navigate {
+            pane,
+            to: local(&sub),
+        });
+        h.settle();
+        h.send(Command::Back(pane));
+        h.settle();
+        assert_eq!(zfs.calls() + backup.calls(), 0);
+        assert_eq!(
+            *h.app.model().timeline(pane),
+            TimelineState::Unread,
+            "a source applies"
+        );
+        assert!(!h.app.model().timeline_visible(pane));
+    }
+
+    #[test]
+    fn two_sources_merge_and_each_location_is_read_once() {
+        let (mut h, zfs, backup) = with_sources(Duration::ZERO);
+        let pane = h.app.model().focused;
+        h.take_events();
+        h.send(Command::ToggleTimeline(pane));
+        h.settle();
+        assert!(
+            h.take_events()
+                .iter()
+                .any(|e| matches!(e, Event::Timeline { .. }))
+        );
+        assert_eq!(
+            labels(&h, pane),
+            [
+                ("mon".into(), "ZFS".into()),
+                ("tue".into(), "Backup".into()),
+                ("thu".into(), "ZFS".into())
+            ]
+        );
+        assert!(h.app.model().timeline_visible(pane));
+        assert_eq!((zfs.calls(), backup.calls()), (1, 1));
+
+        let sub = h.root.path().join("sub");
+        h.send(Command::Navigate {
+            pane,
+            to: local(&sub),
+        });
+        h.settle();
+        h.send(Command::Back(pane));
+        h.settle();
+        assert_eq!(
+            (zfs.calls(), backup.calls()),
+            (2, 2),
+            "the folder again is cached"
+        );
+        assert_eq!(labels(&h, pane).len(), 3);
+    }
+
+    #[test]
+    fn a_slow_source_leaves_the_pane_listing() {
+        let (mut h, zfs, _) = with_sources(Duration::from_millis(1500));
+        let pane = h.app.model().focused;
+        h.send(Command::ToggleTimeline(pane));
+        assert_eq!(*h.app.model().timeline(pane), TimelineState::Reading);
+        assert!(h.app.model().timeline_visible(pane), "the reading state");
+        let sub = h.root.path().join("sub");
+        let started = Instant::now();
+        h.send(Command::Navigate {
+            pane,
+            to: local(&sub),
+        });
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "handle did not wait"
+        );
+        h.settle();
+        assert_eq!(h.names(), [] as [String; 0], "sub is listed (and empty)");
+        assert_eq!(labels(&h, pane).len(), 3);
+        assert!(zfs.calls() >= 1);
+    }
+
+    #[test]
+    fn switching_off_keeps_no_bar_at_now() {
+        let (mut h, _, _) = with_sources(Duration::ZERO);
+        let pane = h.app.model().focused;
+        h.send(Command::ToggleTimeline(pane));
+        h.settle();
+        h.send(Command::ToggleTimeline(pane));
+        h.settle();
+        assert!(!h.app.model().timeline_visible(pane));
+        assert!(!h.app.model().timeline_shown(pane));
+    }
+
+    #[test]
+    fn scrubbing_is_one_history_step_and_asks_nobody() {
+        let (mut h, zfs, backup) = with_sources(Duration::ZERO);
+        let pane = h.app.model().focused;
+        let live = local(h.root.path());
+        h.send(Command::ToggleTimeline(pane));
+        h.settle();
+        let asked = zfs.calls() + backup.calls();
+        let points: Vec<Location> = h
+            .app
+            .model()
+            .timeline_points(pane)
+            .map(|(t, _)| t.points.iter().map(|p| p.location.clone()).collect())
+            .unwrap_or_default();
+        for (i, point) in points.iter().enumerate() {
+            h.send(Command::TimeTravel {
+                pane,
+                to: point.clone(),
+                first: i == 0,
+            });
+            h.settle();
+        }
+        assert_eq!(h.names(), ["thu.txt"]);
+        assert!(h.app.model().in_the_past(pane));
+        assert_eq!(
+            h.app.model().timeline_points(pane).map(|(_, at)| at),
+            Some(Some(2))
+        );
+        assert_eq!(
+            zfs.calls() + backup.calls(),
+            asked,
+            "moving along asks nobody"
+        );
+
+        h.send(Command::Back(pane));
+        h.settle();
+        assert_eq!(h.tab(pane).location, live);
+        assert!(
+            h.tab(pane).history.back.is_empty(),
+            "one step for the whole run"
+        );
+        assert!(!h.app.model().in_the_past(pane));
+    }
+
+    #[test]
+    fn a_point_without_the_folder_shows_its_parent() {
+        let (mut h, _, _) = with_sources(Duration::ZERO);
+        let pane = h.app.model().focused;
+        let sub = h.root.path().join("sub");
+        h.send(Command::Navigate {
+            pane,
+            to: local(&sub),
+        });
+        h.send(Command::ToggleTimeline(pane));
+        h.settle();
+        let thu = local(&h.root.path().join(".snaps/thu/sub"));
+        h.take_events();
+        h.send(Command::TimeTravel {
+            pane,
+            to: thu,
+            first: true,
+        });
+        h.settle();
+        assert_eq!(
+            h.tab(pane).location,
+            local(&h.root.path().join(".snaps/thu"))
+        );
+        assert_eq!(h.names(), ["thu.txt"]);
+        let notices = h
+            .take_events()
+            .into_iter()
+            .filter(|e| matches!(e, Event::Notify { .. }))
+            .count();
+        assert_eq!(notices, 1, "said once");
+        h.send(Command::Back(pane));
+        h.settle();
+        assert_eq!(h.tab(pane).location, local(&sub));
+    }
+
+    #[test]
+    fn an_empty_answer_shows_no_bar() {
+        let mut h = harness();
+        let root = h.root.path().to_path_buf();
+        let none = Source::new("none", "None", &root, &[]);
+        let extension: Arc<dyn Extension> = Arc::new(SourceExtension {
+            manifest: Manifest {
+                id: ExtId("sources"),
+                name: "Timeline sources",
+                description: "",
+                version: Version::new(0, 1, 0),
+                api_version: API_VERSION,
+                requires: Capabilities::empty(),
+                points: Points::DECORATOR.union(Points::ACTION),
+                platforms: Platforms::ALL,
+                previews: &[],
+                commands: &[],
+            },
+            sources: vec![Arc::clone(&none)],
+        });
+        drop(h.app);
+        h.app = App::new(Config {
+            platform: h.fake.clone(),
+            ui: h.ui.clone(),
+            extensions: vec![extension],
+            config_dir: Some(h.fake.config_dir()),
+            start: Some(local(&root)),
+        });
+        h.settle();
+        let pane = h.app.model().focused;
+        h.send(Command::ToggleTimeline(pane));
+        h.settle();
+        assert_eq!(*h.app.model().timeline(pane), TimelineState::Empty);
+        assert!(!h.app.model().timeline_visible(pane), "never an empty bar");
+    }
+
+    /// A refresh reads the timeline anew, so a snapshot taken meanwhile
+    /// shows on the bar at once, not only after the 30 seconds.
+    #[test]
+    fn a_refresh_reads_the_timeline_again() {
+        let (mut h, zfs, backup) = with_sources(Duration::ZERO);
+        let pane = h.app.model().focused;
+        h.send(Command::ToggleTimeline(pane));
+        h.settle();
+        assert_eq!((zfs.calls(), backup.calls()), (1, 1));
+        h.send(Command::Refresh(pane));
+        h.settle();
+        assert_eq!((zfs.calls(), backup.calls()), (2, 2));
+        assert_eq!(labels(&h, pane).len(), 3, "the bar keeps its points");
+    }
+
+    /// A snapshot the user takes in Rick shows on the bar when its job
+    /// ends, without a refresh: the action's job is the pane's.
+    #[test]
+    fn an_actions_job_reads_the_timeline_again_when_it_ends() {
+        let (mut h, zfs, _) = with_sources(Duration::ZERO);
+        let pane = h.app.model().focused;
+        h.send(Command::ToggleTimeline(pane));
+        h.settle();
+        assert_eq!(zfs.calls(), 1);
+        h.run(pane, "sources.snapshot");
+        assert!(
+            wait_until(&mut h, Duration::from_secs(5), |_| zfs.calls() == 2),
+            "asked {} times",
+            zfs.calls()
+        );
+    }
+
+    #[test]
+    fn no_source_no_timeline() {
+        let mut h = harness();
+        h.settle();
+        let pane = h.app.model().focused;
+        h.send(Command::ToggleTimeline(pane));
+        h.settle();
+        assert_eq!(*h.app.model().timeline(pane), TimelineState::None);
+        assert!(!h.app.model().timeline_visible(pane));
     }
 }

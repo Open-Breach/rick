@@ -297,7 +297,9 @@ fn listen(changed: MountsChanged) -> Option<(MountWatch, std::thread::JoinHandle
     Some((MountWatch::new(keep), thread))
 }
 
-fn run(program: &str, args: &[&std::ffi::OsStr]) -> Result<(), Error> {
+/// Runs `program` to its end; what it wrote to its standard error is the
+/// error when it fails.
+pub(super) fn run(program: &str, args: &[&std::ffi::OsStr]) -> Result<(), Error> {
     let output = Command::new(program)
         .args(args)
         .stdin(Stdio::null())

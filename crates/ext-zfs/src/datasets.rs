@@ -1,0 +1,609 @@
+//! Which dataset a local path lies in, and the snapshots of each dataset.
+//!
+//! The mounted file systems come from one `zfs list` call, made the first
+//! time anyone asks; a live path maps to the dataset with the longest mount
+//! point that is a prefix of it on whole path components. The snapshot
+//! lists are read per dataset and kept for [`TTL`]; a management job drops
+//! its dataset's list when it finishes. Which snapshot is the newest to hold
+//! a folder is found in a job ([`Datasets::newest_holding`]) and kept, so a
+//! menu can ask without reading; once the dataset's list is read again and
+//! has changed, the answer stays, marked as found against the older list,
+//! until the folder's next read replaces it. A list that reads the same
+//! leaves the answers as they are, and a folder below one that no snapshot
+//! holds is in none either, so most folders are answered without a look
+//! into any snapshot. Without `zfs`, or when the list
+//! fails, there are no datasets: that is logged once, at `debug`.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
+
+use types::Error;
+
+use crate::parse::{self, FileSystem, Snapshot};
+use crate::props::{self, Property};
+use crate::zfs::{Zfs, classify, to_error};
+
+/// How long a snapshot list is trusted before it is read again.
+pub const TTL: Duration = Duration::from_secs(30);
+
+/// A snapshot list and when it was read.
+#[derive(Debug, Clone)]
+struct Read {
+    at: Instant,
+    /// Oldest first, as `zfs list -s creation` prints them.
+    snapshots: Arc<Vec<Snapshot>>,
+}
+
+/// A property read and when it was made.
+type ReadProperties = (Instant, Arc<Vec<Property>>);
+
+/// A dataset and a folder below its mount point.
+type Folder = (String, PathBuf);
+
+/// What was found for a folder.
+#[derive(Debug, Clone)]
+struct Held {
+    /// The newest snapshot holding it, or `None` when none does.
+    found: Option<String>,
+    /// The dataset's list changed, or was dropped, since.
+    outdated: bool,
+}
+
+/// The datasets of this machine and their snapshots, as far as `zfs`
+/// tells.
+#[derive(Debug)]
+pub struct Datasets {
+    zfs: Arc<dyn Zfs>,
+    ttl: Duration,
+    filesystems: OnceLock<Vec<FileSystem>>,
+    snapshots: Mutex<HashMap<String, Read>>,
+    properties: Mutex<HashMap<String, ReadProperties>>,
+    /// What was last found for each folder shown.
+    holding: Mutex<HashMap<Folder, Held>>,
+    /// Held while a snapshot list is read, so that readers of one stale
+    /// list take turns and all but the first find it read.
+    reading: Mutex<()>,
+    told: AtomicBool,
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl Datasets {
+    /// The datasets `zfs` reports, read when first needed.
+    #[must_use]
+    pub fn new(zfs: Arc<dyn Zfs>) -> Self {
+        Self::with_ttl(zfs, TTL)
+    }
+
+    /// The same with another time a snapshot list is trusted, for tests.
+    #[must_use]
+    pub fn with_ttl(zfs: Arc<dyn Zfs>, ttl: Duration) -> Self {
+        Self {
+            zfs,
+            ttl,
+            filesystems: OnceLock::new(),
+            snapshots: Mutex::default(),
+            properties: Mutex::default(),
+            holding: Mutex::default(),
+            reading: Mutex::default(),
+            told: AtomicBool::new(false),
+        }
+    }
+
+    /// The runner every call goes through.
+    #[must_use]
+    pub fn zfs(&self) -> &Arc<dyn Zfs> {
+        &self.zfs
+    }
+
+    /// Logs, once per process, why there are no datasets.
+    fn tell_once(&self, why: &dyn std::fmt::Display) {
+        if !self.told.swap(true, Ordering::Relaxed) {
+            tracing::debug!(%why, "no ZFS datasets: the ZFS extension stays out of sight");
+        }
+    }
+
+    /// Runs `zfs args…` and classifies the result.
+    fn run(&self, args: &[String]) -> Result<String, Error> {
+        let output = self.zfs.run(args)?;
+        classify(output).map_err(to_error)
+    }
+
+    /// The mounted file systems, read on the first call.
+    #[must_use]
+    pub fn filesystems(&self) -> &[FileSystem] {
+        self.filesystems
+            .get_or_init(|| match self.run(&parse::list_filesystems_args()) {
+                Ok(out) => {
+                    let read = parse::filesystems(&out);
+                    if read.is_empty() {
+                        self.tell_once(&"zfs lists no mounted file system");
+                    }
+                    read
+                }
+                Err(error) => {
+                    self.tell_once(&error);
+                    Vec::new()
+                }
+            })
+    }
+
+    /// The file system `path` lies in: the one with the longest mount
+    /// point that is a prefix of `path` on whole components.
+    #[must_use]
+    pub fn dataset_of(&self, path: &Path) -> Option<&FileSystem> {
+        if !path.is_absolute() {
+            return None;
+        }
+        self.filesystems()
+            .iter()
+            .filter(|fs| path.starts_with(&fs.mountpoint))
+            .max_by_key(|fs| fs.mountpoint.components().count())
+    }
+
+    /// The mounted file system named `name`.
+    #[must_use]
+    pub fn named(&self, name: &str) -> Option<&FileSystem> {
+        self.filesystems().iter().find(|fs| fs.name == name)
+    }
+
+    /// The path of `path` relative to its dataset's mount point, with the
+    /// dataset.
+    #[must_use]
+    pub fn split(&self, path: &Path) -> Option<(&FileSystem, PathBuf)> {
+        let fs = self.dataset_of(path)?;
+        let rel = path.strip_prefix(&fs.mountpoint).ok()?.to_path_buf();
+        Some((fs, rel))
+    }
+
+    /// The snapshots of `dataset`, newest first, from the cache when it is
+    /// younger than the TTL, read again otherwise.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` without `zfs`; ZFS's error when the list fails.
+    pub fn snapshots(&self, dataset: &str) -> Result<Vec<Snapshot>, Error> {
+        if let Some(fresh) = self.fresh(dataset) {
+            return Ok(newest_first(&fresh));
+        }
+        // One reader at a time: whoever waited finds the list read.
+        let _reading = lock(&self.reading);
+        if let Some(fresh) = self.fresh(dataset) {
+            return Ok(newest_first(&fresh));
+        }
+        let out = self.run(&parse::list_snapshots_args(dataset))?;
+        let read: Vec<Snapshot> = parse::snapshots(&out)
+            .into_iter()
+            .filter(|s| s.dataset == dataset)
+            .collect();
+        let read = Arc::new(read);
+        let before = lock(&self.snapshots).insert(
+            dataset.to_owned(),
+            Read {
+                at: Instant::now(),
+                snapshots: Arc::clone(&read),
+            },
+        );
+        // The same snapshots hold the same folders: what was found stays
+        // current unless the list changed.
+        if !before.is_some_and(|before| same_snapshots(&before.snapshots, &read)) {
+            self.outdate(dataset);
+        }
+        Ok(newest_first(&read))
+    }
+
+    /// The cached snapshot list of `dataset`, newest first, when it is
+    /// younger than the TTL; nothing is read.
+    #[must_use]
+    pub fn cached(&self, dataset: &str) -> Option<Vec<Snapshot>> {
+        self.fresh(dataset).map(|read| newest_first(&read))
+    }
+
+    fn fresh(&self, dataset: &str) -> Option<Arc<Vec<Snapshot>>> {
+        lock(&self.snapshots)
+            .get(dataset)
+            .filter(|read| read.at.elapsed() < self.ttl)
+            .map(|read| Arc::clone(&read.snapshots))
+    }
+
+    /// Forgets the snapshot list and the properties of `dataset`: the next
+    /// request reads them.
+    pub fn invalidate(&self, dataset: &str) {
+        lock(&self.snapshots).remove(dataset);
+        lock(&self.properties).remove(dataset);
+        self.outdate(dataset);
+    }
+
+    /// Marks what was found for the folders of `dataset` as found against
+    /// an older list. The answers stay, so that a menu is never left
+    /// without one while nothing reads; a folder's next read replaces its
+    /// own.
+    fn outdate(&self, dataset: &str) {
+        for ((of, _), held) in lock(&self.holding).iter_mut() {
+            if of == dataset {
+                held.outdated = true;
+            }
+        }
+    }
+
+    /// The newest snapshot of `fs` that holds the folder `rel` (relative to
+    /// the mount point), or `None` when none does; remembered for
+    /// [`Datasets::cached_holding`]. It may read the snapshot list and looks
+    /// into the snapshots one by one, which mounts each on a real pool, so
+    /// it belongs in a job.
+    ///
+    /// It looks no further than it must. What was found for `rel` against
+    /// the list as it is, is the answer. Otherwise a folder is in a
+    /// snapshot only if the folder above it is: the search starts at the
+    /// newest snapshot holding the nearest folder above that is known, and
+    /// is over at once when no snapshot holds that one.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` without `zfs`; ZFS's error when the list fails.
+    pub fn newest_holding(&self, fs: &FileSystem, rel: &Path) -> Result<Option<String>, Error> {
+        let snapshots = self.snapshots(&fs.name)?;
+        let above = {
+            let holding = lock(&self.holding);
+            let current = |folder: &Path| {
+                holding
+                    .get(&(fs.name.clone(), folder.to_path_buf()))
+                    .filter(|held| !held.outdated)
+                    .map(|held| held.found.clone())
+            };
+            if let Some(found) = current(rel) {
+                return Ok(found);
+            }
+            rel.ancestors().skip(1).find_map(current)
+        };
+        let found = match above {
+            Some(None) => None,
+            from => {
+                let start = from
+                    .flatten()
+                    .and_then(|from| snapshots.iter().position(|s| s.name == from))
+                    .unwrap_or(0);
+                snapshots
+                    .into_iter()
+                    .skip(start)
+                    .find(|s| Self::snapshot_dir(fs, &s.name).join(rel).is_dir())
+                    .map(|s| s.name)
+            }
+        };
+        lock(&self.holding).insert(
+            (fs.name.clone(), rel.to_path_buf()),
+            Held {
+                found: found.clone(),
+                outdated: false,
+            },
+        );
+        Ok(found)
+    }
+
+    /// What [`Datasets::newest_holding`] last found for `rel` in `dataset`:
+    /// `None` when it was never asked; nothing is read. The answer stays
+    /// when the dataset's list is read again, see
+    /// [`Datasets::holding_is_current`].
+    #[must_use]
+    pub fn cached_holding(&self, dataset: &str, rel: &Path) -> Option<Option<String>> {
+        lock(&self.holding)
+            .get(&(dataset.to_owned(), rel.to_path_buf()))
+            .map(|held| held.found.clone())
+    }
+
+    /// Whether what [`Datasets::cached_holding`] answers for `rel` was
+    /// found against the dataset's list as it is: `false` when it was
+    /// never asked, or when the list changed or was dropped since, and
+    /// then the folder's next read looks once more.
+    #[must_use]
+    pub fn holding_is_current(&self, dataset: &str, rel: &Path) -> bool {
+        lock(&self.holding)
+            .get(&(dataset.to_owned(), rel.to_path_buf()))
+            .is_some_and(|held| !held.outdated)
+    }
+
+    /// The properties of `dataset` the info section shows, from the cache
+    /// when it is younger than the TTL, read again otherwise.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` without `zfs`; ZFS's error when the read fails.
+    pub fn properties(&self, dataset: &str) -> Result<Arc<Vec<Property>>, Error> {
+        if let Some(fresh) = self.cached_properties(dataset) {
+            return Ok(fresh);
+        }
+        let read = Arc::new(props::read(&*self.zfs, dataset)?);
+        lock(&self.properties).insert(dataset.to_owned(), (Instant::now(), Arc::clone(&read)));
+        Ok(read)
+    }
+
+    /// The cached properties of `dataset`, when younger than the TTL.
+    #[must_use]
+    pub fn cached_properties(&self, dataset: &str) -> Option<Arc<Vec<Property>>> {
+        lock(&self.properties)
+            .get(dataset)
+            .filter(|(at, _)| at.elapsed() < self.ttl)
+            .map(|(_, read)| Arc::clone(read))
+    }
+
+    /// The mounted datasets that have snapshots, with them, newest first,
+    /// sorted by dataset name. A dataset whose list fails is left out.
+    #[must_use]
+    pub fn with_snapshots(&self) -> Vec<(FileSystem, Vec<Snapshot>)> {
+        let mut out: Vec<(FileSystem, Vec<Snapshot>)> = self
+            .filesystems()
+            .iter()
+            .filter_map(|fs| match self.snapshots(&fs.name) {
+                Ok(list) if !list.is_empty() => Some((fs.clone(), list)),
+                Ok(_) => None,
+                Err(error) => {
+                    tracing::debug!(dataset = %fs.name, %error, "snapshots not listed");
+                    None
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.name.cmp(&b.0.name));
+        out
+    }
+
+    /// Where the snapshot `snapshot` of `fs` shows its files.
+    #[must_use]
+    pub fn snapshot_dir(fs: &FileSystem, snapshot: &str) -> PathBuf {
+        fs.mountpoint.join(".zfs").join("snapshot").join(snapshot)
+    }
+}
+
+fn newest_first(list: &[Snapshot]) -> Vec<Snapshot> {
+    list.iter().rev().cloned().collect()
+}
+
+/// Whether two reads of a dataset's list name the same snapshots: by name
+/// and creation time, as the space a snapshot holds changes while it stays
+/// the same snapshot.
+fn same_snapshots(a: &[Snapshot], b: &[Snapshot]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|(a, b)| a.name == b.name && a.created == b.created)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::zfs::{Output, ScriptedZfs};
+
+    const LIST: &str = "tank\t/tank\tyes\ntank/home\t/tank/home\tyes\ntank/homework\t/tank/homework\tyes\ntank/off\tnone\tno\n";
+
+    fn scripted() -> Arc<ScriptedZfs> {
+        let zfs = Arc::new(ScriptedZfs::new());
+        zfs.on(
+            &[
+                "list",
+                "-H",
+                "-p",
+                "-o",
+                "name,mountpoint,mounted",
+                "-t",
+                "filesystem",
+            ],
+            Output::ok(LIST),
+        );
+        zfs
+    }
+
+    fn snapshot_args(dataset: &str) -> Vec<String> {
+        parse::list_snapshots_args(dataset)
+    }
+
+    fn on_snapshots(zfs: &ScriptedZfs, dataset: &str, out: &str) {
+        let args = snapshot_args(dataset);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        zfs.on(&args, Output::ok(out));
+    }
+
+    #[test]
+    fn nested_datasets_pick_the_longest_mount_point() {
+        if !crate::supported() {
+            return;
+        }
+        let zfs = scripted();
+        let sets = Datasets::new(zfs.clone());
+        let name = |p: &str| sets.dataset_of(Path::new(p)).map(|fs| fs.name.clone());
+        assert_eq!(name("/tank/home/ann/docs"), Some("tank/home".to_owned()));
+        assert_eq!(name("/tank/home"), Some("tank/home".to_owned()));
+        // A component prefix, not a string prefix.
+        assert_eq!(name("/tank/homework/x"), Some("tank/homework".to_owned()));
+        assert_eq!(name("/tank/homes"), Some("tank".to_owned()));
+        assert_eq!(name("/tank"), Some("tank".to_owned()));
+        let (fs, rel) = sets
+            .split(Path::new("/tank/home/ann/docs"))
+            .unwrap_or_else(|| panic!("no split"));
+        assert_eq!(fs.name, "tank/home");
+        assert_eq!(rel, PathBuf::from("ann/docs"));
+        // One file-system list serves every question.
+        assert_eq!(zfs.calls().len(), 1);
+    }
+
+    #[test]
+    fn a_path_outside_every_dataset_has_none() {
+        if !crate::supported() {
+            return;
+        }
+        let sets = Datasets::new(scripted());
+        assert!(sets.dataset_of(Path::new("/home/ann")).is_none());
+        assert!(sets.dataset_of(Path::new("relative/tank")).is_none());
+        assert!(sets.named("tank/off").is_none());
+        assert!(sets.named("tank/home").is_some());
+    }
+
+    #[test]
+    fn snapshot_lists_are_cached_newest_first_until_the_ttl() {
+        let zfs = scripted();
+        on_snapshots(
+            &zfs,
+            "tank/home",
+            "tank/home@a\t100\t1\ntank/home@b\t200\t2\n",
+        );
+        let sets = Datasets::new(zfs.clone());
+        assert!(sets.cached("tank/home").is_none());
+        let names = |list: Vec<Snapshot>| list.into_iter().map(|s| s.name).collect::<Vec<_>>();
+        assert_eq!(
+            names(sets.snapshots("tank/home").unwrap_or_default()),
+            ["b", "a"]
+        );
+        assert_eq!(
+            names(sets.snapshots("tank/home").unwrap_or_default()),
+            ["b", "a"]
+        );
+        assert_eq!(
+            names(sets.cached("tank/home").unwrap_or_default()),
+            ["b", "a"]
+        );
+        assert_eq!(zfs.calls().len(), 1, "read once: {:?}", zfs.calls());
+
+        let expired = Datasets::with_ttl(zfs.clone(), Duration::ZERO);
+        let _ = expired.snapshots("tank/home");
+        let _ = expired.snapshots("tank/home");
+        assert!(expired.cached("tank/home").is_none());
+        assert_eq!(zfs.calls().len(), 3);
+    }
+
+    #[test]
+    fn invalidation_drops_one_list() {
+        let zfs = scripted();
+        on_snapshots(&zfs, "tank/home", "tank/home@a\t100\t1\n");
+        let sets = Datasets::new(zfs.clone());
+        let _ = sets.snapshots("tank/home");
+        on_snapshots(
+            &zfs,
+            "tank/home",
+            "tank/home@a\t100\t1\ntank/home@c\t300\t3\n",
+        );
+        assert_eq!(sets.snapshots("tank/home").unwrap_or_default().len(), 1);
+        sets.invalidate("tank/home");
+        assert_eq!(sets.snapshots("tank/home").unwrap_or_default().len(), 2);
+    }
+
+    /// The same snapshots hold the same folders, so a list that reads the
+    /// same leaves what was found as it is; one that changed marks it as
+    /// found against the older list, and keeps it.
+    #[test]
+    fn a_list_that_reads_the_same_keeps_what_was_found_current() {
+        if !crate::supported() {
+            return;
+        }
+        let zfs = scripted();
+        on_snapshots(&zfs, "tank/home", "tank/home@a\t100\t1\n");
+        let sets = Datasets::with_ttl(zfs.clone(), Duration::ZERO);
+        let fs = sets
+            .named("tank/home")
+            .cloned()
+            .unwrap_or_else(|| panic!("no tank/home"));
+        let docs = Path::new("docs");
+        assert_eq!(sets.newest_holding(&fs, docs).ok(), Some(None));
+        assert!(sets.holding_is_current("tank/home", docs));
+
+        // Read again, with more space held by the same snapshot.
+        on_snapshots(&zfs, "tank/home", "tank/home@a\t100\t2\n");
+        assert_eq!(sets.snapshots("tank/home").map(|l| l.len()).ok(), Some(1));
+        assert!(sets.holding_is_current("tank/home", docs), "looked up anew");
+
+        on_snapshots(
+            &zfs,
+            "tank/home",
+            "tank/home@a\t100\t2\ntank/home@b\t200\t1\n",
+        );
+        assert_eq!(sets.snapshots("tank/home").map(|l| l.len()).ok(), Some(2));
+        assert!(!sets.holding_is_current("tank/home", docs));
+        assert_eq!(sets.cached_holding("tank/home", docs), Some(None));
+    }
+
+    /// Two folders of one dataset shown at once each start a read; the
+    /// second waits for the first and finds the list read.
+    #[test]
+    fn readers_of_one_stale_list_read_it_once() {
+        let zfs = scripted();
+        on_snapshots(&zfs, "tank/home", "tank/home@a\t100\t1\n");
+        let sets = Arc::new(Datasets::new(zfs.clone()));
+        let start = Arc::new(std::sync::Barrier::new(8));
+        let readers: Vec<_> = (0..8)
+            .map(|_| {
+                let (sets, start) = (Arc::clone(&sets), Arc::clone(&start));
+                std::thread::spawn(move || {
+                    start.wait();
+                    sets.snapshots("tank/home").map(|list| list.len()).ok()
+                })
+            })
+            .collect();
+        for reader in readers {
+            assert_eq!(reader.join().ok().flatten(), Some(1));
+        }
+        assert_eq!(zfs.calls(), [snapshot_args("tank/home")]);
+    }
+
+    #[test]
+    fn only_datasets_with_snapshots_are_offered() {
+        if !crate::supported() {
+            return;
+        }
+        let zfs = scripted();
+        on_snapshots(&zfs, "tank", "");
+        on_snapshots(&zfs, "tank/home", "tank/home@a\t100\t1\n");
+        // tank/homework is not scripted: its list fails and it is left out.
+        let sets = Datasets::new(zfs);
+        let offered: Vec<String> = sets
+            .with_snapshots()
+            .into_iter()
+            .map(|(fs, _)| fs.name)
+            .collect();
+        assert_eq!(offered, ["tank/home"]);
+    }
+
+    #[test]
+    fn without_zfs_there_are_no_datasets() {
+        let sets = Datasets::new(Arc::new(ScriptedZfs::missing()));
+        assert_eq!(sets.filesystems(), []);
+        assert!(sets.dataset_of(Path::new("/tank/home")).is_none());
+        assert_eq!(sets.with_snapshots(), []);
+        assert!(sets.told.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn a_failed_list_means_no_datasets() {
+        let zfs = Arc::new(ScriptedZfs::new());
+        zfs.on(
+            &[
+                "list",
+                "-H",
+                "-p",
+                "-o",
+                "name,mountpoint,mounted",
+                "-t",
+                "filesystem",
+            ],
+            Output::failed(1, "The ZFS modules cannot be auto-loaded.\n"),
+        );
+        let sets = Datasets::new(zfs.clone());
+        assert!(sets.dataset_of(Path::new("/tank")).is_none());
+        assert_eq!(sets.filesystems(), []);
+        assert_eq!(zfs.calls().len(), 1, "the failure is remembered");
+        assert!(sets.told.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn the_snapshot_directory_is_under_the_mount_point() {
+        let fs = FileSystem {
+            name: "tank/home".to_owned(),
+            mountpoint: PathBuf::from("/tank/home"),
+        };
+        assert_eq!(
+            Datasets::snapshot_dir(&fs, "b"),
+            PathBuf::from("/tank/home/.zfs/snapshot/b")
+        );
+    }
+}

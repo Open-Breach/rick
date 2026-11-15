@@ -1,17 +1,30 @@
-//! The tarball installer: *Install as application…* on a tar or zip
-//! archive, a versioned layout under `~/.local/opt/<app-id>/` with a
-//! `current` symlink, desktop entry, icon and commands on the PATH, update
-//! with one previous version kept, revert, uninstall, repair, and the
-//! Installed Apps view `rick://apps` (specs/ext-installer.md).
+//! The installer of tarballs and AppImages: *Install as application…* on
+//! a tar or zip archive, a versioned layout under `~/.local/opt/<app-id>/`
+//! with a `current` symlink, desktop entry, icon and commands on the PATH,
+//! update with one previous version kept, revert, uninstall, repair, and
+//! the Installed Apps view `rick://apps` (specs/ext-installer.md).
 //!
-//! `rick install <archive>` is the installer's subcommand of the command
+//! `rick install <file>` is the installer's subcommand of the command
 //! line (specs/system-integration.md §4): it opens the same install form
-//! in the running Rick. `rick install-rick <folder> <version>` installs
-//! the Rick unpacked in a folder to the standard location, copied from
-//! the folder as it is ([`archive::Format::Folder`]) with no form and
-//! nothing written outside the app folder: what the integration dialog's
-//! *Install to the standard location* runs (specs/system-integration.md
-//! §6.1).
+//! in the running Rick, on an archive or an AppImage. `rick install-rick
+//! <folder> <version>` installs the Rick unpacked in a folder to the
+//! standard location, copied from the folder as it is
+//! ([`archive::Format::Folder`]) with no form and nothing written outside
+//! the app folder: what the integration dialog's *Install to the standard
+//! location* runs (specs/system-integration.md §6.1).
+//!
+//! An AppImage has *Run* in its menu, which starts it as it is: the file's
+//! machine type is checked, the execute bit is set for the owner, and the
+//! file is started detached in its folder ([`appimage`]). Enter and a
+//! double-click on an AppImage run the same action. *Install as
+//! application…* takes an AppImage too, on the same model: the version
+//! folder holds the one file as `<app-id>.AppImage`, so the path through
+//! `current` never changes, and the name, the icon, the desktop entry and
+//! the version are read out of the file's SquashFS image without running
+//! it. An AppImage on the older runtime needs `libfuse.so.2`: whether it
+//! does is read from its runtime, and where the machine lacks the library
+//! *Run* stops with a warning that names the package to install, and an
+//! install carries the same warning in its summary.
 //!
 //! Linux only in this version: the plugin loads everywhere, its actions
 //! are hidden, its command refuses and its view answers "unsupported on
@@ -27,6 +40,7 @@
 #![deny(unsafe_code)]
 
 pub mod actions;
+pub mod appimage;
 pub mod archive;
 pub mod desktop;
 pub mod detect;
@@ -95,6 +109,8 @@ pub fn supported() -> bool {
 #[derive(Debug)]
 pub struct InstallerExtension {
     manifest: Manifest,
+    /// The libraries a test puts in the place of the machine's.
+    libraries: Option<install::Libraries>,
 }
 
 impl Default for InstallerExtension {
@@ -111,7 +127,7 @@ impl InstallerExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Installer",
-                description: "Installs a tar or zip archive as an application under ~/.local/opt, with its desktop entry, icon and commands, and updates, reverts, repairs and uninstalls it. Linux only.",
+                description: "Installs a tar or zip archive or an AppImage as an application under ~/.local/opt, with its desktop entry, icon and commands, and updates, reverts, repairs and uninstalls it; runs an AppImage as it is. Linux only.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,
@@ -121,6 +137,19 @@ impl InstallerExtension {
                 previews: &[],
                 commands: actions::COMMANDS,
             },
+            libraries: None,
+        }
+    }
+
+    /// The extension on a machine that has exactly `libraries`, in place
+    /// of the system's loader cache and library folders: how a test says
+    /// whether FUSE 2 is installed.
+    #[cfg(any(test, feature = "fixtures"))]
+    #[must_use]
+    pub fn with_libraries(libraries: install::Libraries) -> Self {
+        Self {
+            libraries: Some(libraries),
+            ..Self::new()
         }
     }
 }
@@ -144,6 +173,12 @@ impl Extension for InstallerExtension {
         let provider = Arc::new(AppsProvider::new(platform));
         reg.view(VIEW, Arc::clone(&provider) as Arc<dyn Provider>);
         reg.decorator(Arc::new(AppsDecorator::new(Arc::clone(&provider))) as Arc<dyn Decorator>);
+        #[cfg(any(test, feature = "fixtures"))]
+        let installer = Arc::new(match &self.libraries {
+            Some(libraries) => Installer::with_libraries(provider, libraries.clone()),
+            None => Installer::new(provider),
+        });
+        #[cfg(not(any(test, feature = "fixtures")))]
         let installer = Arc::new(Installer::new(provider));
         for action in actions::all(&installer) {
             reg.action(action);

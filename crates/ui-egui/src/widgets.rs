@@ -410,6 +410,43 @@ fn button_sized(
     enabled: bool,
     height: f32,
 ) -> egui::Response {
+    let paint = glyph.map(|glyph| {
+        move |ui: &egui::Ui, centre: egui::Pos2, colour: egui::Color32| {
+            ui.painter().text(
+                centre,
+                Align2::CENTER_CENTER,
+                glyph,
+                FontId::proportional(theme::ICON),
+                colour,
+            );
+        }
+    });
+    button_drawn(ui, paint, label, kind, enabled, height)
+}
+
+/// [`button_of`] with a glyph the caller paints: `glyph` is given the
+/// centre of the glyph's place and the colour of the button's text. For a
+/// glyph that changes while the button stays, as the copy button's does.
+pub(crate) fn button_with(
+    ui: &mut egui::Ui,
+    label: &str,
+    kind: ButtonKind,
+    enabled: bool,
+    glyph: impl FnOnce(&egui::Ui, egui::Pos2, egui::Color32),
+) -> egui::Response {
+    button_drawn(ui, Some(glyph), label, kind, enabled, 36.0)
+}
+
+/// The button behind [`button_sized`] and [`button_with`]: `glyph` paints
+/// the 16 px glyph before the label, when there is one.
+fn button_drawn(
+    ui: &mut egui::Ui,
+    glyph: Option<impl FnOnce(&egui::Ui, egui::Pos2, egui::Color32)>,
+    label: &str,
+    kind: ButtonKind,
+    enabled: bool,
+    height: f32,
+) -> egui::Response {
     let pad = if height < 36.0 { 12.0 } else { 16.0 };
     let scheme = theme::scheme(ui);
     let radius = theme::metrics(ui.ctx()).corner_radius();
@@ -448,11 +485,9 @@ fn button_sized(
     ui.painter().rect_filled(rect, radius, fill);
     let text_left = rect.left() + pad + glyph_room;
     if let Some(glyph) = glyph {
-        ui.painter().text(
+        glyph(
+            ui,
             pos2(rect.left() + pad + theme::ICON / 2.0, rect.center().y),
-            Align2::CENTER_CENTER,
-            glyph,
-            FontId::proportional(theme::ICON),
             fg,
         );
     }

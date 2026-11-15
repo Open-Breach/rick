@@ -52,6 +52,11 @@ pub enum Format {
     /// from. No file name says it; a caller that has a folder names the
     /// format itself.
     Folder,
+    /// An AppImage: one file that is the application, taken as an archive
+    /// whose only entry is the file itself. It is told by its name or its
+    /// header ([`crate::appimage`]) before any archive is looked for, so
+    /// neither [`Format::by_name`] nor [`Format::detect`] answers it.
+    AppImage,
 }
 
 impl Format {
@@ -135,6 +140,7 @@ impl Format {
             Self::Tar(Codec::Zstd) => "tar.zst",
             Self::Zip => "zip",
             Self::Folder => "folder",
+            Self::AppImage => "AppImage",
         }
     }
 }
@@ -365,7 +371,29 @@ fn visit_counting(path: &Path, format: Format, f: &mut CountingVisitor<'_>) -> R
         Format::Tar(codec) => visit_tar(path, codec, f),
         Format::Zip => visit_zip(path, f),
         Format::Folder => visit_folder(path, f),
+        Format::AppImage => visit_file(path, f),
     }
+}
+
+/// Hands the one file at `path` to `f` as the archive's only entry, under
+/// its own name: an AppImage.
+fn visit_file(path: &Path, f: &mut CountingVisitor<'_>) -> Result<(), Error> {
+    let meta = std::fs::metadata(path).map_err(io_read)?;
+    let item = Item {
+        path: path
+            .file_name()
+            .map_or_default(|name| name.to_string_lossy().into_owned()),
+        kind: ItemKind::File,
+        size: meta.len(),
+        mode: 0o755,
+        link: None,
+        hostile: false,
+    };
+    let mut reader = Lazy {
+        path: path.to_path_buf(),
+        file: None,
+    };
+    f(&item, &mut reader, 0).map(drop)
 }
 
 /// A file of a folder as an entry's contents, opened when first read: an

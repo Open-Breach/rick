@@ -19,7 +19,10 @@
 //! *System properties…* opens it.
 
 mod acl;
+mod drive;
 mod permissions;
+
+pub use drive::DriveDialog;
 
 use app::{App, Command, Contents, PermissionRequest, PropertiesInfo, Recursion};
 use egui::{Align2, FontId, Rect, Sense, pos2, vec2};
@@ -27,6 +30,7 @@ use ext::{Level, t};
 use platform::{Acl, PermissionChange, Principal};
 use types::{Attrs, EntryKind};
 
+use crate::copy_button::CopyButton;
 use crate::shell::Request;
 use crate::theme::{self, CARD_RADIUS, ICON, TEXT_BODY, TEXT_SECONDARY};
 use crate::{dialog, format, icons, widgets};
@@ -664,7 +668,9 @@ impl Card<'_> {
             scheme.text_primary,
             button.left() - 12.0 - left,
         );
-        icon_button(self.ui, button, icons::COPY, copy).clicked()
+        CopyButton::new(copy)
+            .show_at(self.ui, button, copy)
+            .clicked()
     }
 
     /// A row of a label and a switch that shows `on` and takes no click:

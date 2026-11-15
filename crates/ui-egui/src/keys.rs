@@ -99,6 +99,8 @@ pub enum Intent {
     Filter,
     /// Hidden files on or off.
     ToggleHidden,
+    /// The pane's time slider on or off.
+    ToggleTimeline,
     /// System files on or off.
     ToggleSystem,
     /// File extensions in the name column on or off.
@@ -450,6 +452,13 @@ pub const UI_INTENTS: &[IntentSpec] = &[
         "Toggle hidden files",
         VIEW,
         &["Mod+H"],
+    ),
+    spec(
+        Intent::ToggleTimeline,
+        "view.timeline",
+        "Toggle timeline",
+        VIEW,
+        &[],
     ),
     spec(
         Intent::ToggleSystem,

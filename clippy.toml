@@ -1,4 +1,5 @@
 # Words clippy's `doc_markdown` would otherwise want in backticks: product
-# names the previewers' documentation uses as words, and the binary units
-# the size strings use. The `..` keeps clippy's own list (macOS, OpenGL, …).
-doc-valid-idents = ["GStreamer", "LibreOffice", "WebP", "OpenDocument", "KiB", "MiB", "GiB", ".."]
+# names the previewers' and the installer's documentation use as words,
+# and the binary units the size strings use. The `..` keeps clippy's own
+# list (macOS, OpenGL, …).
+doc-valid-idents = ["GStreamer", "LibreOffice", "WebP", "OpenDocument", "AppImage", "AppImages", "AppStream", "SquashFS", "KiB", "MiB", "GiB", ".."]

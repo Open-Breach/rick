@@ -28,11 +28,11 @@ the other menus, 280 px at least, 6 px under its button — New window, the
 Layouts submenu and the extensions' submenus; Settings, Keyboard shortcuts
 and Extensions; About Rick with the version — every entry with its icon and
 the chord the keymap binds to it, spelled *Ctrl* or *Cmd*), the workspace tabs
-(one per workspace, titled after the folder in its focused pane, reordered
+(one per workspace, titled after the folder in its focused pane, 220 px wide while they fit, all shrinking together down to 100 px when the row is full and, past that, as many as fit with the active one among them and a dropdown button that lists every tab — the rule is `tab_row.rs` — reordered
 by drag with the neighbours sliding apart for the gap where it will land, the dragged tab its own ghost lifted with a shadow, a tab of one pane docking into the shown layout on the side targets of the pane under it, the tabs spring-loading under a dragged pane, tab or entries, Escape cancelling the drag of a tab or a pane, a tab dragged outside every window opening a new one, a tab or a pane dragged onto another window landing in its tab row or on its dock targets) and the
 search box, the `egui_dock` tree of the shown workspace's split panes, whose
 divider positions it reports back for the session,
-each pane's toolbar (Back and Forward, the parent chip and breadcrumb, the view options menu with the per-type filter, the grab handle that docks the pane on another's dock tiles, the pane's ghost — its own snapshot at a quarter, anchored to the grab point, `drag.rs` — following the cursor), path bar (breadcrumbs per provider: a `rick://` view's
+each pane's toolbar (Back and Forward, the breadcrumb bar — one rounded `bg/subtle` surface with the Up button, the segments and the copy button on it, a border under the pointer, and a menu on a right-click with *Paste from clipboard*, *Copy path* and *Edit path* — the view options menu with the per-type filter, the grab handle that docks the pane on another's dock tiles, the pane's ghost — its own snapshot at a quarter, anchored to the grab point, `drag.rs` — following the cursor), path bar (breadcrumbs per provider: a `rick://` view's
 title, the folders above an archive as local segments and the archive and
 its contents on the archive provider), file list (the 34 px header band over the Name, Size, Type and Modified columns, rows with inset rounded hover and selection backgrounds and the cursor ring, the empty-folder message, the portal burst while a folder is read; details, tree, list or
 icon view, only the visible rows laid out, names edited in place for
@@ -71,11 +71,15 @@ waiting jobs with why they wait; finished jobs as compact rows; rows that
 scroll beyond a cap), the dialogue frame in `dialog.rs` (a `dialog/bg`
 modal with 12 px corners and a shadow: the header with an icon, title and
 secondary line, a scrolling body, the footer with the note and the
-buttons; a form's fields in a label-left grid with cards, disclosure
+buttons; a form's fields — those with a clipboard rule opening with what
+the rule takes from the clipboard, read once as the dialogue opens — in a
+label-left grid with cards, disclosure
 cards, segmented controls, switches, file pickers and the preview as a
 card of effects — the install dialogue's shape — taken by every form,
 prompt and confirmation an action asks), the shared controls in
-`widgets.rs`, the paste-conflict dialogue (`conflict.rs`: *Replace file?* with its
+`widgets.rs`, the one copy button every copy control is
+(`copy_button.rs`: after a click the tick in `status/success` and
+*Copied* for 1.5 s, then the button as it was), the paste-conflict dialogue (`conflict.rs`: *Replace file?* with its
 place among the job's conflicts, the existing and the arriving entry as two
 cards, Skip, Replace or Merge, and Keep both as the default, 520 px wide
 whatever the name), the question dialogue an extension asks through, the
@@ -86,7 +90,12 @@ folder's contents as the application counts them, its dates and whether it
 is hidden, with a copy button on every path and *Open target folder* for a
 link; *Permissions*, for a local entry, its owner and group as dropdowns,
 the mode bits as a grid with the octal field, the ACL opened in place as a
-table that moves with the grid, and *Apply to enclosed items*), the Hash
+table that moves with the grid, and *Apply to enclosed items*; and its
+drive variant, `properties/drive.rs`, opened by *Properties* on a drive
+card or on a row of the drive table: one page with the volume, its
+capacity with the drive card's usage bar and its flags, *Eject* and
+*Format…* in the footer, following the drive as the model's volumes have
+it), the Hash
 dialogue (620 px in the dialogue frame: *File
 hashes* with the file's name and size and a close button; the *VERIFY*
 field on top, prefilled from the clipboard when it holds a hash and
@@ -105,7 +114,7 @@ chosen; a card with a row per item — icon, title, the line that says what
 is written where, a *Best effort* pill, a switch that starts on, and for
 a file of another origin in the item's way a notice with *Replace*; the
 line about passwords; *Don't ask again*, *Not now* and *Apply N items*,
-with the progress line in the footer while the rows are set up), the context menu (a 260 px card of the spec's groups — Open, Edit with the *Copy as* submenu, Change with the destructive pair in `status/danger`, the extension groups as submenus or single entries, Info — each entry with an icon slot, its label and its shortcut, hidden when it does not apply; on the empty area New folder and New file, Paste, Select all, Open terminal here, Refresh and Folder properties) and command palette
+with the progress line in the footer while the rows are set up), the context menu (a 260 px card of the spec's groups — Open, Edit with the *Copy as* submenu, Change with the destructive pair in `status/danger`, the extension groups as submenus or single entries, Info — each entry with an icon slot, its label and its shortcut, hidden when it does not apply; on the empty area New folder and New file, Paste, Select all, Open terminal here, Refresh and Folder properties; a card with more entries than the window has room for is as tall as fits, 8 px clear of the window's top and bottom edges, and scrolls, its submenus and the application menu alike; the menus that are not built from a selection — of the side panel's rows, headers and drive cards, of an overview's rows, and the address bar's folded ancestors — are the same card, through `menus::card` and its entries) and command palette
 built from the action registry, the keyboard shortcut table, the Settings
 window in `settings_ui.rs` (880 × 640, a viewport of its own where the
 backend has them and an area over the main window otherwise: the

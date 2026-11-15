@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use types::{CancelToken, Error};
 
+use crate::appimage;
 use crate::archive::{self, Format, Index, Item, OnProgress};
 use crate::desktop::{self, DesktopEntry};
 use crate::elf::{self, Elf};
@@ -204,6 +205,9 @@ pub struct Detected {
     pub arch_mismatch: Option<u16>,
     /// Entries the archive-safety rules will leave out: hostile paths.
     pub hostile: Vec<String>,
+    /// An AppImage whose runtime needs FUSE 2 to run
+    /// ([`appimage::needs_fuse2`]); `false` for an archive.
+    pub needs_fuse2: bool,
 }
 
 impl Detected {
@@ -431,7 +435,9 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
 
 /// Detects what the archive at `path` is and proposes the form's defaults.
 /// The archive is read in one streaming pass: `cancel` is checked between
-/// entries and `progress` is told the bytes of the file read so far.
+/// entries and `progress` is told the bytes of the file read so far. An
+/// AppImage never goes through this: it is told first, by its name or its
+/// header, and [`appimage::detect`] reads it.
 ///
 /// # Errors
 ///
@@ -443,6 +449,17 @@ pub fn detect_with(
     cancel: &CancelToken,
     progress: &mut OnProgress<'_>,
 ) -> Result<Detected, Error> {
+    let listed_as = path
+        .file_name()
+        .map_or_default(|n| n.to_string_lossy().into_owned());
+    if appimage::is_appimage(path, &listed_as) {
+        let detected = appimage::detect(path)?;
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        progress(detected.index.total_size);
+        return Ok(detected);
+    }
     let format = Format::detect(path)?;
     let (index, heads) = read_archive(path, format, cancel, progress)?;
     let index = Arc::new(index);
@@ -682,6 +699,7 @@ pub fn detect_with(
         install_script,
         arch_mismatch,
         hostile,
+        needs_fuse2: false,
     })
 }
 

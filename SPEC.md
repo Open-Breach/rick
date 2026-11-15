@@ -41,7 +41,7 @@ Proposed performance targets, to confirm: a 200,000-entry directory paints its f
 | `specs/open.md` | Still open | Before designing something: it may be listed as not decided or not drawn yet |
 | `specs/decisions.md` | The entries kept from the retired `QUESTIONS.md`, under their original numbers | Reference: look up one entry with grep, never load the file |
 | `specs/ext-ssh.md` | Separate specs: `ext-ssh`, remote hosts over SSH | The SSH provider, its hosts in the Network section, its console actions, or the `REMOTE` capability |
-| `specs/ext-installer.md` | Separate specs: `ext-installer`, the tarball installer | *Install as application* and the Installed Apps view (Linux only) |
+| `specs/ext-installer.md` | Separate specs: `ext-installer`, the tarball and AppImage installer | *Install as application* on an archive or an AppImage, *Run* on an AppImage and the Installed Apps view (Linux only) |
 | `specs/app-icons.md` | Separate specs: the app icon on all three platforms and the Linux desktop entry | The icon, the `rick` identifier, the `Rick.app` bundle or the Linux `share/` layout |
 | `specs/about-dialog.md` | Separate specs: the About dialog | The About dialog, the build details or the third-party component list |
 | `specs/system-integration.md` | Separate specs: system integration and distribution, the second track of 0.3 | Single instance, the command line, `rick://`, the system clipboard, the integration check, signing, plugin trust, the release channels |

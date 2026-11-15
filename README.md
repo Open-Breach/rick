@@ -3,9 +3,9 @@
 Rick is a fast, lean file manager for professionals. It runs on Linux, macOS and Windows from a single codebase and behaves the same on all three. A small core does the basics; everything else comes from an extensible plugin ecosystem.
 
 <!-- generated:status -->
-v0.4.1 · Rick is early and not fully tested yet, so expect bugs. Tab navigation and some performance work are still unfinished. Please help us find what's broken and tell us what you see.
+v0.5.0 · Rick is early and not fully tested yet, so expect bugs. Tab navigation and some performance work are still unfinished. Please help us find what's broken and tell us what you see.
 
-[Download v0.4.1](#install) for Linux, macOS or Windows, try it, and tell us [what breaks](https://github.com/Open-Breach/rick/issues). [Opinions](https://github.com/Open-Breach/rick/issues) welcome too, good or bad, as long as they're respectful.
+[Download v0.5.0](#install) for Linux, macOS or Windows, try it, and tell us [what breaks](https://github.com/Open-Breach/rick/issues). [Opinions](https://github.com/Open-Breach/rick/issues) welcome too, good or bad, as long as they're respectful.
 <!-- /generated:status -->
 
 ## Why Rick exists
@@ -21,9 +21,9 @@ I also believe more and more people will move to Linux, and those coming from Wi
 <!-- generated:features -->
 - **Previews 87 file types**, listed by kind below.
 - **Multi-pane, multi-tab view:** split panes side by side, drag them around, keep as many tabs as you like.
-- **Browses** local disks, Archives, SSH and the cloud (S3, Azure Blob, Google Cloud Storage), and **searches** through Tracker and Baloo on Linux, Spotlight on macOS and Windows Search on Windows.
+- **Browses** local disks, Archives, SSH, ZFS and the cloud (S3, Azure Blob, Google Cloud Storage), and **searches** through Tracker and Baloo on Linux, Spotlight on macOS and Windows Search on Windows.
 - **Works with the tools you already use**, like Git and SVN: status badges in the file list and actions in the context menu.
-- **Installs and uninstalls software distributed as tarballs**, so a tar.gz download becomes a managed install instead of a folder you forget about. Linux only.
+- **Installs and uninstalls software distributed as tarballs and AppImages**, so a tar.gz or AppImage download becomes a managed install instead of a folder or file you forget about. Linux only.
 - **Small things done right**, such as computing a file's hash from the context menu.
 <!-- /generated:features -->
 
@@ -71,25 +71,25 @@ Coming:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-dark.png">
-  <img alt="Rick with two panes side by side and the preview pane showing a 3D model of a giraffe" src="docs/screenshots/readme-light.png">
+  <img alt="Rick with two panes side by side and the preview pane showing a 3D model of a sheep" src="docs/screenshots/readme-light.png">
 </picture>
 
 ## Install
 
 <!-- generated:install -->
-**Linux** · [x64](https://github.com/Open-Breach/rick/releases/download/v0.4.1/rick-0.4.1-linux-x64.tar.gz) · [arm64](https://github.com/Open-Breach/rick/releases/download/v0.4.1/rick-0.4.1-linux-arm64.tar.gz)
+**Linux** · [x64](https://github.com/Open-Breach/rick/releases/download/v0.5.0/rick-0.5.0-linux-x64.tar.gz) · [arm64](https://github.com/Open-Breach/rick/releases/download/v0.5.0/rick-0.5.0-linux-arm64.tar.gz)
 
 ```bash
-tar xzf rick-0.4.1-linux-x64.tar.gz && ./rick-0.4.1-linux-x64/rick
+tar xzf rick-0.5.0-linux-x64.tar.gz && ./rick-0.5.0-linux-x64/rick
 ```
 
 Needs glibc 2.39 or later (Ubuntu 24.04). The first start offers to set Rick up in your desktop: the launcher entry, the default file manager, the `rick` command.
 
-**macOS** · [arm64](https://github.com/Open-Breach/rick/releases/download/v0.4.1/rick-0.4.1-macos-arm64.zip)
+**macOS** · [arm64](https://github.com/Open-Breach/rick/releases/download/v0.5.0/rick-0.5.0-macos-arm64.zip)
 
 Unzip, drag `Rick.app` to Applications and open it. The app is not notarised yet: allow it under System Settings → Privacy & Security.
 
-**Windows** · [x64](https://github.com/Open-Breach/rick/releases/download/v0.4.1/rick-0.4.1-windows-x64.zip)
+**Windows** · [x64](https://github.com/Open-Breach/rick/releases/download/v0.5.0/rick-0.5.0-windows-x64.zip)
 
 Unpack and run `rick.exe`. SmartScreen may warn the first time.
 

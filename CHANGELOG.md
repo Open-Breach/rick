@@ -7,6 +7,193 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-15
+
+On Linux, ZFS snapshots with a time slider and AppImages in the installer.
+Everywhere: set as desktop background, the Icons view for a folder of
+media, workspace tabs that stay within reach, the properties of a drive,
+an address bar that takes more, and a round of polish. The extension API
+is 22: a plugin built for 0.4.1 is refused until it is rebuilt.
+
+### Added
+
+- *Set as desktop background*, in the context menu of one selected image
+  file on the local file system and as a button after *Fit* and *1:1* in
+  the preview pane's toolbar while the pane shows such a file. Rick
+  points the desktop of every screen at the file where it lies and copies
+  nothing: through `SystemParametersInfoW` on Windows, `NSWorkspace` on
+  macOS, `gsettings` on GNOME and `plasma-apply-wallpaperimage` on KDE
+  Plasma. It is offered for JPEG, PNG and BMP, on macOS for HEIC and TIFF
+  as well, and not at all on another Linux desktop (#239).
+- A folder of media shows itself in the Icons view: when at least 80 %
+  of the files in a folder a pane enters are images or videos, by their
+  type from the name and folders aside, the tab shows Icons, and leaving
+  the folder puts back the view the tab had. A view picked by hand inside
+  such a folder stays until the tab leaves it. It is decided once, when
+  the listing is complete, from what is listed already (#240).
+- The icon size chosen last is remembered: whichever of the four sizes is
+  picked, from the View options menu, the palette, a shortcut or
+  Ctrl+scroll, is the size *Icons* opens in from then on, by hand or for
+  a folder of media, across restarts. It is the key `icon_size` of
+  `rick.toml` (#240).
+- A field of a form that an extension shows can take its value from the
+  clipboard: the field carries a regular expression, and when the
+  dialogue opens it holds what the expression matches in the clipboard's
+  text — the first capture group where there is one — in place of its
+  written value. The clipboard is read once, as the dialogue opens.
+  *Git clone…* uses it for its URL field, in place of the plugin's own
+  reading of the clipboard; a local repository's path is still the
+  plugin's to recognise. The extension API is 22 with `Field::clipboard`:
+  every plugin is rebuilt against it, and one built against 21 is refused
+  (#242).
+- *Properties* of a drive, in the context menu of a drive card in *This
+  Machine* and of a row of the overview's drive table, with *Eject* and
+  *Format…*. It opens the Properties dialogue on one page: the drive's
+  name and kind in the header; **Volume**, with the label, the file
+  system, the mount point or drive letter and the device, the paths with
+  their copy button; **Capacity**, with the total, the used and the free
+  space and the usage bar of the drive card; **Flags**, read-only and
+  removable; and *Eject* and *Format…* in the footer, for the drives that
+  have them. A value the system does not report is left out, and a drive
+  that is unmounted takes its dialogue with it (#244).
+- `ext-zfs`, a plugin for OpenZFS snapshots, Linux only (placed by the review of
+  #156): through the `zfs` command line
+  it finds the dataset a folder lies in and, without `zfs` or outside a
+  dataset, shows nothing. A read-only `zfs` location lists the datasets
+  with snapshots, each dataset's snapshots newest first and each
+  snapshot's files as they were (`zfs:/tank/home/@b/docs`), so a snapshot
+  opens, previews and copies out like any folder: a file in it opens with
+  the system, *Open with…* or the editor from its path under
+  `.zfs/snapshot`, which providers can now name through the defaulted
+  `Provider::local_path` (API 21); `/~versions/<path>`
+  lists the snapshots holding a different version of one file. The "ZFS"
+  group has *Browse snapshots*, *Back to live folder*, *Versions*,
+  *Restore* (one question naming the snapshot; a live item it replaces
+  goes to the trash first), and *Create*, *Rename* and *Destroy snapshot*
+  as jobs, which offer to run once more as administrator when ZFS refuses
+  for lack of permission: through the platform prompt as a call of
+  `rick-zfs`, a helper beside `rick` that runs only a snapshot's
+  `snapshot`, `rename` or `destroy`, under the polkit action
+  `org.openbreach.rick.zfs` where it is installed. `pkexec` is called
+  without the caller's `SHELL`, which it refuses when it is not in
+  `/etc/shells` (a shell from Nix or Home Manager), and its own failures
+  reach the user in its words. The
+  info panel gets a ZFS section with the dataset, its snapshots and its
+  main properties with their source. *Edit ZFS properties…* changes
+  `compression`, `atime`, `relatime`, `copies`, `recordsize`, `quota`
+  and `refquota` of a dataset: a form opened with the current values, *Inherit*
+  labelled with the value it gives, a preview of each change with the old
+  value's source that refuses a size it cannot read, a quota below the
+  space used or no change; applied as one job of `zfs set` then
+  `zfs inherit`, with the same permission rule; a quota reset is
+  `quota=none`, as ZFS never inherits a quota. Specified in
+  `specs/ext-zfs.md`.
+- **Time slider** (review of #156):
+  a row under a pane's toolbar that moves the pane through the earlier
+  states of the folder it shows — *Now* with the count of earlier states,
+  an axis with one dot per point, evenly spaced, and at a past point the
+  date, name and source with *Read-only* and *Back to now*. Click a dot, drag (the pane
+  follows after a 200 ms rest or on release), or Left/Right/Home/End while
+  focused; a run of moves is one Back. Switched per pane with *Timeline* in
+  the view options menu or *Toggle timeline* in the palette, saved with
+  the session; absent where nothing offers a timeline, disabled where the
+  folder has no earlier states, never empty. Extensions offer timelines
+  through two new defaulted `Decorator` methods, `offers_timelines` and
+  `timeline` (API 20), asked in a job and only while the bar is shown;
+  several sources merge into one bar. `ext-zfs` offers a dataset's
+  snapshots.
+- The path field takes a file's path: Enter opens the file's folder in
+  the same tab with the file selected, in view and previewed. A path of
+  which only the beginning exists opens the deepest folder that does, and
+  a banner over the list names the rest, *`2026/q3` does not exist here*;
+  nothing is created (#230).
+- A right-click anywhere on the address bar opens a menu: *Paste from
+  clipboard*, which goes where the clipboard's path leads without the
+  text field showing, *Copy path* and *Edit path* (#230).
+- Every copy button answers a click: a tick in place of the copy glyph
+  and *Copied* as its tooltip for 1.5 s, without a fade where the system
+  asks for reduced motion (#225).
+- **AppImages in the installer**, Linux only (#229, #232, #234). An
+  AppImage, told by a name ending in `.AppImage` or by the magic in its
+  ELF header, has *Run* and *Install as application…* in its context
+  menu. *Run* checks the file's machine type, sets the execute bit for
+  the owner when it is missing and starts the file detached in its
+  folder; Enter and a double-click on an AppImage do the same. *Install
+  as application…* opens the install dialogue with the name, the icon
+  and the version read out of the file: its own desktop entry, `.DirIcon`
+  or the icon the entry names, and for the version `X-AppImage-Version`,
+  then the newest release of the AppStream metainfo, then the file name;
+  with none of them the version is typed. The install follows the
+  archive's: the version folder holds the AppImage itself as
+  `<app-id>.AppImage`, so the path through `current` and the desktop
+  entry stay the same from one update to the next, and update, revert,
+  repair and uninstall work as for an archive, as do `rick install
+  <file>` and *Update from archive…*. Nothing from an AppImage is run to
+  learn about it: the SquashFS image behind its runtime is read through
+  the new `backhand` dependency, links followed only inside the image,
+  and where the image cannot be read the dialogue opens with the name
+  and version of the file name and no icon. The downloaded file is left
+  as it was. An AppImage on the older runtime needs `libfuse.so.2`,
+  which is read from its runtime: where the library is missing, *Run*
+  stops with *FUSE 2 is required to run this AppImage*, the install line
+  of each distribution and a link, and an install works and carries the
+  same warning in its summary. Specified in `specs/ext-installer.md`,
+  *AppImages*.
+
+### Changed
+
+- Workspace tabs that outgrow the title row stay within reach, as in
+  Chrome: when the row is full the tabs all shrink together, from 220 px
+  down to 100 px, and when they do not fit at that width either the row
+  shows as many as fit, the active one always among them, and a dropdown
+  button after the last of them lists every tab in order, the active one
+  marked; choosing one shows it. The row used to cut off the tabs it had
+  no room for (#241).
+- The address bar is one rounded surface, so that it reads as the address
+  bar before it is clicked: the Up button, a divider, the path and the
+  copy button on it, and a border under the pointer (#230).
+- The last tab of the last window, which cannot be closed, has no close
+  button, and its title takes the room; the button is back with a second
+  tab or a second window (#224).
+- A menu with more entries than a small window has room for is as tall as
+  fits, 8 px clear of the window's top and bottom edges, and scrolls: the
+  context menus, the application menu and their submenus. A menu the
+  window has room for is shown whole, however many entries it has. It
+  used to be cut off at the window's edge (#227, #237).
+- An empty file shows a card in the preview pane, with *This file is
+  empty* and **Move to trash**, where it used to show an empty text or
+  the hex view's *(empty file)*. A file listed with 0 bytes that has
+  content, as the files of `/proc` do, previews as before (#228).
+
+### Fixed
+
+- The right-click menus of the side panel — of a place, a section's
+  header, a connection and a drive card — and of a row in the *This
+  Machine*, *Network* and *Cloud* overviews are the menu card every other
+  menu is: 260 px wide, their entries 30 px high with the icon in its
+  slot, their groups set apart by hairlines, kept inside a small window.
+  They were the toolkit's plain menu, with its spacing and the glyph
+  written into the label, so a screen reader now hears *Eject* and
+  *Edit…* by their names alone. The list under *Add…* and the list of
+  the address bar's folded ancestors are the same card (#246).
+- Mod+W or a middle click on the last tab of the last window, which
+  close nothing, no longer leave a tab for *Reopen closed tab* to open
+  (#224).
+- A file revealed from the command line, `rick reveal`, is scrolled into
+  view in its folder as well as selected (#230).
+- The address bar's copy button, the *Copy* of the preview pane and the
+  chevron of the folded path have names for a screen reader, *Copy path*,
+  *Copy* and *Hidden ancestors*; they were named by their glyphs (#225,
+  #230).
+- A video filmed upright on a phone plays upright in the preview pane,
+  and its first frame and its thumbnail are upright too, where they lay on
+  their side: the frames are turned as the container's orientation says —
+  the display matrix of an MP4 or MOV track, the orientation tag of
+  Matroska. The picture is fitted into the pane as it is, and *Dimensions*
+  in File info and the status bar give the size it is shown in, 1080 × 1920
+  for such a clip; a video without an orientation plays as before (#233,
+  #238).
+
 ## [0.4.1] - 2026-11-14
 
 A small release after 0.4.0: a launch that meets an instance on its way out,
@@ -1440,7 +1627,8 @@ text, code, images and PDF, and Git, on Linux, macOS and Windows.
   in the middle of a write can no longer read a truncated file and lose
   the pinned folders (#14).
 
-[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Open-Breach/rick/releases/tag/v0.5.0
 [0.4.1]: https://github.com/Open-Breach/rick/releases/tag/v0.4.1
 [0.4.0]: https://github.com/Open-Breach/rick/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Open-Breach/rick/releases/tag/v0.3.0

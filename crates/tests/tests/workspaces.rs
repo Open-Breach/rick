@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable as _;
+use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use platform::{ConfigDir, Fake};
 use tests::local;
 use ui_egui::{EguiHost, RickUi};
@@ -180,14 +180,15 @@ fn the_title_row_opens_shows_closes_cycles_and_reorders_workspace_tabs() {
     fs::write(alpha.join("a.txt"), "a").unwrap_or_else(|e| panic!("{e}"));
     let mut harness = harness(&alpha, egui::vec2(1400.0, 800.0));
 
-    // One tab, titled after the folder, with a close button named for a
-    // screen reader; the new-tab button after it.
+    // One tab, titled after the folder; the new-tab button after it. It
+    // is the tab that cannot be closed, so it has no close button.
     assert_eq!(titles(&harness), ["alpha-folder"]);
     tab_centre(&harness, "alpha-folder");
-    assert_eq!(harness.query_all_by_label("Close tab").count(), 1);
+    assert_eq!(harness.query_all_by_label("Close tab").count(), 0);
 
     // The new-tab button opens a workspace at the focused pane's folder,
-    // right after the shown one, and shows it.
+    // right after the shown one, and shows it. Each tab has a close
+    // button, named for a screen reader.
     harness.get_by_label("New tab").click();
     harness.step();
     settle(&mut harness);
@@ -274,6 +275,121 @@ fn the_title_row_opens_shows_closes_cycles_and_reorders_workspace_tabs() {
     harness.step();
     settle(&mut harness);
     assert_eq!(titles(&harness), ["beta-folder"]);
+}
+
+/// The widths at which the last frame painted the text `title` inside the
+/// tab row, one per tab with that title, as drawn: cut where it was cut.
+fn title_widths(harness: &Harness<'_, RickUi>, title: &str) -> Vec<f32> {
+    let row = harness
+        .state()
+        .tab_row()
+        .unwrap_or_else(|| panic!("no tab row"));
+    harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) if text.galley.job.text == title => {
+                let at = text.galley.rect.translate(text.pos.to_vec2());
+                row.contains(at.center()).then(|| at.width())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Acceptance (issue 219, item 2; SPEC.md *Workspace tabs*, *The tab that
+/// cannot be closed*): the last workspace of the last window stays when it
+/// is closed, so its tab has no close button and its title takes the
+/// room. A second tab brings the button back on both and closing one
+/// takes it away again; with two windows the only tab of each closes its
+/// window and so has its button. Mod+W and a middle click on the tab
+/// without a button do nothing, and leave nothing for *Reopen closed
+/// tab* to bring back.
+#[test]
+fn the_tab_that_cannot_be_closed_has_no_close_button() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    // A name too long for a tab with a close button or without one.
+    let name = "a-folder-whose-name-is-far-too-long-for-a-workspace-tab";
+    let folder = dir.path().join(name);
+    fs::create_dir(&folder).unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = harness(&folder, egui::vec2(1400.0, 800.0));
+    let buttons = |harness: &Harness<'_, RickUi>| harness.query_all_by_label("Close tab").count();
+
+    // One window with one tab: no close button, and the title runs on to
+    // where the button would have ended.
+    assert_eq!(titles(&harness), [name]);
+    assert_eq!(buttons(&harness), 0);
+    let alone = title_widths(&harness, name);
+    assert_eq!(alone.len(), 1, "one title: {alone:?}");
+
+    // Mod+W and a middle click on it do nothing.
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::W);
+    harness.step();
+    settle(&mut harness);
+    let tab = tab_centre(&harness, name);
+    click_at(&mut harness, tab, egui::PointerButton::Middle);
+    settle(&mut harness);
+    assert_eq!(titles(&harness), [name]);
+    assert_eq!(buttons(&harness), 0);
+    // Nothing closed, so there is nothing to reopen.
+    harness.key_press_modifiers(
+        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        egui::Key::T,
+    );
+    harness.step();
+    settle(&mut harness);
+    assert_eq!(titles(&harness), [name], "no tab was closed");
+
+    // A second tab brings the button back on both, and the titles give
+    // way to it.
+    harness.get_by_label("New tab").click();
+    harness.step();
+    settle(&mut harness);
+    assert_eq!(titles(&harness), [name, name]);
+    assert_eq!(buttons(&harness), 2);
+    let two = title_widths(&harness, name);
+    assert_eq!(two.len(), 2, "two titles: {two:?}");
+    for width in &two {
+        assert!(
+            *width + 10.0 < alone[0],
+            "a title beside a close button is shorter: {width} against {}",
+            alone[0]
+        );
+    }
+
+    // Closing one takes the button away again.
+    let row = harness
+        .state()
+        .tab_row()
+        .unwrap_or_else(|| panic!("no tab row"));
+    let close = harness
+        .query_all_by_label("Close tab")
+        .map(|n| n.rect())
+        .find(|r| row.contains(r.center()))
+        .unwrap_or_else(|| panic!("no close button"));
+    click_at(&mut harness, close.center(), egui::PointerButton::Primary);
+    settle(&mut harness);
+    assert_eq!(titles(&harness), [name]);
+    assert_eq!(buttons(&harness), 0);
+    assert_eq!(title_widths(&harness, name), alone);
+
+    // With two windows, each window's only tab has its button: it closes
+    // its window.
+    let first = harness.state().app().model().focused_window;
+    command(&mut harness, app::Command::NewWindow);
+    let second = harness.state().app().model().focused_window;
+    assert_ne!(first, second, "a second window");
+    assert_eq!(workspaces_of(&harness, first).len(), 1);
+    assert_eq!(workspaces_of(&harness, second).len(), 1);
+    assert_eq!(buttons(&harness), 2, "one in each window");
+    let only = workspaces_of(&harness, second)[0];
+    command(&mut harness, app::Command::CloseWorkspace(only));
+    assert!(
+        harness.state().app().model().window(second).is_none(),
+        "the window went with its only tab"
+    );
+    assert_eq!(buttons(&harness), 0, "the last tab of the last window");
 }
 
 #[test]
@@ -2174,5 +2290,300 @@ fn the_tabs_of_another_window_spring_open_and_escape_restores_every_window() {
     assert_eq!(
         model.workspaces(first)[0].dock,
         model::Dock::Pane(pane_alpha)
+    );
+}
+
+/// The rectangle of the button named `name` on the tab row.
+fn row_button(harness: &Harness<'_, RickUi>, name: &str) -> egui::Rect {
+    let row = harness
+        .state()
+        .tab_row()
+        .unwrap_or_else(|| panic!("no tab row"));
+    harness
+        .query_all_by_label(name)
+        .map(|n| n.rect())
+        .find(|r| row.expand(2.0).contains(r.center()))
+        .unwrap_or_else(|| panic!("no {name} on the row {row:?}"))
+}
+
+/// The entries of the open list of all tabs, as each title's rectangle and
+/// whether it is marked as the active entry: the rows of a menu card, 30 px
+/// high and far wider than a tab at its minimum.
+fn list_entries(harness: &Harness<'_, RickUi>, titles: &[String]) -> Vec<(egui::Rect, bool)> {
+    titles
+        .iter()
+        .map(|title| {
+            let entry = harness
+                .query_all_by_label(title)
+                .find(|n| (n.rect().height() - 30.0).abs() < 1.0 && n.rect().width() > 200.0)
+                .unwrap_or_else(|| panic!("{title} is not in the list"));
+            (
+                entry.rect(),
+                entry.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True),
+            )
+        })
+        .collect()
+}
+
+/// Acceptance (issue 221, item 4; SPEC.md *Tabs that outgrow the row*):
+/// as in Chrome. Tabs are 220 px while they fit; when the row is full they
+/// all shrink together, to one width, down to 100 px; past that the row
+/// shows as many as fit and a dropdown button stands after the last of
+/// them, before the new-tab button, with the list of every tab in order,
+/// the active one marked. With forty tabs in a 1280 px window the active
+/// tab is in the row, the list has all forty, and every tab can be reached
+/// with the mouse.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn forty_tabs_shrink_together_then_the_rest_are_behind_a_dropdown() {
+    use ui_egui::tab_row::{TAB_GAP, TAB_MIN_WIDTH};
+    use ui_egui::theme::TAB_WIDTH;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let names: Vec<String> = (0..40).map(|i| format!("t{i:02}")).collect();
+    for name in &names {
+        fs::create_dir(dir.path().join(name)).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let mut harness = harness(&dir.path().join(&names[0]), egui::vec2(1280.0, 720.0));
+    let layout = |harness: &Harness<'_, RickUi>| {
+        harness
+            .state()
+            .tab_layout()
+            .unwrap_or_else(|| panic!("no tab row"))
+    };
+
+    // One tab after another: full width, then all narrower together, then
+    // the row is full at the minimum.
+    let (mut shrunk, mut last_width) = (0, TAB_WIDTH);
+    for (opened, name) in names.iter().enumerate().skip(1) {
+        command(
+            &mut harness,
+            app::Command::NewTab(local(&dir.path().join(name))),
+        );
+        let row = layout(&harness);
+        let count = opened + 1;
+        if row.overflow {
+            break;
+        }
+        assert_eq!((row.first, row.count), (0, count), "all of them: {row:?}");
+        assert!(
+            row.width <= last_width && row.width >= TAB_MIN_WIDTH,
+            "never wider again, never under the minimum: {row:?}"
+        );
+        // Every tab has that width, and the new-tab button follows the last.
+        let rects: Vec<egui::Rect> = names[..count]
+            .iter()
+            .map(|t| tab_rect(&harness, t))
+            .collect();
+        for (rect, title) in rects.iter().zip(&names) {
+            assert!(
+                (rect.width() - row.width).abs() < 0.5,
+                "{title} is {} wide in {row:?}",
+                rect.width()
+            );
+        }
+        assert!(rects.windows(2).all(|w| w[0].right() < w[1].left()));
+        let plus = row_button(&harness, "New tab");
+        let end = rects[count - 1].right();
+        assert!(
+            (plus.left() - end - TAB_GAP).abs() < 1.0,
+            "the new-tab button after the last tab: {plus:?} after {end}"
+        );
+        assert!(harness.query_by_label("All tabs").is_none(), "no dropdown");
+        shrunk += usize::from(row.width < TAB_WIDTH);
+        last_width = row.width;
+    }
+    assert!(
+        shrunk >= 2,
+        "the tabs shrank together before the row was full"
+    );
+
+    // All forty.
+    for name in &names[titles(&harness).len()..] {
+        command(
+            &mut harness,
+            app::Command::NewTab(local(&dir.path().join(name))),
+        );
+    }
+    assert_eq!(titles(&harness), names);
+    let row = layout(&harness);
+    assert!(row.overflow && row.count < 40, "{row:?}");
+    assert!((row.width - TAB_MIN_WIDTH).abs() < f32::EPSILON, "{row:?}");
+
+    // The active tab, the one opened last, is in the row, at its end.
+    assert_eq!(shown(&harness), 39);
+    assert_eq!(row.first + row.count, 40, "{row:?}");
+    let run: Vec<egui::Rect> = names[row.first..]
+        .iter()
+        .map(|t| tab_rect(&harness, t))
+        .collect();
+    for rect in &run {
+        assert!((rect.width() - TAB_MIN_WIDTH).abs() < 0.5, "{rect:?}");
+    }
+    assert!(run.windows(2).all(|w| w[0].right() < w[1].left()));
+    // The tabs before the run are not on the row.
+    let strip = harness
+        .state()
+        .tab_row()
+        .unwrap_or_else(|| panic!("no tab row"));
+    for title in &names[..row.first] {
+        assert!(
+            !harness
+                .query_all_by_label(title)
+                .any(|n| strip.contains(n.rect().center())),
+            "{title} is behind the dropdown"
+        );
+    }
+    // The dropdown button after the last tab, the new-tab button after it.
+    let list = row_button(&harness, "All tabs");
+    let plus = row_button(&harness, "New tab");
+    let end = run[run.len() - 1].right();
+    assert!(
+        (list.left() - end - TAB_GAP).abs() < 1.0,
+        "{list:?} after {end}"
+    );
+    assert!(
+        (plus.left() - list.right()).abs() < 1.0,
+        "{plus:?} after {list:?}"
+    );
+    assert!(plus.right() <= strip.right() + 1.0, "all of it on the row");
+
+    // The list: every tab in order, the active one marked.
+    click_at(&mut harness, list.center(), egui::PointerButton::Primary);
+    harness.step();
+    let entries = list_entries(&harness, &names);
+    assert!(
+        entries.windows(2).all(|w| w[0].0.top() < w[1].0.top()),
+        "in the order of the tabs"
+    );
+    let marked: Vec<usize> = (0..40).filter(|i| entries[*i].1).collect();
+    assert_eq!(marked, [39], "the active one is the marked one");
+
+    // Choosing one that is not in the row shows it, the row moved just far
+    // enough to hold it; and so for every tab, first to last.
+    for (at, title) in names.iter().enumerate() {
+        if list_closed(&harness, title) {
+            let list = row_button(&harness, "All tabs");
+            click_at(&mut harness, list.center(), egui::PointerButton::Primary);
+            harness.step();
+        }
+        // The list is longer than the window: the wheel brings the entry
+        // into its card.
+        let entry = wheel_to_entry(&mut harness, title);
+        click_at(&mut harness, entry.center(), egui::PointerButton::Primary);
+        settle(&mut harness);
+        assert_eq!(shown(&harness), at, "{title} is shown");
+        let row = layout(&harness);
+        assert!(row.shows(at), "{title} is in the row: {row:?}");
+        let tab = tab_rect(&harness, title);
+        assert!(strip.contains(tab.center()), "{tab:?} on the row");
+        assert!(
+            list_closed(&harness, title),
+            "the list closed on the choice"
+        );
+    }
+    // From the first tab on, each choice was one past the run's end.
+    let row = layout(&harness);
+    assert_eq!(row.first + row.count, 40, "{row:?}");
+
+    // A tab that is in the row is a click away, as ever.
+    let first_shown = &names[row.first];
+    let at = tab_rect(&harness, first_shown).center();
+    click_at(&mut harness, at, egui::PointerButton::Primary);
+    settle(&mut harness);
+    assert_eq!(shown(&harness), row.first);
+    assert_eq!(layout(&harness).first, row.first, "the row did not move");
+}
+
+/// Rolls the wheel over the open list of all tabs until the entry named
+/// `title` is whole inside the window, 8 px clear of its edges as the card
+/// is, and answers where it is then.
+fn wheel_to_entry(harness: &mut Harness<'_, RickUi>, title: &str) -> egui::Rect {
+    let entry = |harness: &Harness<'_, RickUi>| {
+        harness
+            .query_all_by_label(title)
+            .map(|n| n.rect())
+            .find(|r| (r.height() - 30.0).abs() < 1.0 && r.width() > 200.0)
+            .unwrap_or_else(|| panic!("{title} is not in the list"))
+    };
+    let room = harness.ctx.content_rect().shrink(16.0);
+    for _ in 0..200 {
+        let rect = entry(harness);
+        let dy = if rect.bottom() > room.bottom() {
+            -30.0
+        } else if rect.top() < room.top() {
+            30.0
+        } else {
+            return rect;
+        };
+        let over = egui::pos2(rect.center().x, room.center().y);
+        harness.event(egui::Event::PointerMoved(over));
+        harness.step();
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, dy),
+            modifiers: egui::Modifiers::default(),
+            phase: egui::TouchPhase::Move,
+        });
+        for _ in 0..3 {
+            harness.step();
+        }
+    }
+    panic!("{title} could not be scrolled into the list's card");
+}
+
+/// Whether the list of all tabs is closed: no entry of it named `title`.
+fn list_closed(harness: &Harness<'_, RickUi>, title: &str) -> bool {
+    !harness
+        .query_all_by_label(title)
+        .any(|n| (n.rect().height() - 30.0).abs() < 1.0 && n.rect().width() > 200.0)
+}
+
+/// Issue 221, item 4: reordering stays as *Dragging a tab* has it, among
+/// the tabs in the row and at the width they have. With tabs left out
+/// before the run the row shows, a tab dragged two places along lands two
+/// places along among all the tabs, not two places from the front.
+#[test]
+fn a_tab_dragged_along_a_row_that_leaves_tabs_out_lands_where_it_is_dropped() {
+    use ui_egui::tab_row::{TAB_GAP, TAB_MIN_WIDTH};
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let names: Vec<String> = (0..16).map(|i| format!("t{i:02}")).collect();
+    for name in &names {
+        fs::create_dir(dir.path().join(name)).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let mut harness = harness(&dir.path().join(&names[0]), egui::vec2(1280.0, 720.0));
+    for name in &names[1..] {
+        command(
+            &mut harness,
+            app::Command::NewTab(local(&dir.path().join(name))),
+        );
+    }
+    let row = harness
+        .state()
+        .tab_layout()
+        .unwrap_or_else(|| panic!("no tab row"));
+    assert!(row.overflow && row.first > 0 && row.count >= 4, "{row:?}");
+    assert_eq!(row.first + row.count, 16, "the active tab ends the row");
+
+    // The first tab of the run, two places to the right.
+    let moved = names[row.first].clone();
+    let from = tab_rect(&harness, &moved).center();
+    let to = from + egui::vec2(2.0 * (TAB_MIN_WIDTH + TAB_GAP), 0.0);
+    drag(&mut harness, from, to);
+    let mut expected = names.clone();
+    expected.remove(row.first);
+    expected.insert(row.first + 2, moved.clone());
+    assert_eq!(titles(&harness), expected, "two places along");
+    // A drag activates nothing: the window shows the tab it showed, and
+    // the dragged one is in the row where it landed.
+    assert_eq!(shown(&harness), 15);
+    let after = harness
+        .state()
+        .tab_layout()
+        .unwrap_or_else(|| panic!("no tab row"));
+    assert!(after.shows(row.first + 2), "{after:?}");
+    let tab = tab_rect(&harness, &moved);
+    assert!(
+        (tab.width() - TAB_MIN_WIDTH).abs() < 0.5,
+        "at the width the tabs have: {tab:?}"
     );
 }

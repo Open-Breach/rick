@@ -77,6 +77,17 @@ pub enum InstallError {
     /// Nothing to revert to.
     #[error("{0} has no previous version to revert to")]
     NoPrevious(String),
+    /// *Run* on an AppImage built for another machine.
+    #[error("this AppImage is built for {found}; this machine is {running}")]
+    AppImageArchitecture {
+        /// The AppImage's machine.
+        found: String,
+        /// The running machine.
+        running: String,
+    },
+    /// *Run* on a file that is named like an AppImage and is no program.
+    #[error("this file is named like an AppImage but is not a program: it has no ELF header")]
+    NotAProgram,
 }
 
 /// Wraps the installer's error in the kernel's.

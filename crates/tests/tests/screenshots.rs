@@ -1996,6 +1996,712 @@ fn screenshots_of_the_path_field() {
     }
 }
 
+/// Issue 219, item 6d: the breadcrumb bar at rest and under the pointer —
+/// the pane's toolbar row, cut out — in Comfortable, Compact and Dark, for
+/// the comparison with the breadcrumb bar of the three *Rick — refined*
+/// frames.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_address_bar() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let folder = dir.path().join("Apps").join("android-studio");
+    fs::create_dir_all(&folder).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(folder.join("studio.sh"), "#!/bin/sh\n").unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = shell(&folder, egui::vec2(1920.0, 1000.0));
+    for (theme, density, name) in [
+        (Theme::Light, Density::Comfortable, "comfortable"),
+        (Theme::Light, Density::Compact, "compact"),
+        (Theme::Dark, Density::Comfortable, "dark"),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        let model = harness.state().app().model();
+        let tab = model
+            .active_tab(model.focused)
+            .map_or_else(|| panic!("tab"), |(id, _)| id);
+        let row = harness
+            .state()
+            .toolbar_row(tab)
+            .unwrap_or_else(|| panic!("toolbar"));
+        let copy = harness.get_by_label("Copy path").rect();
+        for (state, pointer) in [
+            ("rest", egui::pos2(row.center().x, row.bottom() + 200.0)),
+            // On the empty part of the bar, right of the copy button.
+            ("hover", egui::pos2(copy.right() + 40.0, copy.center().y)),
+        ] {
+            harness.event(egui::Event::PointerMoved(pointer));
+            harness.step();
+            harness.step();
+            let image = harness
+                .render()
+                .unwrap_or_else(|e| panic!("no renderer for screenshots: {e}"));
+            let scale = harness.ctx.pixels_per_point();
+            // Truncation is the point: whole pixels of the row.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let (x, y, w, h) = (
+                (row.left() * scale) as u32,
+                (row.top() * scale) as u32,
+                (row.width() * scale) as u32,
+                (row.height() * scale) as u32,
+            );
+            let cut = image::imageops::crop_imm(&image, x, y, w, h).to_image();
+            let path = out_dir().join(format!(
+                "{}-address-bar-{name}-{state}.png",
+                std::env::consts::OS
+            ));
+            cut.save(&path).unwrap_or_else(|e| panic!("{e}"));
+            eprintln!("screenshot: {}", path.display());
+        }
+    }
+}
+
+/// A shell for the screenshots of issue 219: the text and hex previewers
+/// and the Git extension, in a window of `size`, with its platform.
+fn polish_shell(start: &Path, size: egui::Vec2) -> (Harness<'static, RickUi>, Arc<Fake>) {
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_preview_text::TextPreview::new()),
+            Arc::new(ext_preview_hex::HexPreview::new()),
+            Arc::new(ext_git::GitExtension::new()),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(start)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(size)
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| {
+            // Wide enough for the head of a File info card to read whole.
+            let mut ui = RickUi::new(app, host, &cc.egui_ctx);
+            ui.set_inspector_width(440.0);
+            ui
+        });
+    settle(&mut harness);
+    (harness, fake)
+}
+
+/// The two schemes the screenshots of issue 219 are taken in, with the
+/// name each has in a file name.
+const SCHEMES: [(Theme, &str); 2] = [(Theme::Light, "light"), (Theme::Dark, "dark")];
+
+/// Switches the scheme and lets the window settle.
+fn scheme(harness: &mut Harness<'_, RickUi>, theme: Theme) {
+    harness.state_mut().app_mut().handle(
+        app::Command::Settings(SettingsChange::Theme(theme)),
+        &mut Vec::new(),
+    );
+    settle(harness);
+}
+
+/// Presses and releases `button` at `at`, leaving the pointer there.
+fn press(harness: &mut Harness<'_, RickUi>, at: egui::Pos2, button: egui::PointerButton) {
+    harness.event(egui::Event::PointerMoved(at));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    harness.step();
+    harness.step();
+}
+
+/// Types `path` into the focused pane's path field and confirms it.
+fn type_path(harness: &mut Harness<'_, RickUi>, path: &str) {
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::L);
+    harness.step();
+    harness.step();
+    harness.event(egui::Event::Text(path.to_owned()));
+    harness.step();
+    harness.key_press(egui::Key::Enter);
+    settle(harness);
+}
+
+/// Opens the preview pane where it is not open.
+fn open_preview(harness: &mut Harness<'_, RickUi>) {
+    if !harness.state().inspector_open() {
+        let pane = harness.state().app().model().focused;
+        harness.state_mut().queue(Intent::ToggleInspector, pane);
+        harness.step();
+        settle(harness);
+    }
+}
+
+/// A Git working tree with a few files, one of them empty.
+fn polish_tree() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let git = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap_or_else(|e| panic!("git: {e}"));
+    assert!(git.status.success(), "git init");
+    let reports = dir.path().join("reports");
+    fs::create_dir(&reports).unwrap_or_else(|e| panic!("{e}"));
+    for (name, text) in [
+        ("notes.md", "# Day one\n\nA first note.\n"),
+        ("plan.txt", "The plan, in a few lines.\n"),
+        ("empty.txt", ""),
+    ] {
+        fs::write(dir.path().join(name), text).unwrap_or_else(|e| panic!("{e}"));
+    }
+    fs::write(reports.join("summary.txt"), "The summary of the year.\n")
+        .unwrap_or_else(|e| panic!("{e}"));
+    dir
+}
+
+/// Issue 219, item 2: the one tab of the one window has no close button,
+/// and with a second tab both have theirs. Light and Dark.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_tab_that_cannot_be_closed() {
+    let dir = polish_tree();
+    for (theme, name) in SCHEMES {
+        let (mut harness, _fake) = polish_shell(dir.path(), egui::vec2(1100.0, 420.0));
+        scheme(&mut harness, theme);
+        shoot(&mut harness, &format!("polish-tab-alone-{name}"));
+        harness.get_by_label("New tab").click();
+        harness.step();
+        settle(&mut harness);
+        shoot(&mut harness, &format!("polish-tab-with-another-{name}"));
+    }
+}
+
+/// Issue 219, item 3: a copy button a moment after its click — the tick
+/// in `status/success` and *Copied* — on a row of the hash dialogue.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_a_copy_buttons_answer() {
+    let dir = polish_tree();
+    for (theme, name) in SCHEMES {
+        let (mut harness, _fake) = polish_shell(dir.path(), egui::vec2(1100.0, 700.0));
+        scheme(&mut harness, theme);
+        select_named(&mut harness, "notes.md");
+        let pane = harness.state().app().model().focused;
+        harness
+            .state_mut()
+            .queue(Intent::Action(ext::ActionId("core.hash")), pane);
+        harness.step();
+        settle(&mut harness);
+        let copy = harness.get_by_label("Copy SHA-256").rect().center();
+        press(&mut harness, copy, egui::PointerButton::Primary);
+        harness.step();
+        shoot(&mut harness, &format!("polish-copy-answer-{name}"));
+    }
+}
+
+/// Issue 219, item 4: the context menu of a file in a Git folder in a
+/// window 400 px tall — as tall as fits, 8 px clear of the window's
+/// edges — as it opens and scrolled to its end.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_a_menu_that_scrolls() {
+    let dir = polish_tree();
+    for (theme, name) in SCHEMES {
+        let (mut harness, _fake) = polish_shell(dir.path(), egui::vec2(900.0, 400.0));
+        scheme(&mut harness, theme);
+        let row = harness.get_by_label("notes.md").rect().center();
+        press(&mut harness, row, egui::PointerButton::Secondary);
+        harness.step();
+        shoot(&mut harness, &format!("polish-menu-opened-{name}"));
+        let over = harness.get_by_label("Cut").rect().center();
+        harness.event(egui::Event::PointerMoved(over));
+        harness.step();
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -2000.0),
+            modifiers: egui::Modifiers::default(),
+            phase: egui::TouchPhase::Move,
+        });
+        for _ in 0..12 {
+            harness.step();
+        }
+        shoot(&mut harness, &format!("polish-menu-scrolled-{name}"));
+    }
+}
+
+/// Issue 219, item 5: an empty file in the preview pane — the File info
+/// card with *This file is empty* and **Move to trash**.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_an_empty_file() {
+    let dir = polish_tree();
+    for (theme, name) in SCHEMES {
+        let (mut harness, _fake) = polish_shell(dir.path(), egui::vec2(1300.0, 700.0));
+        scheme(&mut harness, theme);
+        open_preview(&mut harness);
+        select_named(&mut harness, "empty.txt");
+        for _ in 0..3 {
+            harness.step();
+        }
+        shoot(&mut harness, &format!("polish-empty-file-{name}"));
+    }
+}
+
+/// Issue 219, items 6a to 6c: the address bar in use — a file's path
+/// typed, with the file selected and previewed; a path whose last two
+/// folders do not exist, with the banner that names them; and the bar's
+/// menu with a path on the clipboard.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_address_bar_in_use() {
+    use platform::Clipboard as _;
+    let dir = polish_tree();
+    let reports = dir.path().join("reports");
+    for (theme, name) in SCHEMES {
+        let (mut harness, fake) = polish_shell(dir.path(), egui::vec2(1300.0, 700.0));
+        scheme(&mut harness, theme);
+        open_preview(&mut harness);
+        type_path(&mut harness, &reports.join("summary.txt").to_string_lossy());
+        for _ in 0..3 {
+            harness.step();
+        }
+        shoot(&mut harness, &format!("polish-address-file-{name}"));
+        type_path(
+            &mut harness,
+            &reports.join("2026").join("q3").to_string_lossy(),
+        );
+        shoot(&mut harness, &format!("polish-address-missing-{name}"));
+        fake.set_text(&dir.path().join("notes.md").to_string_lossy())
+            .unwrap_or_else(|e| panic!("{e}"));
+        let copy = harness.get_by_label("Copy path").rect();
+        press(
+            &mut harness,
+            egui::pos2(copy.right() + 60.0, copy.center().y),
+            egui::PointerButton::Secondary,
+        );
+        shoot(&mut harness, &format!("polish-address-menu-{name}"));
+    }
+}
+
+/// A shell for the screenshots of issue 221: `extensions` loaded, in a
+/// window of `size` at two pixels per point, with its platform.
+fn features_shell(
+    fake: &Arc<Fake>,
+    start: &Path,
+    size: egui::Vec2,
+    extensions: Vec<Arc<dyn ext::Extension>>,
+) -> Harness<'static, RickUi> {
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions,
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(start)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(size)
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| {
+            let mut ui = RickUi::new(app, host, &cc.egui_ctx);
+            ui.set_inspector_width(440.0);
+            ui
+        });
+    settle(&mut harness);
+    harness
+}
+
+/// A folder of photographs for the screenshots of issue 221: `photos`
+/// with eight pictures, a text file and a subfolder, beside a few papers.
+fn features_tree() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let photos = dir.path().join("photos");
+    fs::create_dir_all(photos.join("raw")).unwrap_or_else(|e| panic!("{e}"));
+    for (i, name) in [
+        "harbour", "lake", "market", "meadow", "old-town", "pier", "ridge", "terrace",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let shift = u32::try_from(i).unwrap_or(0) * 29;
+        let image = image::RgbImage::from_fn(480, 320, |x, y| {
+            let sky = 255 - u8::try_from(y * 255 / 320).unwrap_or(255);
+            let wave = u8::try_from((x + shift * 3) % 255).unwrap_or(0);
+            image::Rgb([
+                wave / 2 + 60,
+                sky / 2 + u8::try_from(shift % 90).unwrap_or(0),
+                sky,
+            ])
+        });
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image
+            .write_to(&mut bytes, image::ImageFormat::Jpeg)
+            .unwrap_or_else(|e| panic!("{e}"));
+        fs::write(photos.join(format!("{name}.jpg")), bytes.into_inner())
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    fs::write(
+        photos.join("notes.txt"),
+        "Day one: the harbour and the pier.\n",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    for name in ["budget.csv", "itinerary.md", "tickets.txt"] {
+        fs::write(dir.path().join(name), "x\n").unwrap_or_else(|e| panic!("{e}"));
+    }
+    dir
+}
+
+/// Steps until the thumbnails and the preview that are on their way have
+/// been drawn.
+fn drawn(harness: &mut Harness<'_, RickUi>) {
+    for _ in 0..6 {
+        settle(harness);
+        std::thread::sleep(Duration::from_millis(60));
+    }
+}
+
+/// Issue 221, item 2: *Set as desktop background* — the button after
+/// *Fit* and *1:1* in the preview pane's toolbar while it shows a photo,
+/// and the entry at the end of the Open group of the photo's menu.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_set_as_desktop_background() {
+    let dir = features_tree();
+    for (theme, name) in SCHEMES {
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let mut harness = features_shell(
+            &fake,
+            &dir.path().join("photos"),
+            egui::vec2(1300.0, 720.0),
+            vec![
+                Arc::new(ext_preview_text::TextPreview::new()),
+                Arc::new(ext_preview_image::ImagePreview::new()),
+            ],
+        );
+        scheme(&mut harness, theme);
+        // The folder of photos shows itself in Icons; the list reads
+        // better beside the menu.
+        let pane = harness.state().app().model().focused;
+        harness.state_mut().queue(Intent::ViewDetails, pane);
+        harness.step();
+        open_preview(&mut harness);
+        select_named(&mut harness, "lake.jpg");
+        drawn(&mut harness);
+        shoot(&mut harness, &format!("features-background-toolbar-{name}"));
+        let row = harness
+            .query_all_by_label("lake.jpg")
+            .next()
+            .unwrap_or_else(|| panic!("no row"))
+            .rect()
+            .center();
+        press(&mut harness, row, egui::PointerButton::Secondary);
+        harness.step();
+        shoot(&mut harness, &format!("features-background-menu-{name}"));
+    }
+}
+
+/// Issue 221, item 3: a folder of media shows itself in the Icons view,
+/// here in the size chosen last, Large.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_a_folder_of_media() {
+    let dir = features_tree();
+    for (theme, name) in SCHEMES {
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let mut harness = features_shell(
+            &fake,
+            dir.path(),
+            egui::vec2(1300.0, 720.0),
+            vec![Arc::new(ext_preview_image::ImagePreview::new())],
+        );
+        scheme(&mut harness, theme);
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::IconSize(model::IconSize::Large)),
+            &mut Vec::new(),
+        );
+        // The parent, in the view it has.
+        shoot(&mut harness, &format!("features-media-parent-{name}"));
+        let pane = harness.state().app().model().focused;
+        harness.state_mut().app_mut().handle(
+            app::Command::Navigate {
+                pane,
+                to: local(&dir.path().join("photos")),
+            },
+            &mut Vec::new(),
+        );
+        drawn(&mut harness);
+        shoot(&mut harness, &format!("features-media-folder-{name}"));
+    }
+}
+
+/// Issue 221, item 4: workspace tabs that outgrow the row — five of them
+/// shrunk together, and forty with the list of all of them open.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_tabs_that_outgrow_the_row() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let names: Vec<String> = [
+        "archive",
+        "billing",
+        "contracts",
+        "design",
+        "exports",
+        "fixtures",
+        "gallery",
+        "handbook",
+        "invoices",
+        "journal",
+        "keys",
+        "letters",
+        "minutes",
+        "notes",
+        "offers",
+        "papers",
+        "quotes",
+        "reports",
+        "scans",
+        "taxes",
+        "updates",
+        "vendors",
+        "website",
+        "x-rays",
+        "yearbook",
+        "zines",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .chain((1..=14).map(|i| format!("project-{i:02}")))
+    .collect();
+    for name in &names {
+        fs::create_dir(dir.path().join(name)).unwrap_or_else(|e| panic!("{e}"));
+    }
+    for (theme, scheme_name) in SCHEMES {
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let mut harness = features_shell(
+            &fake,
+            &dir.path().join(&names[0]),
+            egui::vec2(1280.0, 720.0),
+            Vec::new(),
+        );
+        scheme(&mut harness, theme);
+        let open = |harness: &mut Harness<'_, RickUi>, name: &String| {
+            harness.state_mut().app_mut().handle(
+                app::Command::NewTab(local(&dir.path().join(name))),
+                &mut Vec::new(),
+            );
+            settle(harness);
+        };
+        // Five still fit the row of a 1280 px window, narrower together.
+        for name in &names[1..5] {
+            open(&mut harness, name);
+        }
+        shoot(&mut harness, &format!("features-tabs-shrunk-{scheme_name}"));
+        for name in &names[5..] {
+            open(&mut harness, name);
+        }
+        // An early tab shown, so that its mark is in the list's first rows.
+        let model = harness.state().app().model();
+        let shown = model.workspaces(model.focused_window)[8].id;
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::ActivateWorkspace(shown), &mut Vec::new());
+        settle(&mut harness);
+        shoot(
+            &mut harness,
+            &format!("features-tabs-overflow-{scheme_name}"),
+        );
+        let list = harness.get_by_label("All tabs").rect().center();
+        press(&mut harness, list, egui::PointerButton::Primary);
+        harness.step();
+        shoot(&mut harness, &format!("features-tabs-list-{scheme_name}"));
+    }
+}
+
+/// Issue 221, item 5: a form field that took its value from the
+/// clipboard — *Git clone…* opened with a repository's URL on it.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_a_form_field_from_the_clipboard() {
+    use platform::Clipboard as _;
+    let dir = features_tree();
+    for (theme, name) in SCHEMES {
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let mut harness = features_shell(
+            &fake,
+            dir.path(),
+            egui::vec2(1300.0, 720.0),
+            vec![Arc::new(ext_git::GitExtension::new())],
+        );
+        scheme(&mut harness, theme);
+        fake.set_text("https://github.com/Open-Breach/rick.git")
+            .unwrap_or_else(|e| panic!("{e}"));
+        let pane = harness.state().app().model().focused;
+        harness
+            .state_mut()
+            .queue(Intent::Action(ext::ActionId("git.clone")), pane);
+        for _ in 0..8 {
+            harness.step();
+        }
+        harness.get_by_label("Clone repository");
+        shoot(&mut harness, &format!("features-clone-clipboard-{name}"));
+    }
+}
+
+/// The address bar's folded ancestors, listed on the menu card.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_folded_ancestors() {
+    let (_dir, deep) = sample_tree();
+    for (theme, name) in SCHEMES {
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let mut harness = features_shell(&fake, &deep, egui::vec2(760.0, 520.0), Vec::new());
+        scheme(&mut harness, theme);
+        let chevron = harness.get_by_label("Hidden ancestors").rect().center();
+        press(&mut harness, chevron, egui::PointerButton::Primary);
+        harness.step();
+        // The pointer on an entry, for its fill under the pointer.
+        let entry = harness.get_by_label("projects").rect().center();
+        harness.event(egui::Event::PointerMoved(entry));
+        harness.step();
+        harness.step();
+        shoot(&mut harness, &format!("menu-ancestors-{name}"));
+    }
+}
+
+/// The right-click menus of the side panel on the menu card of the file
+/// list: a place's, a section header's and a drive card's.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_side_panels_menus() {
+    let dir = features_tree();
+    let stick = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    for (theme, name) in SCHEMES {
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        fake.add_volume(platform::Volume {
+            name: "HOLIDAY".into(),
+            mount_point: stick.path().to_path_buf(),
+            kind: platform::VolumeKind::Removable,
+            fs_type: "exfat".into(),
+            device: Some("/dev/sdb1".into()),
+            total: Some(64 << 30),
+            free: Some(9 << 30),
+            read_only: false,
+        });
+        let mut harness = features_shell(&fake, dir.path(), egui::vec2(1100.0, 640.0), Vec::new());
+        scheme(&mut harness, theme);
+        drawn(&mut harness);
+        for (row, shot) in [
+            ("Documents", "place"),
+            ("This Machine", "header"),
+            ("HOLIDAY", "drive"),
+        ] {
+            // The row by its name; a drive's card is named with more.
+            let at = harness
+                .query_all_by_label(row)
+                .chain(harness.query_all_by_label_contains(row))
+                .map(|n| n.rect())
+                .next()
+                .unwrap_or_else(|| panic!("no row {row}"))
+                .center();
+            press(&mut harness, at, egui::PointerButton::Secondary);
+            harness.step();
+            harness.get_by_label("Open in new tab");
+            shoot(&mut harness, &format!("panel-menu-{shot}-{name}"));
+            harness.key_press(egui::Key::Escape);
+            harness.step();
+            harness.step();
+        }
+    }
+}
+
+/// Issue 221, item 6: the Properties dialogue of a drive — a USB stick
+/// with its volume, its capacity and its flags, and a read-only disc with
+/// the muted bar; and the menu of a drive card that opens it.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_a_drives_properties() {
+    let dir = features_tree();
+    let stick = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let disc = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let volume = |name: &str, mount: &Path, kind, fs: &str, device: &str| platform::Volume {
+        name: name.into(),
+        mount_point: mount.to_path_buf(),
+        kind,
+        fs_type: fs.into(),
+        device: Some(device.into()),
+        total: Some(64 << 30),
+        free: Some(9 << 30),
+        read_only: false,
+    };
+    for (theme, name) in SCHEMES {
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        fake.add_volume(volume(
+            "System",
+            dir.path(),
+            platform::VolumeKind::Fixed,
+            "ext4",
+            "/dev/nvme0n1p2",
+        ));
+        fake.add_volume(volume(
+            "HOLIDAY",
+            stick.path(),
+            platform::VolumeKind::Removable,
+            "exfat",
+            "/dev/sdb1",
+        ));
+        let mut optical = volume(
+            "Install disc",
+            disc.path(),
+            platform::VolumeKind::Optical,
+            "iso9660",
+            "/dev/sr0",
+        );
+        optical.total = Some(4 << 30);
+        optical.free = Some(0);
+        optical.read_only = true;
+        fake.add_volume(optical);
+        let mut harness = features_shell(&fake, dir.path(), egui::vec2(1300.0, 760.0), Vec::new());
+        scheme(&mut harness, theme);
+        drawn(&mut harness);
+        let card = |harness: &Harness<'_, RickUi>, drive: &str| {
+            harness
+                .query_all_by_label_contains(drive)
+                .map(|n| n.rect())
+                .min_by(|a, b| a.left().total_cmp(&b.left()))
+                .unwrap_or_else(|| panic!("no card for {drive}"))
+                .center()
+        };
+        let stick_card = card(&harness, "HOLIDAY");
+        press(&mut harness, stick_card, egui::PointerButton::Secondary);
+        harness.step();
+        shoot(&mut harness, &format!("features-drive-menu-{name}"));
+        harness.get_by_label("Properties").click();
+        for _ in 0..8 {
+            harness.step();
+        }
+        shoot(&mut harness, &format!("features-drive-properties-{name}"));
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        harness.step();
+        let disc_card = card(&harness, "Install disc");
+        press(&mut harness, disc_card, egui::PointerButton::Secondary);
+        harness.step();
+        harness.get_by_label("Properties").click();
+        for _ in 0..8 {
+            harness.step();
+        }
+        shoot(&mut harness, &format!("features-drive-read-only-{name}"));
+    }
+}
+
 /// Issue 60: the side panel — the Places rows with the Trash pill, the
 /// section headers, the drive cards and the operations drawer with two
 /// running jobs — in Light and Dark at both densities.
@@ -5098,6 +5804,159 @@ fn screenshots_of_the_list_view() {
             app::Command::Settings(SettingsChange::Theme(theme)),
         );
         shoot(&mut harness, &format!("list-view-{name}"));
+    }
+}
+
+/// The time slider in Light and Dark: at *Now*, at
+/// a past point (read-only), while reading, focused with a tick's tooltip,
+/// and the view options menu with its *Timeline* entry. For the design
+/// review that stands in for the Figma frame.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_time_slider() {
+    use tests::timeline::{SNAPSHOTS, Snapshots, write_tree};
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().join("docs");
+    write_tree(&root, &SNAPSHOTS);
+    let build = |delay: Duration| {
+        let source = Snapshots::new(&root, &SNAPSHOTS, delay);
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let host = Arc::new(EguiHost::new());
+        let app = app::App::new(app::Config {
+            platform: fake.clone(),
+            ui: host.clone(),
+            extensions: vec![source.extension()],
+            config_dir: Some(fake.config_dir()),
+            start: Some(local(&root)),
+        });
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1100.0, 560.0))
+            .with_pixels_per_point(2.0)
+            .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+        settle(&mut harness);
+        (harness, source)
+    };
+    let look = |harness: &mut Harness<'_, RickUi>, theme: Theme| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        settle(harness);
+    };
+    let click = |harness: &mut Harness<'_, RickUi>, at: egui::Pos2| {
+        harness.event(egui::Event::PointerMoved(at));
+        harness.step();
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            });
+            harness.step();
+        }
+        settle(harness);
+    };
+    for theme in [Theme::Light, Theme::Dark] {
+        let name = if theme == Theme::Light {
+            "light"
+        } else {
+            "dark"
+        };
+        let (mut harness, source) = build(Duration::ZERO);
+        look(&mut harness, theme);
+        let pane = harness.state().app().model().focused;
+        let tab = harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .map_or_else(|| panic!("no tab"), |(id, _)| id);
+
+        // The view options menu, the entry ticked once switched on.
+        harness.state_mut().queue(Intent::ToggleTimeline, pane);
+        settle(&mut harness);
+        let button = harness.get_by_label("View options").rect().center();
+        click(&mut harness, button);
+        harness.event(egui::Event::PointerMoved(egui::pos2(5.0, 540.0)));
+        harness.step();
+        shoot(&mut harness, &format!("timeline-menu-{name}"));
+        harness.key_press(egui::Key::Escape);
+        settle(&mut harness);
+
+        // At Now.
+        harness.event(egui::Event::PointerMoved(egui::pos2(5.0, 540.0)));
+        settle(&mut harness);
+        shoot(&mut harness, &format!("timeline-now-{name}"));
+
+        // Focused, the pointer resting on a tick.
+        let (_, axis) = harness
+            .state()
+            .timeline_bar(tab)
+            .unwrap_or_else(|| panic!("no bar"));
+        let axis = axis.unwrap_or_else(|| panic!("no axis"));
+        let model = harness.state().app().model();
+        let (timeline, _) = model
+            .timeline_points(pane)
+            .unwrap_or_else(|| panic!("no timeline"));
+        let xs = ui_egui::timeline_bar::positions(timeline, axis.left(), axis.right());
+        harness
+            .ctx
+            .memory_mut(|m| m.request_focus(ui_egui::timeline_bar::id(pane)));
+        harness.event(egui::Event::PointerMoved(egui::pos2(
+            xs[1],
+            axis.center().y,
+        )));
+        for _ in 0..6 {
+            harness.step();
+        }
+        shoot(&mut harness, &format!("timeline-focused-{name}"));
+
+        // At a past point: read-only, the file that is gone now selected.
+        harness
+            .ctx
+            .memory_mut(|m| m.surrender_focus(ui_egui::timeline_bar::id(pane)));
+        harness.state_mut().app_mut().handle(
+            app::Command::TimeTravel {
+                pane,
+                to: source.point("daily-wed", Path::new("")),
+                first: true,
+            },
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+        let lost = harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .and_then(|(_, t)| {
+                t.listing
+                    .rows()
+                    .find(|e| e.name == "lost-notes.md")
+                    .map(|e| e.id)
+            })
+            .unwrap_or_else(|| panic!("no lost-notes.md"));
+        harness.state_mut().app_mut().handle(
+            app::Command::Select {
+                pane,
+                change: SelectionChange::Set(vec![lost]),
+            },
+            &mut Vec::new(),
+        );
+        harness.event(egui::Event::PointerMoved(egui::pos2(5.0, 540.0)));
+        settle(&mut harness);
+        shoot(&mut harness, &format!("timeline-past-{name}"));
+
+        // Reading: a source that takes its time.
+        let (mut slow, _) = build(Duration::from_secs(5));
+        look(&mut slow, theme);
+        let pane = slow.state().app().model().focused;
+        slow.state_mut().queue(Intent::ToggleTimeline, pane);
+        for _ in 0..4 {
+            slow.step();
+        }
+        shoot(&mut slow, &format!("timeline-reading-{name}"));
     }
 }
 

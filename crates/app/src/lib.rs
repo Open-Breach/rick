@@ -83,6 +83,7 @@ mod places;
 pub mod plugins;
 mod session;
 pub mod settings;
+mod timeline;
 
 pub use command::{
     Command, ConnectionOp, Contents, Event, FolderContents, PropertiesInfo, TransferMode,
@@ -256,6 +257,13 @@ enum Msg {
         generation: u64,
         items: Vec<(EntryId, Decoration)>,
     },
+    /// A pane's timeline was read: the merged answer of its sources.
+    Timeline {
+        pane: PaneId,
+        generation: u64,
+        location: Location,
+        timeline: Option<ext::Timeline>,
+    },
     /// Something a pane's decorators depend on changed; decorate again.
     Invalidate {
         pane: PaneId,
@@ -309,6 +317,14 @@ enum Msg {
         /// read.
         permissions: Option<String>,
     },
+    /// The pane's file is empty: 0 bytes by its listing, and nothing read.
+    PreviewEmpty {
+        pane: PaneId,
+        generation: u64,
+        /// The file's mode string and `owner:group`, where they could be
+        /// read.
+        permissions: Option<String>,
+    },
     /// The pane's *Copy* read the file: its text, for the clipboard.
     PreviewText {
         result: Result<String, Error>,
@@ -355,6 +371,16 @@ enum Msg {
         tab: TabId,
         entry: Entry,
         location: Option<Location>,
+    },
+    /// `Command::GoTo`'s job answered: where the typed path leads, `None`
+    /// where the provider could not say or nothing of it exists.
+    WentTo {
+        pane: PaneId,
+        tab: TabId,
+        /// Where the tab was when the path was typed.
+        from: Location,
+        typed: Location,
+        reached: Option<Reached>,
     },
     /// The pause after the search box's last keystroke is over: ask the
     /// indexes.
@@ -439,6 +465,10 @@ const REVEAL_FOR: Duration = Duration::from_secs(5);
 /// keeps it out of its history, and Enter.
 /// The embedded console's action, `ext-action-terminal`'s *Open console*.
 const EMBEDDED_CONSOLE: ext::ActionId = ext::ActionId("terminal.console");
+/// *Run* on an AppImage, `ext-installer`'s action: what Enter and a
+/// double-click on an AppImage do where the plugin is loaded
+/// (specs/ext-installer.md "AppImages").
+const APPIMAGE_RUN: ext::ActionId = ext::ActionId("installer.run");
 /// How much of a file with the execute bit is read to tell a binary from
 /// a script.
 const PROGRAM_PROBE: u64 = 4096;
@@ -716,6 +746,8 @@ pub struct App {
     preview_with: BTreeMap<PaneId, (EntryId, ExtId)>,
     /// Thumbnails being rendered, so a cell asked for twice renders once.
     thumbnails: BTreeSet<(EntryId, u32)>,
+    /// The time slider's reads, answers and travels.
+    timelines: timeline::Timelines,
     /// Events from start-up, delivered on the first poll.
     pending: Vec<Event>,
     /// The forms actions will show once a job of theirs finishes
@@ -1085,6 +1117,7 @@ impl App {
             jobs,
             job_events,
             decor_jobs: JobRunner::new(),
+            timelines: timeline::Timelines::default(),
             mailbox,
             rx,
             live: BTreeMap::new(),
@@ -1679,6 +1712,7 @@ impl App {
                     }
                 }
             }
+            Command::GoTo { pane, to } => self.go_to(pane, to, events),
             Command::Open { pane, id } => self.open(pane, id, events),
             Command::Back(pane) => {
                 let before = self.selected_ids(pane);
@@ -1698,6 +1732,12 @@ impl App {
                     Self::selection_cleared(pane, before, events);
                 }
             }
+            Command::TimeTravel { pane, to, first } => {
+                let before = self.selection_len(pane);
+                self.time_travel(pane, to, first);
+                Self::selection_cleared(pane, before, events);
+            }
+            Command::ToggleTimeline(pane) => self.toggle_timeline(pane, events),
             Command::Transfer {
                 items,
                 from,
@@ -1746,6 +1786,13 @@ impl App {
             }
             Command::SetView { pane, mode } => {
                 self.model.set_view(pane, mode);
+                // A size that is chosen is the size *Icons* opens in from
+                // then on, here and after a restart (SPEC.md *View mode*).
+                if let model::ViewMode::Icons(size) = mode
+                    && self.model.settings.icon_size != size
+                {
+                    self.change_settings(SettingsChange::IconSize(size));
+                }
             }
             Command::Sort { pane, by, dir } => {
                 self.model.set_sort(pane, by, dir);
@@ -2915,11 +2962,12 @@ impl App {
     }
 
     /// Opens an entry as *Opening files* says (SPEC.md): a folder
-    /// navigates; a local archive enters as a read-only location through
-    /// the archive provider, which says in an internal job whether it
-    /// browses the file, unless `archives.on_open` is `system`; every other
-    /// file goes to the system default application. Nothing opens a
-    /// viewer: the preview pane is the only one.
+    /// navigates; a local AppImage is run by the installer's *Run*, where
+    /// that plugin is loaded; a local archive enters as a read-only
+    /// location through the archive provider, which says in an internal
+    /// job whether it browses the file, unless `archives.on_open` is
+    /// `system`; every other file goes to the system default application.
+    /// Nothing opens a viewer: the preview pane is the only one.
     fn open(&mut self, pane: PaneId, id: EntryId, events: &mut Vec<Event>) {
         let Some((tab_id, tab)) = self.model.active_tab(pane) else {
             return;
@@ -2934,6 +2982,26 @@ impl App {
             let to = tab.location_of(&entry);
             self.dispatch(Command::Navigate { pane, to }, events);
             return;
+        }
+        // An AppImage is run as its *Run* does, with the execute bit or
+        // without it: the installer says whether the file is one, sets
+        // the bit and makes its checks. Without the plugin an AppImage is
+        // the binary it is, below.
+        if tab.location.provider == ProviderId::LOCAL {
+            let ctx = ActionCtx {
+                pane,
+                location: tab.location.clone(),
+                selection: vec![entry.clone()],
+                invoked_from: Invocation::Shortcut,
+                other: None,
+            };
+            let runs = self.registry.actions().iter().any(|action| {
+                action.id() == APPIMAGE_RUN && action.availability(&ctx) == Availability::Enabled
+            });
+            if runs {
+                self.run(APPIMAGE_RUN, ctx, events);
+                return;
+            }
         }
         // A local file with the execute bit is a program, where that bit
         // means one: it is started, not handed to the system (SPEC.md
@@ -3767,6 +3835,7 @@ impl App {
                     decorator.invalidate(&live.key.location);
                 }
             }
+            self.forget_timeline(&key.location);
             let stale = self
                 .model
                 .active_tab(pane)
@@ -3916,6 +3985,7 @@ impl App {
                 children: BTreeMap::new(),
             },
         );
+        self.sync_timeline(pane);
     }
 
     /// Whether `location` can be searched beneath (SPEC.md, *Footer*):
@@ -4293,12 +4363,36 @@ impl App {
     }
 
     /// Runs the pane's decorators over `entries`, records what they answer at
-    /// once and routes what they publish later through the mailbox.
+    /// once and routes what they publish later through the mailbox. An
+    /// empty batch asks nobody.
     fn decorate(&mut self, pane: PaneId, entries: &[Entry], events: &mut Vec<Event>) {
+        if !entries.is_empty() {
+            self.decorate_folder(pane, entries, events);
+        }
+    }
+
+    /// Batches are decorated as they come; a folder listed without entries
+    /// had no batch, and its decorators are asked once, with none.
+    fn decorate_if_empty(&mut self, pane: PaneId, events: &mut Vec<Event>) {
+        if self
+            .model
+            .active_tab(pane)
+            .is_some_and(|(_, tab)| tab.listing.entries().is_empty())
+        {
+            self.decorate_folder(pane, &[], events);
+        }
+    }
+
+    /// The same for all of the folder's entries, once its listing is
+    /// complete: also when it has none, so that a decorator whose answers
+    /// are about the folder itself starts its reads there too (the ZFS
+    /// plugin reads the folder's snapshots, which *Browse snapshots*
+    /// needs, in a job it starts from `decorate`).
+    fn decorate_folder(&mut self, pane: PaneId, entries: &[Entry], events: &mut Vec<Event>) {
         let Some(live) = self.live.get(&pane) else {
             return;
         };
-        if live.decorators.is_empty() || entries.is_empty() {
+        if live.decorators.is_empty() {
             return;
         }
         let generation = live.generation;
@@ -4365,7 +4459,7 @@ impl App {
             .model
             .active_tab(pane)
             .map_or_default(|(_, tab)| tab.listing.entries().to_vec());
-        self.decorate(pane, &entries, events);
+        self.decorate_folder(pane, &entries, events);
     }
 
     // One arm per message: the enum is the table.
@@ -4566,6 +4660,19 @@ impl App {
                         plugin,
                         permissions,
                     });
+                }
+            }
+            Msg::PreviewEmpty {
+                pane,
+                generation,
+                permissions,
+            } => {
+                if self
+                    .preview
+                    .get(&pane)
+                    .is_some_and(|job| job.generation == generation)
+                {
+                    events.push(Event::PreviewEmpty { pane, permissions });
                 }
             }
             Msg::PreviewCapped {
@@ -4824,6 +4931,42 @@ impl App {
                     None => self.open_default(pane, entry, events),
                 }
             }
+            Msg::WentTo {
+                pane,
+                tab,
+                from,
+                typed,
+                reached,
+            } => {
+                // The pane may have moved on since; then the answer is moot.
+                if !self
+                    .model
+                    .active_tab(pane)
+                    .is_some_and(|(id, t)| id == tab && t.location == from)
+                {
+                    return;
+                }
+                let Some(reached) = reached else {
+                    self.dispatch(Command::Navigate { pane, to: typed }, events);
+                    return;
+                };
+                self.dispatch(
+                    Command::Navigate {
+                        pane,
+                        to: reached.folder,
+                    },
+                    events,
+                );
+                // After the navigation, which forgets what the tab said of
+                // the place it left.
+                self.model.set_missing(pane, reached.missing);
+                if let Some(name) = reached.file {
+                    // Selected once it is listed, as `rick reveal` selects.
+                    self.reveal_pending
+                        .insert(pane, (vec![name], std::time::Instant::now()));
+                    self.resolve_reveal(pane, false, events);
+                }
+            }
             Msg::Trash(Ok((items, size))) => {
                 let changed = self.model.trash.items != items || !self.model.trash.listed;
                 let share = self.trash_share(&items, size);
@@ -4860,14 +5003,20 @@ impl App {
                 self.integration_applied(results, relaunch, events);
             }
             Msg::Invalidate { pane, generation } => {
-                if self
-                    .live
-                    .get(&pane)
-                    .is_some_and(|l| l.generation == generation)
+                if let Some(live) = self.live.get(&pane)
+                    && live.generation == generation
                 {
+                    let location = live.key.location.clone();
+                    self.forget_timeline(&location);
                     self.redecorate(pane, events);
                 }
             }
+            Msg::Timeline {
+                pane,
+                generation,
+                location,
+                timeline,
+            } => self.timeline_read(pane, generation, location, timeline, events),
         }
     }
 
@@ -5128,9 +5277,20 @@ impl App {
         if live.generation != generation {
             return;
         }
+        let location = live.key.location.clone();
+        match result {
+            Err(error) if self.travel_missed(pane, &location, error, events) => {
+                self.sync_panes(events);
+                return;
+            }
+            Err(_) => {}
+            Ok(()) => self.travel_arrived(pane),
+        }
+        let Some(live) = self.live.get_mut(&pane) else {
+            return;
+        };
         live.complete = true;
         let buffered = live.buffer.take();
-        let location = live.key.location.clone();
         // A remote location that cannot be reached keeps the pane where it
         // is, with the card and *Retry* (SPEC.md *Removed and unreachable
         // locations*). Any other failure is the tab's banner with *Retry*,
@@ -5172,6 +5332,12 @@ impl App {
                 Vec::new()
             }
         };
+        if result.is_ok() {
+            self.decorate_if_empty(pane, events);
+            // The listing is complete: a folder of media shows itself in
+            // Icons, decided once for the tab's stay in it.
+            self.model.media_view(pane);
+        }
         self.resolve_reveal(pane, true, events);
         // The Cloud overview's rows are the side panel's Cloud rows too, and
         // the Network overview's provider rows its Network rows (the
@@ -5297,11 +5463,52 @@ impl App {
             return;
         }
         if let Some(ids) = self.model.select(pane, SelectionChange::Set(ids)) {
-            events.push(Event::SelectionChanged { pane, ids });
+            events.push(Event::SelectionChanged {
+                pane,
+                ids: ids.clone(),
+            });
+            events.push(Event::Revealed { pane, ids });
         }
         if properties {
             self.show_properties(pane, events);
         }
+    }
+
+    /// Goes where a path typed into the path bar leads
+    /// ([`Command::GoTo`]): a job asks the provider what the path is and,
+    /// where it is not there, which of its folders is the deepest that
+    /// exists; [`Msg::WentTo`] navigates. A `rick://` view, and a path on a
+    /// provider that is not mounted, is navigated to as it always was.
+    fn go_to(&mut self, pane: PaneId, to: Location, events: &mut Vec<Event>) {
+        let Some((tab, from)) = self
+            .model
+            .active_tab(pane)
+            .map(|(id, tab)| (id, tab.location.clone()))
+        else {
+            return;
+        };
+        let provider = (to.provider != ProviderId::RICK)
+            .then(|| self.mounts.provider(to.provider))
+            .flatten();
+        let Some(provider) = provider else {
+            self.dispatch(Command::Navigate { pane, to }, events);
+            return;
+        };
+        let tx = self.mailbox.clone();
+        let handle = self
+            .jobs
+            .spawn_named(format!("Go to {}", to.path), move |_job| async move {
+                let reached = reach(&*provider, &to).await;
+                tx.send(Msg::WentTo {
+                    pane,
+                    tab,
+                    from,
+                    typed: to,
+                    reached,
+                });
+                Ok(())
+            });
+        self.internal.insert(handle.id);
     }
 
     /// Keeps each console and the explorer tab it was opened from in step
@@ -5900,6 +6107,18 @@ impl PreviewRun {
             tx,
         } = self;
         let sniff = ext::read_bytes(&*provider, &loc, Some(4096), &cancel).await?;
+        // An empty file is given to no previewer (SPEC.md *An empty
+        // file*). The size alone does not decide: a file of 0 bytes that
+        // reads content, as the files of /proc do, has its previewer.
+        if entry.kind == EntryKind::File && entry.size == Some(0) && sniff.is_empty() {
+            let permissions = permissions_of(platform, local, entry.kind.clone()).await;
+            tx.send(Msg::PreviewEmpty {
+                pane,
+                generation,
+                permissions,
+            });
+            return Ok(());
+        }
         let Some(previewer) = choose_previewer(&previewers, with, &entry, &sniff) else {
             let permissions = permissions_of(platform, local, entry.kind.clone()).await;
             tx.send(Msg::PreviewNone {
@@ -5953,6 +6172,83 @@ impl PreviewRun {
         });
         Ok(())
     }
+}
+
+/// Where a typed path leads ([`reach`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Reached {
+    /// The folder the pane goes to.
+    folder: Location,
+    /// The name of the file to select there: the path named a file.
+    file: Option<Vec<u8>>,
+    /// The rest of the path, which does not exist under `folder`.
+    missing: Option<String>,
+}
+
+/// Follows a typed path as far as it exists (SPEC.md *A file's path*, *A
+/// path that exists only in part*), by asking the provider what each
+/// place is. A folder is itself; a file is its folder with the file to
+/// select; a path that is not there is the deepest of its folders that
+/// is, with the rest as what is missing. A link counts as a folder,
+/// which is what navigating to one has always assumed.
+///
+/// `None` where the provider cannot say — any answer but "it is there" or
+/// "it is not there": a host that does not answer, a folder that refuses
+/// — and where nothing of the path exists.
+async fn reach(provider: &dyn ext::Provider, to: &Location) -> Option<Reached> {
+    let folder = |entry: &Entry| matches!(entry.kind, EntryKind::Dir | EntryKind::Symlink { .. });
+    match provider.stat(to).await {
+        Ok(entry) if folder(&entry) => {
+            return Some(Reached {
+                folder: to.clone(),
+                file: None,
+                missing: None,
+            });
+        }
+        Ok(_) => {
+            return Some(Reached {
+                folder: Location::new(to.provider, to.path.parent()?),
+                file: Some(to.path.file_name()?.to_vec()),
+                missing: None,
+            });
+        }
+        Err(Error::NotFound) => {}
+        Err(_) => return None,
+    }
+    let mut at = to.path.parent();
+    while let Some(path) = at {
+        let here = Location::new(to.provider, path.clone());
+        match provider.stat(&here).await {
+            Ok(entry) if folder(&entry) => {
+                return Some(Reached {
+                    missing: Some(rest_of(&to.path, &path)),
+                    folder: here,
+                    file: None,
+                });
+            }
+            // A file in the way is no folder to go to.
+            Ok(_) | Err(Error::NotFound) => at = path.parent(),
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+/// What of `whole` comes after its ancestor `folder`, as it was written:
+/// `reports/2026/q3` of `/home/serge/reports/2026/q3/` after
+/// `/home/serge`, with the separators the path has.
+fn rest_of(whole: &VPath, folder: &VPath) -> String {
+    let is_separator = |byte: &u8| matches!(byte, b'/' | b'\\');
+    let rest = whole
+        .as_bytes()
+        .strip_prefix(folder.as_bytes())
+        .unwrap_or(whole.as_bytes());
+    let start = rest.iter().position(|b| !is_separator(b)).unwrap_or(0);
+    let end = rest
+        .iter()
+        .rposition(|b| !is_separator(b))
+        .map_or(rest.len(), |last| last + 1);
+    String::from_utf8_lossy(&rest[start..end.max(start)]).into_owned()
 }
 
 /// The entry as a path on this machine, for an entry of the local

@@ -237,6 +237,9 @@ fn cloud_table(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, entries: &[Entry], glyph:
 /// Selection, opening and the new-tab shortcuts of an overview row.
 fn row_interaction(cx: &mut PaneCx<'_>, entry: &Entry, response: &egui::Response) {
     let location: Location = cx.tab.location_of(entry);
+    // The drive the row stands for, in the This Machine overview.
+    let volume = volume_of(cx, entry).cloned();
+    let format_tool = cx.app.platform().has_format_tool();
     if response.double_clicked() {
         cx.requests.push(Request::Command(Command::Navigate {
             pane: cx.pane,
@@ -259,17 +262,23 @@ fn row_interaction(cx: &mut PaneCx<'_>, entry: &Entry, response: &egui::Response
     if !cx.focused && (response.clicked() || response.middle_clicked()) {
         cx.requests.push(Request::FocusPane(cx.pane));
     }
-    response.clone().context_menu(|ui| {
-        if ui.button(t!("open")).clicked() {
+    // The menu card of the file list (SPEC.md *Context menu*). A drive's
+    // row has what its card in the side panel has: Eject, Format… and
+    // Properties.
+    crate::menus::card(response, |ui| {
+        if crate::menus::item(ui, Some(icons::FOLDER_OPEN), &t!("open")).clicked() {
             cx.requests.push(Request::Command(Command::Navigate {
                 pane: cx.pane,
                 to: location.clone(),
             }));
             ui.close();
         }
-        if ui.button(t!("open-in-new-tab")).clicked() {
+        if crate::menus::item(ui, None, &t!("open-in-new-tab")).clicked() {
             cx.requests.push(Request::NewTabAt(location.clone()));
             ui.close();
+        }
+        if let Some(volume) = &volume {
+            crate::menus::drive_items(ui, volume, format_tool, cx.requests);
         }
     });
 }

@@ -77,6 +77,8 @@ pub const PIN: &str = ph::PUSH_PIN;
 pub const UNPIN: &str = ph::PUSH_PIN_SLASH;
 /// Recent.
 pub const RECENT: &str = ph::CLOCK_COUNTER_CLOCKWISE;
+/// The time slider under the toolbar and its view options entry.
+pub const TIMELINE: &str = ph::CLOCK_COUNTER_CLOCKWISE;
 /// Network.
 pub const NETWORK: &str = ph::NETWORK;
 /// Trash.
@@ -200,6 +202,9 @@ pub const DOCUMENT: &str = ph::FILE_TEXT;
 pub const CODE: &str = ph::CODE;
 /// The app launcher entry among the integration items.
 pub const DESKTOP: &str = ph::DESKTOP;
+/// *Set as desktop background*, in the context menu and the preview
+/// pane's toolbar.
+pub const MONITOR: &str = ph::MONITOR;
 /// The EXIF badge.
 pub const CAMERA: &str = ph::CAMERA;
 /// The Git badge.

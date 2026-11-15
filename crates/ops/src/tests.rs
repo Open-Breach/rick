@@ -456,6 +456,67 @@ fn copy_path_open_and_reveal_go_to_the_platform() {
     assert_eq!(h.fake.opened()[2], dir);
 }
 
+/// Set as desktop background (SPEC.md, under Functions): offered for
+/// exactly one selected image file of the local file system in a format
+/// the desktop takes, and for nothing on a desktop that takes none. It
+/// hands the desktop the file where it lies, and what the desktop answers
+/// is the action's error.
+#[test]
+fn set_as_desktop_background_is_for_one_image_the_desktop_takes() {
+    let h = harness();
+    let dir = h.dir.path().join("pictures");
+    fs::create_dir_all(dir.join("album.jpg")).unwrap_or_else(|e| panic!("{e}"));
+    for name in [
+        "lake.jpg",
+        "Hill.JPEG",
+        "tree.png",
+        "scan.tiff",
+        "notes.txt",
+    ] {
+        write(&dir.join(name), "x");
+    }
+    let action = h.action("core.set_desktop_background");
+    let shows = |names: &[&str]| {
+        let paths: Vec<std::path::PathBuf> = names.iter().map(|name| dir.join(name)).collect();
+        let paths: Vec<&Path> = paths.iter().map(std::path::PathBuf::as_path).collect();
+        action.availability(&h.ctx(&dir, &paths))
+    };
+    // The desktop of the tests takes JPEG and PNG.
+    assert_eq!(shows(&["lake.jpg"]), Availability::Enabled);
+    assert_eq!(shows(&["Hill.JPEG"]), Availability::Enabled, "by any case");
+    assert_eq!(shows(&["tree.png"]), Availability::Enabled);
+    assert_eq!(shows(&["scan.tiff"]), Availability::Hidden, "not taken");
+    assert_eq!(shows(&["notes.txt"]), Availability::Hidden);
+    assert_eq!(shows(&["album.jpg"]), Availability::Hidden, "a folder");
+    assert_eq!(shows(&["lake.jpg", "tree.png"]), Availability::Hidden);
+    assert_eq!(shows(&[]), Availability::Hidden);
+    // A file that is not on the local file system.
+    let mut elsewhere = h.ctx(&dir, &[&dir.join("lake.jpg")]);
+    for entry in &mut elsewhere.selection {
+        entry.id.provider = types::ProviderId("mem");
+    }
+    assert_eq!(action.availability(&elsewhere), Availability::Hidden);
+
+    // It points the desktop at the file where it lies.
+    let lake = dir.join("lake.jpg");
+    h.run("core.set_desktop_background", h.ctx(&dir, &[&lake]));
+    assert_eq!(h.fake.desktop_backgrounds(), std::slice::from_ref(&lake));
+
+    // What the desktop answers is the action's error.
+    h.fake.set_background_refusal(Some("the desktop said no"));
+    let refused = action.run(h.ctx(&dir, &[&lake]), &h.jobs, &h.ui);
+    assert!(
+        matches!(&refused, Err(error) if error.to_string().contains("the desktop said no")),
+        "the refusal is the error"
+    );
+    assert_eq!(h.fake.desktop_backgrounds(), std::slice::from_ref(&lake));
+
+    // A desktop Rick cannot set takes no format: nothing is offered.
+    h.fake.set_background_formats(&[]);
+    assert_eq!(shows(&["lake.jpg"]), Availability::Hidden);
+    assert_eq!(shows(&["tree.png"]), Availability::Hidden);
+}
+
 #[test]
 fn mount_shows_on_the_images_this_platform_mounts_and_goes_through_it() {
     use platform::{ImageFormat, Volumes as _};
@@ -531,13 +592,13 @@ fn mount_shows_on_the_images_this_platform_mounts_and_goes_through_it() {
 #[test]
 fn every_action_has_an_id_label_and_core_group() {
     let h = harness();
-    assert_eq!(h.registry.actions().len(), 26);
+    assert_eq!(h.registry.actions().len(), 27);
     for action in h.registry.actions() {
         assert!(action.id().0.starts_with("core."), "{}", action.id().0);
         assert_ne!(action.label(), "");
         assert_eq!(action.group(), ext::ActionGroup::Core);
-        // Pin, Unpin, Open containing folder, Compute hash and Mount have
-        // no shortcut in the spec's tables; New file lost Mod+N to New
+        // Pin, Unpin, Open containing folder, Compute hash, Mount and Set
+        // as desktop background have no shortcut in the spec's tables; New file lost Mod+N to New
         // window (QUESTIONS.md 66).
         let unbound = matches!(
             action.id().0,
@@ -550,6 +611,7 @@ fn every_action_has_an_id_label_and_core_group() {
                 | "core.hash"
                 | "core.mount"
                 | "core.download"
+                | "core.set_desktop_background"
         );
         assert_eq!(
             action.default_shortcut().is_some(),

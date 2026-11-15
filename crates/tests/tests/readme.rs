@@ -55,10 +55,12 @@ fn quoted(spec: &str, heading: &str) -> Vec<String> {
 #[test]
 fn the_regenerated_parts_are_what_the_release_registers() {
     let text = read("README.md");
+    // The installer's feature item is worded in the spec and nowhere else.
+    let spec = read("specs/readme.md");
     let platforms = readme::release_platforms(&read(".github/workflows/release.yml"));
     assert!(!platforms.is_empty(), "no platform in release.yml");
     if std::env::var_os("RICK_README_WRITE").is_some() {
-        let new = readme::regenerate(&text, VERSION, &facts(), &platforms)
+        let new = readme::regenerate(&text, &spec, VERSION, &facts(), &platforms)
             .unwrap_or_else(|e| panic!("{e}"));
         fs::write(root().join("README.md"), new).unwrap_or_else(|e| panic!("{e}"));
         return;
@@ -71,8 +73,8 @@ fn the_regenerated_parts_are_what_the_release_registers() {
         );
         return;
     }
-    let expected =
-        readme::regenerate(&text, VERSION, &facts(), &platforms).unwrap_or_else(|e| panic!("{e}"));
+    let expected = readme::regenerate(&text, &spec, VERSION, &facts(), &platforms)
+        .unwrap_or_else(|e| panic!("{e}"));
     for name in [STATUS, FEATURES, FILE_TYPES, INSTALL] {
         assert_eq!(
             readme::block(&text, name),
@@ -139,7 +141,7 @@ fn the_facts_are_read_from_the_registries() {
     once.sort();
     once.dedup();
     assert_eq!(once.len(), facts.previews.len(), "a type is named twice");
-    assert_eq!(facts.storage, ["Archives", "SSH"]);
+    assert_eq!(facts.storage, ["Archives", "SSH", "ZFS"]);
     assert_eq!(facts.cloud, ["S3", "Azure Blob", "Google Cloud Storage"]);
     assert_eq!(
         facts.search,
@@ -230,6 +232,13 @@ fn the_readme_has_the_structure_of_its_spec() {
     let features = readme::block(&text, FEATURES).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(features.lines().count(), 6);
     assert!(features.lines().all(|line| line.starts_with("- ")));
+    // The installer's item is the spec's sentence, word for word, with
+    // its opening in bold.
+    let installer = readme::fixed_wording(&spec, 5).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        features.lines().nth(4).map(|line| line.replace("**", "")),
+        Some(format!("- {installer} Linux only."))
+    );
 
     let (_, after) = text
         .split_once("\nComing:\n\n")

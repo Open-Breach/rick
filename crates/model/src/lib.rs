@@ -23,6 +23,7 @@ mod panel;
 pub mod placement;
 mod session;
 mod settings;
+mod timeline;
 mod tree;
 
 use std::collections::hash_map::Entry as Slot;
@@ -35,7 +36,8 @@ pub use integration::{
     day_of, decline, fold_check, reset_choices, set_up,
 };
 pub use listing::{
-    Column, FOLDER_TYPE, Group, IconSize, Listing, Sort, SortDir, ViewMode, ViewSpec, type_of,
+    Column, FOLDER_TYPE, Group, IconSize, Listing, Sort, SortDir, ViewMode, ViewSpec, is_media,
+    type_of,
 };
 pub use panel::{DEFAULT_PLACE_ICON, Place, Places, TrashView};
 pub use platform::{TrashedItem, Volume, VolumeKind};
@@ -50,6 +52,7 @@ pub use settings::{
     SidePanel, SidePanelChange, TextPreview, Theme, TitlebarColour, WindowFrame, WindowSettings,
     parse_location,
 };
+pub use timeline::{PaneTimeline, TimelineState};
 pub use tree::{Tree, TreeRow};
 use types::{
     Conflict, ConflictId, Entry, EntryId, ExtId, JobId, Location, Progress, ProviderId, Question,
@@ -291,6 +294,10 @@ impl Dock {
 pub struct Pane {
     tabs: Vec<TabId>,
     active: Option<TabId>,
+    /// The time slider's toggle, saved with the session.
+    timeline_shown: bool,
+    /// What is known about the timeline of the folder the pane shows.
+    timeline: PaneTimeline,
 }
 
 impl Pane {
@@ -360,6 +367,26 @@ pub struct ConnectionLost {
     pub retries: u8,
 }
 
+/// What *Icons view for a folder of media* did for a tab's stay in its
+/// folder (SPEC.md, under Functions).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MediaView {
+    /// The rule has looked at this folder: it looks once per stay, when
+    /// the listing is complete, and not again as files come and go.
+    decided: bool,
+    /// The view the tab had before the folder switched it to Icons, which
+    /// leaving puts back; `None` when the folder did not switch it.
+    before: Option<ViewMode>,
+}
+
+impl MediaView {
+    /// Whether the folder switched the tab to Icons.
+    #[must_use]
+    pub fn switched(&self) -> bool {
+        self.before.is_some()
+    }
+}
+
 /// One tab: a location and everything shown for it. An explorer shows the
 /// location's entries; the preview tab carries a location for form's sake
 /// and lists nothing.
@@ -409,6 +436,15 @@ pub struct Tab {
     /// A note for the status line: why the tab is not where the session
     /// left it. Cleared by the next navigation.
     pub note: Option<String>,
+    /// The rest of a typed path that does not exist under this folder,
+    /// `reports/2026/q3`: the tab went to the deepest folder of the path
+    /// that exists, and the banner over the list says what is missing,
+    /// without *Retry* (SPEC.md *A path that exists only in part*).
+    /// Cleared by the next navigation.
+    pub missing: Option<String>,
+    /// What *Icons view for a folder of media* did for the tab's stay in
+    /// this folder. Not saved: a restored tab enters its folder anew.
+    pub media: MediaView,
     /// Why the location could not be listed, shown as a banner with
     /// *Retry* over the empty list (a connection that failed, a folder that
     /// refused); cleared by the next listing that works.
@@ -446,6 +482,8 @@ impl Tab {
             scroll: 0.0,
             columns: BTreeMap::new(),
             note: None,
+            missing: None,
+            media: MediaView::default(),
             failure: None,
             lost: None,
             title: None,
@@ -555,7 +593,52 @@ impl Tab {
         self.tree.clear();
         self.scroll = 0.0;
         self.note = None;
+        self.missing = None;
         self.lost = None;
+        // The view a folder of media gave the tab ends with the stay, and
+        // so does a view picked by hand under it.
+        self.view = self.own_view();
+        self.media = MediaView::default();
+    }
+
+    /// The view that is the tab's own: the one it had before a folder of
+    /// media switched it to Icons, the one it has otherwise. It is what
+    /// the session keeps, so a restored tab enters its folder with it.
+    #[must_use]
+    pub fn own_view(&self) -> ViewMode {
+        self.media.before.unwrap_or(self.view)
+    }
+
+    /// *Icons view for a folder of media* (SPEC.md, under Functions),
+    /// called when the folder's listing is complete. It decides once per
+    /// stay: when at least 80 % of the files the tab lists are media —
+    /// folders aside, and a folder without files stays as it is — the tab
+    /// shows Icons in `size`, the size chosen last, and remembers the
+    /// view it had. Returns whether the view changed. One pass over what
+    /// is listed already; nothing is read.
+    pub fn media_view(&mut self, size: IconSize) -> bool {
+        if self.media.decided || !self.kind.lists() {
+            return false;
+        }
+        self.media.decided = true;
+        let (mut files, mut media) = (0_usize, 0_usize);
+        for entry in self.rows() {
+            if entry.kind == types::EntryKind::File {
+                files += 1;
+                media += usize::from(is_media(entry));
+            }
+        }
+        if files == 0 || media * 5 < files * 4 {
+            return false;
+        }
+        self.media.before = Some(self.view);
+        let icons = ViewMode::Icons(size);
+        let changed = self.view != icons;
+        self.view = icons;
+        if changed {
+            self.rebuild_tree();
+        }
+        changed
     }
 
     /// The view specification this tab's listing follows.
@@ -1018,6 +1101,7 @@ impl Model {
             Pane {
                 tabs: vec![tab],
                 active: Some(tab),
+                ..Pane::default()
             },
         );
         let w = self.windows.get_mut(&window)?;
@@ -1051,6 +1135,7 @@ impl Model {
             Pane {
                 tabs: vec![tab],
                 active: Some(tab),
+                ..Pane::default()
             },
         );
         self.tabs.insert(tab, Tab::new(location, &self.settings));
@@ -1087,6 +1172,7 @@ impl Model {
             Pane {
                 tabs: vec![tab],
                 active: Some(tab),
+                ..Pane::default()
             },
         );
         (pane, tab)
@@ -1189,11 +1275,26 @@ impl Model {
         true
     }
 
+    /// Whether closing a workspace does anything: every workspace can be
+    /// closed but the last one of the last window, which stays
+    /// ([`Model::close_workspace`]). Its tab is the one drawn without a
+    /// close button (SPEC.md *Workspace tabs*, *The tab that cannot be
+    /// closed*).
+    #[must_use]
+    pub fn can_close_workspace(&self, id: WorkspaceId) -> bool {
+        self.window_of_workspace(id)
+            .and_then(|window| self.windows.get(&window))
+            .is_some_and(|w| w.workspaces.len() > 1 || self.windows.len() > 1)
+    }
+
     /// Closes a workspace with every pane and tab in it; the neighbour
     /// after it, else before it, is shown. A window left without a
     /// workspace closes unless it is the last one, whose last workspace
     /// stays. Returns whether it closed.
     pub fn close_workspace(&mut self, id: WorkspaceId) -> bool {
+        if !self.can_close_workspace(id) {
+            return false;
+        }
         let Some(window) = self.window_of_workspace(id) else {
             return false;
         };
@@ -1201,7 +1302,7 @@ impl Model {
             return false;
         };
         if w.workspaces.len() < 2 {
-            return self.windows.len() > 1 && self.close_window(window);
+            return self.close_window(window);
         }
         let panes: Vec<PaneId> = w
             .workspaces
@@ -1411,6 +1512,7 @@ impl Model {
             let mut pane_id = None;
             for (i, saved_tab) in saved_pane.tabs.iter().enumerate() {
                 let (pane, tab) = self.pane_with_tab(saved_tab.location.clone());
+                self.set_timeline_shown(pane, saved_pane.timeline);
                 if let Some(state) = self.tabs.get_mut(&tab) {
                     // A hand-edited file naming a console or a comparison:
                     // the view is gone, the location stays.
@@ -1551,6 +1653,7 @@ impl Model {
                         .filter(|id| self.tabs.get(id).is_some_and(|t| !t.kind.is_view()))
                         .collect();
                     PaneSession {
+                        timeline: pane.is_some_and(|p| p.timeline_shown),
                         active: pane
                             .and_then(Pane::active)
                             .and_then(|a| tabs.iter().position(|t| *t == a))
@@ -1561,7 +1664,7 @@ impl Model {
                             .map(|tab| TabSession {
                                 kind: tab.kind,
                                 location: tab.location.clone(),
-                                view: tab.view,
+                                view: tab.own_view(),
                                 sort: tab.sort,
                                 group: tab.group,
                                 filter: tab.filter.clone(),
@@ -1725,6 +1828,18 @@ impl Model {
                     .into_iter()
                     .filter(|(_, w)| w.is_finite() && *w > 0.0)
                     .collect();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Records what of a typed path does not exist under the folder the
+    /// pane's active tab went to instead; the next navigation clears it.
+    pub fn set_missing(&mut self, pane: PaneId, missing: Option<String>) -> bool {
+        match self.active_tab_mut(pane) {
+            Some((_, tab)) => {
+                tab.missing = missing;
                 true
             }
             None => false,
@@ -2370,6 +2485,16 @@ impl Model {
         }
     }
 
+    /// *Icons view for a folder of media* (SPEC.md, under Functions) for
+    /// the pane's active tab, whose listing is complete: the tab decides
+    /// once per stay in a folder, and opens Icons in the icon size chosen
+    /// last. Returns whether the tab's view changed.
+    pub fn media_view(&mut self, pane: PaneId) -> bool {
+        let size = self.settings.icon_size;
+        self.active_tab_mut(pane)
+            .is_some_and(|(_, tab)| tab.media_view(size))
+    }
+
     /// Records a batch of the pane's active tab's listing. Returns whether
     /// a tab took it.
     pub fn listing_batch(&mut self, pane: PaneId, batch: Vec<Entry>) -> bool {
@@ -2728,6 +2853,172 @@ mod tests {
         }
     }
 
+    /// Lists `names` as the complete listing of the pane's folder — a
+    /// name that ends in `/` is a folder — and asks the rule of the media
+    /// folders, as the application does when a listing is complete.
+    fn listed(model: &mut Model, pane: PaneId, names: &[&str]) -> bool {
+        let entries = names
+            .iter()
+            .zip(1_u128..)
+            .map(|(name, id)| match name.strip_suffix('/') {
+                Some(folder) => Entry {
+                    kind: EntryKind::Dir,
+                    ..entry(id, folder)
+                },
+                None => entry(id, name),
+            })
+            .collect();
+        model.listing_batch(pane, entries);
+        model.listing_done(pane);
+        model.media_view(pane)
+    }
+
+    /// Issue 221, item 3 (SPEC.md *Icons view for a folder of media*):
+    /// eight photos, a video and a text file are nine media files in ten,
+    /// and the tab shows Icons; going on puts back the view the tab had.
+    /// Seven photos and three text files are not enough.
+    #[test]
+    fn a_folder_of_media_shows_icons_and_leaving_puts_the_view_back() {
+        let mut model = Model::new(Settings::default(), loc("/home"));
+        let pane = model.focused;
+        model.set_view(pane, ViewMode::List);
+        assert!(!listed(&mut model, pane, &["photos/", "notes.txt"]));
+
+        model.navigate(pane, loc("/home/photos"));
+        let photos = [
+            "a.jpg",
+            "b.JPG",
+            "c.jpeg",
+            "d.png",
+            "e.heic",
+            "f.webp",
+            "g.gif",
+            "h.tif",
+            "clip.mp4",
+            "notes.txt",
+        ];
+        assert!(listed(&mut model, pane, &photos), "nine in ten");
+        let tab = active(&model, pane);
+        assert_eq!(tab.view, ViewMode::Icons(IconSize::Medium));
+        assert!(tab.media.switched());
+        assert_eq!(tab.own_view(), ViewMode::List, "the tab's own view");
+
+        // Leaving, by any way: the view the tab had before.
+        assert_eq!(model.back(pane), Some(loc("/home")));
+        assert_eq!(active(&model, pane).view, ViewMode::List);
+        assert!(!active(&model, pane).media.switched());
+
+        // Seven in ten is not enough.
+        model.navigate(pane, loc("/home/mixed"));
+        let mixed = [
+            "a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg", "f.jpg", "g.jpg", "x.txt", "y.txt",
+            "z.txt",
+        ];
+        assert!(!listed(&mut model, pane, &mixed));
+        assert_eq!(active(&model, pane).view, ViewMode::List);
+    }
+
+    /// Folders are left out of the count, a folder without files stays as
+    /// it is, audio is no media, and exactly four in five is enough.
+    #[test]
+    fn folders_and_audio_do_not_count_as_media() {
+        let mut model = Model::new(Settings::default(), loc("/a"));
+        let pane = model.focused;
+        let enters = |model: &mut Model, to: &str, names: &[&str]| {
+            model.navigate(pane, loc(to));
+            listed(model, pane, names)
+        };
+        assert!(
+            enters(
+                &mut model,
+                "/four-in-five",
+                &[
+                    "2024/", "2025/", "raw/", "a.jpg", "b.png", "c.mov", "d.mkv", "e.txt"
+                ]
+            ),
+            "four of the five files, whatever the folders"
+        );
+        assert!(!enters(&mut model, "/folders", &["2024/", "2025/"]));
+        assert!(!enters(&mut model, "/empty", &[]));
+        assert!(
+            !enters(
+                &mut model,
+                "/music",
+                &["a.mp3", "b.flac", "c.ogg", "d.wav", "cover.jpg"]
+            ),
+            "audio does not count"
+        );
+        assert!(
+            !enters(&mut model, "/odd", &[".jpg", "png", "a.jpg.txt"]),
+            "the type is the extension of a name"
+        );
+    }
+
+    /// The rule decides once per stay: a view picked by hand stays while
+    /// the tab is in the folder, a listing that completes again changes
+    /// nothing, and on leaving the view the tab had before is back.
+    #[test]
+    fn a_view_picked_by_hand_stays_for_the_stay_and_the_rule_decides_once() {
+        let mut model = Model::new(Settings::default(), loc("/home"));
+        let pane = model.focused;
+        model.set_view(pane, ViewMode::List);
+        model.navigate(pane, loc("/home/photos"));
+        let photos = ["a.jpg", "b.jpg", "c.jpg", "d.jpg"];
+        assert!(listed(&mut model, pane, &photos));
+
+        model.set_view(pane, ViewMode::Details);
+        // A refresh: the listing completes again, files have come.
+        assert!(
+            !listed(&mut model, pane, &["e.jpg", "f.jpg"]),
+            "decided once"
+        );
+        assert_eq!(
+            active(&model, pane).view,
+            ViewMode::Details,
+            "nothing flips back"
+        );
+
+        // The session keeps the tab's own view, not the stay's.
+        let session = model.session();
+        let saved = &session.windows[0].workspaces[0].panes[0].tabs[0];
+        assert_eq!(saved.view, ViewMode::List);
+
+        model.navigate(pane, loc("/home"));
+        assert_eq!(
+            active(&model, pane).view,
+            ViewMode::List,
+            "as before the folder"
+        );
+
+        // A folder that was not media decides once too: photos that come
+        // later do not switch it.
+        model.navigate(pane, loc("/home/inbox"));
+        assert!(!listed(&mut model, pane, &["a.txt"]));
+        assert!(!listed(
+            &mut model,
+            pane,
+            &["a.jpg", "b.jpg", "c.jpg", "d.jpg"]
+        ));
+        assert_eq!(active(&model, pane).view, ViewMode::List);
+    }
+
+    /// Icons opens in the icon size chosen last, and a tab that shows
+    /// Icons already keeps its place but takes that size.
+    #[test]
+    fn a_folder_of_media_opens_in_the_icon_size_chosen_last() {
+        let settings = Settings {
+            icon_size: IconSize::Large,
+            ..Settings::default()
+        };
+        let mut model = Model::new(settings, loc("/home"));
+        let pane = model.focused;
+        model.navigate(pane, loc("/home/photos"));
+        assert!(listed(&mut model, pane, &["a.jpg", "b.jpg"]));
+        assert_eq!(active(&model, pane).view, ViewMode::Icons(IconSize::Large));
+        model.navigate(pane, loc("/home"));
+        assert_eq!(active(&model, pane).view, ViewMode::Details);
+    }
+
     #[test]
     fn navigation_keeps_history_and_resets_the_view_state() {
         let mut model = Model::new(Settings::default(), loc("/a"));
@@ -3015,6 +3306,34 @@ mod tests {
         assert_eq!(model.focused, pane_a);
         assert!(!model.close_workspace(first), "the last one stays");
         assert!(!model.close_workspace(second), "gone already");
+    }
+
+    #[test]
+    fn every_workspace_can_be_closed_but_the_last_one_of_the_last_window() {
+        let mut model = Model::new(Settings::default(), loc("/a"));
+        let window = model.focused_window;
+        let first = model.workspaces(window)[0].id;
+        assert!(!model.can_close_workspace(first), "it would stay");
+        assert!(!model.can_close_workspace(WorkspaceId(99)), "no such one");
+
+        // A second tab in the window: both close.
+        let (second, _, _) = model
+            .new_workspace(window, loc("/b"))
+            .unwrap_or_else(|| panic!("workspace"));
+        assert!(model.can_close_workspace(first));
+        assert!(model.can_close_workspace(second));
+        assert!(model.close_workspace(second));
+        assert!(!model.can_close_workspace(first), "alone again");
+
+        // A second window: the only tab of each closes its window.
+        let (other, _, _) = model.new_window(loc("/c"));
+        let third = model.workspaces(other)[0].id;
+        assert!(model.can_close_workspace(first));
+        assert!(model.can_close_workspace(third));
+        assert!(model.close_workspace(third));
+        assert!(model.window(other).is_none(), "its window went with it");
+        assert!(!model.can_close_workspace(first));
+        assert!(!model.close_workspace(first));
     }
 
     #[test]
@@ -3388,10 +3707,12 @@ mod tests {
                     PaneSession {
                         active: Some(1),
                         tabs: vec![tab("/a"), tab("/b"), tab("/c")],
+                        timeline: false,
                     },
                     PaneSession {
                         active: None,
                         tabs: vec![tab("/d")],
+                        timeline: false,
                     },
                 ],
                 ..WindowSession::default()

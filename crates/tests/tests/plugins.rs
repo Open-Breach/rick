@@ -97,6 +97,12 @@ fn fixture_plugins_are_refused_or_caught_and_the_host_keeps_running() {
         t.id = "probe-api".into();
         t.api_version = API_VERSION + 1;
     });
+    // Built against the contract before a form field could take its value
+    // from the clipboard (issue 221): API 21.
+    install(&plugins, "plugin_probe", |t| {
+        t.id = "probe-api-21".into();
+        t.api_version = 21;
+    });
     install(&plugins, "plugin_probe", |t| {
         t.id = "probe-toolchain".into();
         t.toolchain = "rustc 0.0.0 (nowhere 2000-01-01)".into();
@@ -119,12 +125,14 @@ fn fixture_plugins_are_refused_or_caught_and_the_host_keeps_running() {
 
     let host = Host::load(&options(vec![(Source::BesideBinary, plugins)]));
     refused_with(&host, "probe-api", "API version");
+    assert_eq!(API_VERSION, 22, "the contract of the clipboard rule");
+    refused_with(&host, "probe-api-21", "API version");
     refused_with(&host, "probe-toolchain", "built with");
     refused_with(&host, "probe-platform", "built for");
     refused_with(&host, "panic", "panicked during registration");
     refused_with(&host, "empty", "no plugin.toml");
     assert_eq!(status_of(&host, "probe"), &PluginStatus::Loaded);
-    assert_eq!(host.plugins().len(), 6, "{:?}", host.plugins());
+    assert_eq!(host.plugins().len(), 7, "{:?}", host.plugins());
 
     // The host keeps running: the one good plugin is an extension that
     // registers into an application registry.
