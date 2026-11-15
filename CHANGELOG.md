@@ -55,6 +55,46 @@ the pull request that brought the change.
   `timeline` (API 20), asked in a job and only while the bar is shown;
   several sources merge into one bar. `ext-zfs` offers a dataset's
   snapshots.
+- The path field takes a file's path: Enter opens the file's folder in
+  the same tab with the file selected, in view and previewed. A path of
+  which only the beginning exists opens the deepest folder that does, and
+  a banner over the list names the rest, *`2026/q3` does not exist here*;
+  nothing is created (#230).
+- A right-click anywhere on the address bar opens a menu: *Paste from
+  clipboard*, which goes where the clipboard's path leads without the
+  text field showing, *Copy path* and *Edit path* (#230).
+- Every copy button answers a click: a tick in place of the copy glyph
+  and *Copied* as its tooltip for 1.5 s, without a fade where the system
+  asks for reduced motion (#225).
+
+### Changed
+
+- The address bar is one rounded surface, so that it reads as the address
+  bar before it is clicked: the Up button, a divider, the path and the
+  copy button on it, and a border under the pointer (#230).
+- The last tab of the last window, which cannot be closed, has no close
+  button, and its title takes the room; the button is back with a second
+  tab or a second window (#224).
+- A menu with more entries than a small window has room for is as tall as
+  fits, 8 px clear of the window's top and bottom edges, and scrolls: the
+  context menus, the application menu and their submenus. It used to be
+  cut off at the window's edge (#227).
+- An empty file shows a card in the preview pane, with *This file is
+  empty* and **Move to trash**, where it used to show an empty text or
+  the hex view's *(empty file)*. A file listed with 0 bytes that has
+  content, as the files of `/proc` do, previews as before (#228).
+
+### Fixed
+
+- Mod+W or a middle click on the last tab of the last window, which
+  close nothing, no longer leave a tab for *Reopen closed tab* to open
+  (#224).
+- A file revealed from the command line, `rick reveal`, is scrolled into
+  view in its folder as well as selected (#230).
+- The address bar's copy button, the *Copy* of the preview pane and the
+  chevron of the folded path have names for a screen reader, *Copy path*,
+  *Copy* and *Hidden ancestors*; they were named by their glyphs (#225,
+  #230).
 
 ## [0.4.1] - 2026-11-14
 
