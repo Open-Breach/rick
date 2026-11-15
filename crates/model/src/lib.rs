@@ -415,6 +415,12 @@ pub struct Tab {
     /// A note for the status line: why the tab is not where the session
     /// left it. Cleared by the next navigation.
     pub note: Option<String>,
+    /// The rest of a typed path that does not exist under this folder,
+    /// `reports/2026/q3`: the tab went to the deepest folder of the path
+    /// that exists, and the banner over the list says what is missing,
+    /// without *Retry* (SPEC.md *A path that exists only in part*).
+    /// Cleared by the next navigation.
+    pub missing: Option<String>,
     /// Why the location could not be listed, shown as a banner with
     /// *Retry* over the empty list (a connection that failed, a folder that
     /// refused); cleared by the next listing that works.
@@ -452,6 +458,7 @@ impl Tab {
             scroll: 0.0,
             columns: BTreeMap::new(),
             note: None,
+            missing: None,
             failure: None,
             lost: None,
             title: None,
@@ -561,6 +568,7 @@ impl Tab {
         self.tree.clear();
         self.scroll = 0.0;
         self.note = None;
+        self.missing = None;
         self.lost = None;
     }
 
@@ -1751,6 +1759,18 @@ impl Model {
                     .into_iter()
                     .filter(|(_, w)| w.is_finite() && *w > 0.0)
                     .collect();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Records what of a typed path does not exist under the folder the
+    /// pane's active tab went to instead; the next navigation clears it.
+    pub fn set_missing(&mut self, pane: PaneId, missing: Option<String>) -> bool {
+        match self.active_tab_mut(pane) {
+            Some((_, tab)) => {
+                tab.missing = missing;
                 true
             }
             None => false,

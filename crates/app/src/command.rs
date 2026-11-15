@@ -53,6 +53,21 @@ pub enum Command {
         /// Where to go.
         to: Location,
     },
+    /// Go where a path typed into the path bar leads (SPEC.md *A file's
+    /// path*, *A path that exists only in part*). A folder's path is
+    /// [`Command::Navigate`]. A file's path shows the file's folder in the
+    /// pane's active tab and selects the file once it is listed. A path
+    /// whose beginning exists and whose rest does not shows the deepest
+    /// folder of it that exists, and the tab says what is missing
+    /// (`Tab::missing`); nothing is created. Where the provider cannot say
+    /// what the path is, and where nothing of it exists, this is
+    /// `Navigate`, with the failure it has always had.
+    GoTo {
+        /// The pane.
+        pane: PaneId,
+        /// The typed path, expanded, on the provider it was typed for.
+        to: Location,
+    },
     /// Open an entry of the pane's active tab, as *Opening files* says: a
     /// folder navigates the pane to it; a local file the archive provider
     /// can browse navigates into it as a location (`archive:` with the
@@ -664,6 +679,16 @@ pub enum Event {
         /// The selected ids in view order.
         ids: Vec<EntryId>,
     },
+    /// A reveal selected its entries in the pane, now that they are
+    /// listed: `rick reveal`, and a file's path typed into the path bar.
+    /// The UI brings the first one into view and puts the cursor on it;
+    /// [`Event::SelectionChanged`] came just before.
+    Revealed {
+        /// The pane.
+        pane: PaneId,
+        /// The selected ids in view order.
+        ids: Vec<EntryId>,
+    },
     /// A preview finished opening.
     PreviewReady {
         /// The pane.
@@ -952,6 +977,7 @@ impl fmt::Debug for Event {
             Self::SelectionChanged { pane, ids } => {
                 pane_struct(f, "SelectionChanged", *pane, "ids", ids)
             }
+            Self::Revealed { pane, ids } => pane_struct(f, "Revealed", *pane, "ids", ids),
             Self::PreviewReady { pane, .. } => f
                 .debug_struct("PreviewReady")
                 .field("pane", pane)

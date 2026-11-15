@@ -146,6 +146,7 @@ pub struct CopyButton<'a> {
     name: &'a str,
     glyph: f32,
     hover: Hover,
+    fill: Option<Color32>,
     colour: Option<Color32>,
     faint: bool,
     lit: bool,
@@ -159,6 +160,7 @@ impl<'a> CopyButton<'a> {
             name,
             glyph: ICON,
             hover: Hover::Tile,
+            fill: None,
             colour: None,
             faint: false,
             lit: false,
@@ -174,6 +176,14 @@ impl<'a> CopyButton<'a> {
     /// What is behind the glyph under the pointer.
     pub fn hover(mut self, hover: Hover) -> Self {
         self.hover = hover;
+        self
+    }
+
+    /// The colour of what is behind the glyph under the pointer, where
+    /// `bg/subtle` would not show: on the breadcrumb bar, whose surface it
+    /// is.
+    pub fn fill(mut self, fill: Color32) -> Self {
+        self.fill = Some(fill);
         self
     }
 
@@ -226,7 +236,7 @@ impl<'a> CopyButton<'a> {
         let scheme = theme::scheme(ui);
         let mix = answer(ui.ctx(), id, response.clicked());
         if response.hovered() {
-            let fill = scheme.bg_subtle;
+            let fill = self.fill.unwrap_or(scheme.bg_subtle);
             match self.hover {
                 Hover::Bare => {}
                 Hover::Tile => {

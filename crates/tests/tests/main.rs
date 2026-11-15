@@ -19,6 +19,7 @@
 
 mod about;
 mod actions;
+mod address_bar;
 mod app;
 mod app_menu;
 mod chrome;

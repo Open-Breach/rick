@@ -59,6 +59,9 @@ pub struct TabUi {
     pub path_edit: Option<String>,
     /// Focus the path bar on the next frame.
     pub focus_path: bool,
+    /// The text the clipboard held when the breadcrumb bar's menu opened,
+    /// for its *Paste from clipboard*: read then, not watched.
+    pub bar_clipboard: Option<String>,
     /// Focus the filter on the next frame.
     pub focus_filter: bool,
     /// Scroll this row into view on the next frame.
@@ -1831,6 +1834,7 @@ impl RickUi {
                     contents,
                 } => self.properties.counted(pane, &path, contents),
                 Event::HashesOpened { hashes, format, .. } => self.hash.open(hashes, format),
+                Event::Revealed { pane, ids } => self.revealed(pane, &ids),
                 Event::PreviewReady {
                     pane,
                     doc,
@@ -2294,6 +2298,25 @@ impl RickUi {
     }
 
     /// The view state of a tab, made from the model's tab the first time.
+    /// A reveal selected `ids` in `pane`: the first of them comes into
+    /// view and takes the cursor, as a click on it would have given it.
+    fn revealed(&mut self, pane: PaneId, ids: &[EntryId]) {
+        let model = self.app.model();
+        let Some((tab_id, tab)) = model.active_tab(pane) else {
+            return;
+        };
+        let Some((index, id)) = ids
+            .iter()
+            .find_map(|id| tab.rows().position(|e| e.id == *id).map(|at| (at, *id)))
+        else {
+            return;
+        };
+        let tab_ui = self.tab_ui(tab_id);
+        tab_ui.scroll_to = Some(index);
+        tab_ui.cursor = Some(id);
+        tab_ui.anchor = Some(id);
+    }
+
     fn tab_ui(&mut self, tab: TabId) -> &mut TabUi {
         let model_tab = self.app.model().tab(tab);
         self.tabs

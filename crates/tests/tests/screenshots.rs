@@ -1996,6 +1996,73 @@ fn screenshots_of_the_path_field() {
     }
 }
 
+/// Issue 219, item 6d: the breadcrumb bar at rest and under the pointer —
+/// the pane's toolbar row, cut out — in Comfortable, Compact and Dark, for
+/// the comparison with the breadcrumb bar of the three *Rick — refined*
+/// frames.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_address_bar() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let folder = dir.path().join("Apps").join("android-studio");
+    fs::create_dir_all(&folder).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(folder.join("studio.sh"), "#!/bin/sh\n").unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = shell(&folder, egui::vec2(1920.0, 1000.0));
+    for (theme, density, name) in [
+        (Theme::Light, Density::Comfortable, "comfortable"),
+        (Theme::Light, Density::Compact, "compact"),
+        (Theme::Dark, Density::Comfortable, "dark"),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        let model = harness.state().app().model();
+        let tab = model
+            .active_tab(model.focused)
+            .map_or_else(|| panic!("tab"), |(id, _)| id);
+        let row = harness
+            .state()
+            .toolbar_row(tab)
+            .unwrap_or_else(|| panic!("toolbar"));
+        let copy = harness.get_by_label("Copy path").rect();
+        for (state, pointer) in [
+            ("rest", egui::pos2(row.center().x, row.bottom() + 200.0)),
+            // On the empty part of the bar, right of the copy button.
+            ("hover", egui::pos2(copy.right() + 40.0, copy.center().y)),
+        ] {
+            harness.event(egui::Event::PointerMoved(pointer));
+            harness.step();
+            harness.step();
+            let image = harness
+                .render()
+                .unwrap_or_else(|e| panic!("no renderer for screenshots: {e}"));
+            let scale = harness.ctx.pixels_per_point();
+            // Truncation is the point: whole pixels of the row.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let (x, y, w, h) = (
+                (row.left() * scale) as u32,
+                (row.top() * scale) as u32,
+                (row.width() * scale) as u32,
+                (row.height() * scale) as u32,
+            );
+            let cut = image::imageops::crop_imm(&image, x, y, w, h).to_image();
+            let path = out_dir().join(format!(
+                "{}-address-bar-{name}-{state}.png",
+                std::env::consts::OS
+            ));
+            cut.save(&path).unwrap_or_else(|e| panic!("{e}"));
+            eprintln!("screenshot: {}", path.display());
+        }
+    }
+}
+
 /// Issue 60: the side panel — the Places rows with the Trash pill, the
 /// section headers, the drive cards and the operations drawer with two
 /// running jobs — in Light and Dark at both densities.
