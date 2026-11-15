@@ -100,6 +100,9 @@ struct Scripted {
     confirm: Mutex<bool>,
     shown: Mutex<Vec<(String, String)>>,
     notices: Mutex<Vec<(Level, String)>>,
+    /// The clipboard's text as the window would read it when a form
+    /// opens.
+    clipboard: Mutex<Option<String>>,
 }
 
 impl UiHost for Scripted {
@@ -124,8 +127,18 @@ impl UiHost for Scripted {
             .unwrap_or_else(PoisonError::into_inner)
             .push((title.to_owned(), text.to_owned()));
     }
+    /// As the window answers a form that is confirmed untouched: the
+    /// values it opens with, the fields with a clipboard rule having
+    /// taken theirs from the clipboard.
     fn form(&self, form: ext::Form) -> Option<ext::Values> {
-        Some(form.defaults())
+        let mut values = form.defaults();
+        let clipboard = self
+            .clipboard
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        ui_egui::dialog::take_from_clipboard(&form, &mut values, clipboard.as_deref());
+        Some(values)
     }
 }
 
@@ -593,6 +606,11 @@ impl Driver {
             .platform()
             .set_text(clipboard)
             .unwrap_or_else(|e| panic!("{e}"));
+        *self
+            .ui
+            .clipboard
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(clipboard.to_owned());
         let ids: Vec<EntryId> = names.iter().map(|n| self.id_of(n)).collect();
         self.app.handle(
             Command::Select {
@@ -950,6 +968,50 @@ fn the_clone_dialogue_names_the_target_and_folds_the_options_away() {
     harness.step();
     assert!(harness.query_by_label("Clone repository").is_none());
     assert!(harness.state().app().model().jobs.is_empty());
+}
+
+/// Acceptance (issue 221, item 5; SPEC.md *Git clone dialogue*): the URL
+/// field takes its value from the clipboard through its clipboard rule.
+/// With `https://github.com/Open-Breach/rick.git` on the clipboard the
+/// dialogue opens with it in the field; with a sentence of text — one
+/// that has the URL in it, even — the field is empty and asks for one.
+#[test]
+fn git_clone_opens_with_a_url_from_the_clipboard_and_empty_for_a_sentence() {
+    const URL: &str = "https://github.com/Open-Breach/rick.git";
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let plain = dir.path().join("plain");
+    fs::create_dir_all(plain.join("tool")).unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = harness(&plain);
+    let field_holds = |harness: &Harness<'_, RickUi>, text: &str| {
+        harness
+            .query_all_by_role(egui::accesskit::Role::TextInput)
+            .any(|node| node.accesskit_node().value().as_deref() == Some(text))
+    };
+
+    open_clone_dialogue(&mut harness, "tool", URL);
+    assert!(field_holds(&harness, URL), "the URL is in the field");
+    assert!(
+        harness
+            .query_by_label("Enter the repository's URL.")
+            .is_none()
+    );
+    harness.key_press(egui::Key::Escape);
+    harness.step();
+    harness.step();
+    assert!(harness.query_by_label("Clone repository").is_none());
+
+    for sentence in [
+        "the notes of this morning's meeting",
+        "Clone https://github.com/Open-Breach/rick.git and build it",
+    ] {
+        open_clone_dialogue(&mut harness, "tool", sentence);
+        harness.get_by_label("Enter the repository's URL.");
+        assert!(!field_holds(&harness, sentence), "{sentence}");
+        assert!(!field_holds(&harness, URL), "{sentence}");
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        harness.step();
+    }
 }
 
 /// A Git URL on the clipboard is in the field when the dialogue opens,

@@ -28,6 +28,16 @@ the pull request that brought the change.
   Ctrl+scroll, is the size *Icons* opens in from then on, by hand or for
   a folder of media, across restarts. It is the key `icon_size` of
   `rick.toml` (#240).
+- A field of a form that an extension shows can take its value from the
+  clipboard: the field carries a regular expression, and when the
+  dialogue opens it holds what the expression matches in the clipboard's
+  text — the first capture group where there is one — in place of its
+  written value. The clipboard is read once, as the dialogue opens.
+  *Git clone…* uses it for its URL field, in place of the plugin's own
+  reading of the clipboard; a local repository's path is still the
+  plugin's to recognise. The extension API is 22 with `Field::clipboard`:
+  every plugin is rebuilt against it, and one built against 21 is refused
+  (#242).
 - `ext-zfs`, a plugin for OpenZFS snapshots, Linux only (placed by the review of
   #156): through the `zfs` command line
   it finds the dataset a folder lies in and, without `zfs` or outside a
