@@ -4155,7 +4155,7 @@ mod timeline {
                     location: local(&self.root.join(".snaps").join(label).join(&rel)),
                 })
                 .collect();
-            // The folder asked about, as the ZFS and Btrfs sources answer:
+            // The folder asked about, as the ZFS source answers:
             // `join` of an empty path would end it with a separator.
             let live = if rel.as_os_str().is_empty() {
                 local(&self.root)

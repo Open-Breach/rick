@@ -4334,9 +4334,9 @@ impl App {
 
     /// The same for all of the folder's entries, once its listing is
     /// complete: also when it has none, so that a decorator whose answers
-    /// are about the folder itself starts its reads there too (the ZFS and
-    /// Btrfs plugins read the folder's snapshots, which *Browse snapshots*
-    /// needs, in a job they start from `decorate`).
+    /// are about the folder itself starts its reads there too (the ZFS
+    /// plugin reads the folder's snapshots, which *Browse snapshots*
+    /// needs, in a job it starts from `decorate`).
     fn decorate_folder(&mut self, pane: PaneId, entries: &[Entry], events: &mut Vec<Event>) {
         let Some(live) = self.live.get(&pane) else {
             return;
