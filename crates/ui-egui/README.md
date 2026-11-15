@@ -90,7 +90,12 @@ folder's contents as the application counts them, its dates and whether it
 is hidden, with a copy button on every path and *Open target folder* for a
 link; *Permissions*, for a local entry, its owner and group as dropdowns,
 the mode bits as a grid with the octal field, the ACL opened in place as a
-table that moves with the grid, and *Apply to enclosed items*), the Hash
+table that moves with the grid, and *Apply to enclosed items*; and its
+drive variant, `properties/drive.rs`, opened by *Properties* on a drive
+card or on a row of the drive table: one page with the volume, its
+capacity with the drive card's usage bar and its flags, *Eject* and
+*Format…* in the footer, following the drive as the model's volumes have
+it), the Hash
 dialogue (620 px in the dialogue frame: *File
 hashes* with the file's name and size and a close button; the *VERIFY*
 field on top, prefilled from the clipboard when it holds a hash and

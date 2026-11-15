@@ -38,6 +38,16 @@ the pull request that brought the change.
   plugin's to recognise. The extension API is 22 with `Field::clipboard`:
   every plugin is rebuilt against it, and one built against 21 is refused
   (#242).
+- *Properties* of a drive, in the context menu of a drive card in *This
+  Machine* and of a row of the overview's drive table, with *Eject* and
+  *Format…*. It opens the Properties dialogue on one page: the drive's
+  name and kind in the header; **Volume**, with the label, the file
+  system, the mount point or drive letter and the device, the paths with
+  their copy button; **Capacity**, with the total, the used and the free
+  space and the usage bar of the drive card; **Flags**, read-only and
+  removable; and *Eject* and *Format…* in the footer, for the drives that
+  have them. A value the system does not report is left out, and a drive
+  that is unmounted takes its dialogue with it (#244).
 - `ext-zfs`, a plugin for OpenZFS snapshots, Linux only (placed by the review of
   #156): through the `zfs` command line
   it finds the dataset a folder lies in and, without `zfs` or outside a
