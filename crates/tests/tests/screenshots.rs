@@ -2555,6 +2555,52 @@ fn screenshots_of_a_form_field_from_the_clipboard() {
     }
 }
 
+/// The right-click menus of the side panel on the menu card of the file
+/// list: a place's, a section header's and a drive card's.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_side_panels_menus() {
+    let dir = features_tree();
+    let stick = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    for (theme, name) in SCHEMES {
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        fake.add_volume(platform::Volume {
+            name: "HOLIDAY".into(),
+            mount_point: stick.path().to_path_buf(),
+            kind: platform::VolumeKind::Removable,
+            fs_type: "exfat".into(),
+            device: Some("/dev/sdb1".into()),
+            total: Some(64 << 30),
+            free: Some(9 << 30),
+            read_only: false,
+        });
+        let mut harness = features_shell(&fake, dir.path(), egui::vec2(1100.0, 640.0), Vec::new());
+        scheme(&mut harness, theme);
+        drawn(&mut harness);
+        for (row, shot) in [
+            ("Documents", "place"),
+            ("This Machine", "header"),
+            ("HOLIDAY", "drive"),
+        ] {
+            // The row by its name; a drive's card is named with more.
+            let at = harness
+                .query_all_by_label(row)
+                .chain(harness.query_all_by_label_contains(row))
+                .map(|n| n.rect())
+                .next()
+                .unwrap_or_else(|| panic!("no row {row}"))
+                .center();
+            press(&mut harness, at, egui::PointerButton::Secondary);
+            harness.step();
+            harness.get_by_label("Open in new tab");
+            shoot(&mut harness, &format!("panel-menu-{shot}-{name}"));
+            harness.key_press(egui::Key::Escape);
+            harness.step();
+            harness.step();
+        }
+    }
+}
+
 /// Issue 221, item 6: the Properties dialogue of a drive — a USB stick
 /// with its volume, its capacity and its flags, and a read-only disc with
 /// the muted bar; and the menu of a drive card that opens it.
