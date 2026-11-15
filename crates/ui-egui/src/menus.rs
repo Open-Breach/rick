@@ -1,5 +1,7 @@
 //! Menus: the burger menu and the context menu built from the action
-//! registry.
+//! registry. A card that would be taller than the window has room for is
+//! as tall as fits and its entries scroll ([`context_popup`], SPEC.md *A
+//! menu that does not fit*).
 
 use std::sync::Arc;
 
@@ -9,6 +11,7 @@ use ext::{Action, ActionCtx, ActionGroup, Availability, Invocation};
 use types::Entry;
 
 use egui::Align;
+use egui::containers::menu::{MenuConfig, MenuState, SubMenu};
 
 use crate::icons;
 use crate::keys::{Intent, KeyMap};
@@ -25,6 +28,99 @@ const APP_MENU_GAP: f32 = 6.0;
 const APP_MENU_PAD: f32 = 6.0;
 /// The least content width of a submenu of the application menu.
 const SUBMENU_WIDTH: f32 = 200.0;
+/// How far a menu card stays from the window's top and bottom edges
+/// (SPEC.md *A menu that does not fit*).
+pub const CLEAR: f32 = 8.0;
+
+/// The window being drawn, inside the frame Rick draws around it.
+#[derive(Clone, Copy)]
+struct Window(egui::Rect);
+
+fn window_id(ctx: &egui::Context) -> egui::Id {
+    egui::Id::new(("menu-window", ctx.viewport_id()))
+}
+
+/// Tells the menus where the window is whose content is drawn next: the
+/// rectangle inside Rick's own window frame, whose edges the cards keep
+/// clear of. The shell calls it for every window, every frame.
+pub fn set_window(ctx: &egui::Context, window: egui::Rect) {
+    let id = window_id(ctx);
+    ctx.data_mut(|d| d.insert_temp(id, Window(window)));
+}
+
+/// The room a menu card has: the window less [`CLEAR`] at its top and at
+/// its bottom.
+fn room(ctx: &egui::Context) -> egui::Rect {
+    let id = window_id(ctx);
+    ctx.data(|d| d.get_temp::<Window>(id))
+        .map_or_else(|| ctx.content_rect(), |window| window.0)
+        .shrink2(egui::vec2(0.0, CLEAR))
+}
+
+/// The top a card `height` tall gets when it is held within `within`, the
+/// way egui holds an area on the screen: moved up from beyond the bottom
+/// edge, then down from beyond the top one.
+fn held(top: f32, height: f32, within: egui::Rangef) -> f32 {
+    let over = (height - within.span()).max(0.0);
+    top.min(within.max + over - height).max(within.min - over)
+}
+
+/// How far the anchor of a card has to move, down when positive, for the
+/// card to lie within its [`room`]. `placed` is where egui puts the card
+/// by its anchor, before it holds it on the screen: a card egui would
+/// leave within 8 px of the window's edge, or push against it, ends 8 px
+/// clear of it instead. Where the card is placed does not change
+/// otherwise.
+fn lift(ctx: &egui::Context, placed: egui::Rect) -> f32 {
+    let on_screen = held(placed.top(), placed.height(), ctx.content_rect().y_range());
+    held(on_screen, placed.height(), room(ctx).y_range()) - placed.top()
+}
+
+/// A menu's popup, kept in the window (SPEC.md *A menu that does not
+/// fit*): its card stays [`CLEAR`] from the window's top and bottom
+/// edges. `gap` is the popup's own. The entries go in [`scrolling`], which
+/// keeps the card no taller than that room.
+fn fitted<'a>(ctx: &egui::Context, popup: egui::Popup<'a>, gap: f32) -> egui::Popup<'a> {
+    // Its first frame only measures it, and has to remember where the
+    // pointer was; from the second on the size is known.
+    if ctx.read_response(popup.get_id()).is_none() {
+        return popup;
+    }
+    let (Some(size), Some(anchor)) = (popup.get_expected_size(), popup.get_anchor_rect()) else {
+        return popup;
+    };
+    let align = popup.get_best_align();
+    let lift = lift(ctx, align.align_rect(&anchor, size, gap));
+    if lift.abs() < 0.5 {
+        return popup;
+    }
+    popup
+        .anchor(anchor.translate(egui::vec2(0.0, lift)))
+        .align(align)
+        .align_alternatives(&[])
+}
+
+/// The popup of a context menu on `response`: the card of [`menu_style`],
+/// kept in the window. Its content is [`context_menu`].
+pub fn context_popup(response: &egui::Response) -> egui::Popup<'_> {
+    fitted(
+        &response.ctx,
+        egui::Popup::context_menu(response).style(menu_style),
+        0.0,
+    )
+}
+
+/// A menu card's entries. They scroll where the card would be taller
+/// than its [`room`]: the card is then as tall as fits (SPEC.md *A menu
+/// that does not fit*).
+fn scrolling(ui: &mut egui::Ui, entries: impl FnOnce(&mut egui::Ui)) {
+    // What the card has around its entries: its padding and its border.
+    let around = ui.spacing().menu_margin.sum().y + 2.0 * ui.visuals().window_stroke.width;
+    let most = (room(ui.ctx()).height() - around).max(0.0);
+    egui::ScrollArea::vertical()
+        .max_height(most)
+        .show(ui, entries);
+}
 
 /// The burger menu at the top of the window, the application menu
 /// (SPEC.md *Menu*): the menu button, a tool button, and under it — left
@@ -92,10 +188,14 @@ pub fn burger(
     } else {
         response.on_hover_text(name)
     };
-    egui::Popup::menu(&response)
-        .gap(APP_MENU_GAP)
-        .style(app_menu_style)
-        .show(|ui| app_menu(ui, requests, pane, app, keys, version));
+    fitted(
+        ui.ctx(),
+        egui::Popup::menu(&response)
+            .gap(APP_MENU_GAP)
+            .style(app_menu_style),
+        APP_MENU_GAP,
+    )
+    .show(|ui| scrolling(ui, |ui| app_menu(ui, requests, pane, app, keys, version)));
 }
 
 /// One group of the application menu's extension actions: the core ones
@@ -817,13 +917,26 @@ fn submenu_in(
     } else {
         app_menu_style
     };
-    let (response, _) = egui::containers::menu::SubMenuButton::from_button(button)
-        .config(egui::containers::menu::MenuConfig::new().style(style))
-        .ui(ui, |ui| {
-            if rows.fixed {
-                card_width(ui);
-            }
-            content(ui);
+    // egui's `SubMenuButton`, taken apart so that the card can be kept in
+    // the window: the row, lit like an open entry while its submenu is
+    // open, and the submenu hung on it.
+    let id = SubMenu::id_from_widget_id(ui.next_auto_id());
+    let open = MenuState::from_ui(ui, |state, _| state.open_item == Some(id));
+    let inactive = ui.style().visuals.widgets.inactive;
+    if open {
+        ui.style_mut().visuals.widgets.inactive = ui.style().visuals.widgets.open;
+    }
+    let response = ui.add(button);
+    ui.style_mut().visuals.widgets.inactive = inactive;
+    SubMenu::default()
+        .config(MenuConfig::new().style(style))
+        .show(ui, &submenu_anchor(ui, &response), |ui| {
+            scrolling(ui, |ui| {
+                if rows.fixed {
+                    card_width(ui);
+                }
+                content(ui);
+            });
         });
     let spoken = format!(
         "{label} {}",
@@ -831,6 +944,37 @@ fn submenu_in(
     );
     response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken.clone()));
+}
+
+/// The response a submenu hangs on: the row's, with the rectangle egui
+/// anchors the card to moved so that the card lies within its [`room`].
+/// The row keeps its own rectangle for everything else.
+fn submenu_anchor(ui: &egui::Ui, row: &egui::Response) -> egui::Response {
+    let mut anchor = row.clone();
+    let id = SubMenu::id_from_widget_id(row.id);
+    let Some(size) = egui::AreaState::load(ui.ctx(), id).and_then(|area| area.size) else {
+        return anchor;
+    };
+    // Where `SubMenu::show` puts the card: beside the row, the first
+    // entry on the row's line, or the first of egui's other places in
+    // which it fits the screen.
+    let margin = egui::Frame::menu(ui.style()).total_margin().sum();
+    let gap = margin.x / 2.0 + 2.0;
+    let hung_on = row.interact_rect.expand2(egui::vec2(0.0, margin.y / 2.0));
+    let beside = egui::RectAlign::RIGHT_START;
+    let align = egui::RectAlign::find_best_align(
+        std::iter::once(beside)
+            .chain(beside.symmetries())
+            .chain(egui::RectAlign::MENU_ALIGNS),
+        ui.ctx().content_rect(),
+        hung_on,
+        gap,
+        size,
+    )
+    .unwrap_or(beside);
+    let lift = lift(ui.ctx(), align.align_rect(&hung_on, size, gap));
+    anchor.interact_rect = anchor.interact_rect.translate(egui::vec2(0.0, lift));
+    anchor
 }
 
 /// A hairline between two groups, with 4 px of air on each side.
@@ -1008,8 +1152,18 @@ fn paste_entry(
 /// tooltip instead: *Paste* while the clipboard is empty — on a folder it
 /// pastes into that folder — and an entry the location's capabilities rule
 /// out (New folder, New file and Download…).
-#[allow(clippy::too_many_lines)]
 pub fn context_menu(
+    ui: &mut egui::Ui,
+    cx: &mut PaneCx<'_>,
+    action_ctx: &ActionCtx,
+    entry_of: Option<&Entry>,
+) {
+    scrolling(ui, |ui| context_entries(ui, cx, action_ctx, entry_of));
+}
+
+/// The entries of [`context_menu`].
+#[allow(clippy::too_many_lines)]
+fn context_entries(
     ui: &mut egui::Ui,
     cx: &mut PaneCx<'_>,
     action_ctx: &ActionCtx,
@@ -1197,4 +1351,26 @@ pub fn context_menu(
         t!("menu-folder-properties")
     };
     intent_entry(ui, cx, Some(icons::INFO), &label, Intent::Inspect);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::held;
+
+    /// SPEC.md *A menu that does not fit*: a card is held in its room the
+    /// way egui holds an area on the screen, so that a card that fits
+    /// stays where it is placed and one that does not ends inside.
+    #[test]
+    fn a_card_is_held_within_its_room() {
+        let room = egui::Rangef::new(8.0, 392.0);
+        // It fits where it is placed: it stays.
+        assert!((held(100.0, 200.0, room) - 100.0).abs() < f32::EPSILON);
+        // It would run past the bottom: it ends on the room's bottom.
+        assert!((held(300.0, 200.0, room) - 192.0).abs() < f32::EPSILON);
+        // It would start above the top: it starts on the room's top.
+        assert!((held(-20.0, 200.0, room) - 8.0).abs() < f32::EPSILON);
+        // As tall as the room: it fills it, wherever it was placed.
+        assert!((held(150.0, 384.0, room) - 8.0).abs() < f32::EPSILON);
+        assert!((held(0.0, 384.0, room) - 8.0).abs() < f32::EPSILON);
+    }
 }

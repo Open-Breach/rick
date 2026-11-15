@@ -5388,6 +5388,8 @@ impl RickUi {
         let window_frame = frame::wanted(ctx, chrome)
             .then(|| frame::Frame::paint(ui, ui.max_rect(), self.frame_mode));
         let content = window_frame.map_or(ui.max_rect(), |f| f.content());
+        // The menus keep clear of this window's edges.
+        crate::menus::set_window(ctx, content);
         if let Some(w) = self.windows.get_mut(&window) {
             w.window_frame = window_frame;
             w.content = Some(content);
