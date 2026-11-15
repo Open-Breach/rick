@@ -41,7 +41,7 @@ Up, hidden files and refresh have no buttons of their own in the toolbar's group
 - *REFRESH*: **Refresh now** (F5). There is no automatic refresh; Rick reacts to file-system events.
 - *FILTER*: **Show all**, then one checkbox row per file type present in the folder — its icon, the type name and its count at the right — folders included as *Folders*; ticking types shows only those entries. The filter is per pane and clears on navigation. While a type filter is active the view options button carries a 7 px `accent/focus` dot at the top right of its icon.
 
-The Tree view mode and the extra-large icon size stay reachable through the command palette and their shortcuts; the menu lists what the design shows.
+The Tree view mode and the extra-large icon size stay reachable through the command palette and their shortcuts; the menu lists what the design shows. **Icons** itself opens the view in the icon size chosen last (*View mode* under Functions).
 
 **File list.** A details list, one row per entry, `row/height` tall, folders first by default. Default columns in order:
 
@@ -115,6 +115,6 @@ Plugin actions are contextual and appear only when the selection or folder suppo
 
 **Hidden files, symlinks and mounts.** The footer's eye toggle (Mod+H) shows dot-files and files with the hidden attribute. Symlinks show a link badge on the icon and their target in the Type column; a broken link is marked. Mount points show a volume badge, and the side panel's This Machine and Network sections list mounted volumes.
 
-**Icon and thumbnail view.** Besides the details list, a grid view with large icons or thumbnails for images, PDFs and videos, in four cell sizes (small, medium, large, extra large; the menu offers the first three). A thumbnail is rendered by the Previewer registered for the entry's type, at the cell size, off the UI thread, and cached per entry and size; while it renders, or when no previewer claims the file, the cell shows the file-type icon. The freedesktop thumbnail cache on Linux may seed that cache later.
+**Icon and thumbnail view.** Besides the details list, a grid view with large icons or thumbnails for images, PDFs and videos, in four cell sizes (small, medium, large, extra large; the menu offers the first three). A thumbnail is rendered by the Previewer registered for the entry's type, at the cell size, off the UI thread, and cached per entry and size; while it renders, or when no previewer claims the file, the cell shows the file-type icon. The freedesktop thumbnail cache on Linux may seed that cache later. A folder of media opens in this view by itself (*Icons view for a folder of media* under Functions).
 
 **Inline rename.** F2 and *Rename* in the context menu always edit the name in place in the list, with the extension excluded from the initial selection. A second click on the single selected row at least 0.5 s after the first (past the double-click window) does the same only while the setting *Rename on a second click* is on (*Settings → Behaviour*; `rename_on_click` in `rick.toml`), and it is off by default. Enter commits, Escape cancels, a clashing name is refused in place. New file and New folder insert a row in the same edit mode at the top of the list.
