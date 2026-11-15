@@ -22,7 +22,10 @@ use crate::actions::{
 use crate::appimage::{self, Type};
 use crate::archive::{Format, ItemKind};
 use crate::detect::{compare_versions, slug, split_version, strip_version};
-use crate::fixtures::{Fixture, other_machine, this_machine, tiny_appimage, tiny_elf};
+use crate::fixtures::{
+    AppImageFixture, Fixture, Inside, other_machine, squashfs, this_machine, tiny_appimage,
+    tiny_elf, tiny_png,
+};
 use crate::provider::{KIND_COLUMN, STATE_COLUMN, VERSION_COLUMN};
 use crate::record::{Kind, Layout, PathMode, Record};
 
@@ -182,6 +185,21 @@ impl Harness {
         fs::write(&path, bytes).unwrap_or_else(|e| panic!("{e}"));
         pfs::set_unix_mode(&path, mode).unwrap_or_else(|e| panic!("{e}"));
         path
+    }
+
+    /// Writes the AppImage fixture beside the others, without the execute
+    /// bit.
+    fn appimage(&self, fixture: AppImageFixture) -> PathBuf {
+        fixture
+            .write(self.dir.path())
+            .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Installs the file at `path` through *Install as application…* with
+    /// the form's defaults and the overrides.
+    fn install_file(&self, path: &Path, overrides: Vec<(&'static str, Value)>) {
+        self.ui.answer_form(overrides);
+        self.ok(INSTALL, self.ctx_file(path));
     }
 
     /// The local file at `path` as a listing shows it.
@@ -2308,4 +2326,589 @@ fn run_refuses_another_machines_appimage_before_touching_it() {
     );
     let error = refused("notes.AppImage", b"only named like one\n");
     assert!(error.contains("not a program"), "{error}");
+}
+
+/// The permission bits of the entry at `path`.
+fn mode_of(path: &Path) -> Option<u32> {
+    pfs::unix_mode(path)
+        .unwrap_or_else(|e| panic!("{e}"))
+        .map(|mode| mode & 0o7777)
+}
+
+/// The versions of an AppStream metainfo's releases are read off its
+/// `<release>` tags, in the file's order: both quotes, attributes in any
+/// order, a tag cut short; a comment and `<releases>` are no release.
+#[test]
+fn the_release_versions_of_a_metainfo_are_read_off_its_tags() {
+    let xml = "<?xml version=\"1.0\"?>\n<component>\n <releases>\n\
+        <!-- <release version=\"9.9\"/> -->\n\
+        <release date=\"2026-02-01\" version=\"1.4.0\" />\n\
+        <release version='1.3.2'>\n <description/>\n </release>\n\
+        <release>\n</release>\n\
+        <release type=\"stable\" urgency = \"low\" version = \"1.3.0\"/>\n\
+        </releases>\n</component>\n<release version=\"0.1";
+    assert_eq!(appimage::release_versions(xml), ["1.4.0", "1.3.2", "1.3.0"]);
+    let none: [&str; 0] = [];
+    assert_eq!(appimage::release_versions("no tags at all"), none);
+    assert_eq!(appimage::release_versions("<releases/><release"), none);
+}
+
+/// Acceptance (issue 223): name, icon and version are read out of the
+/// AppImage, by the spec's order of the version sources — the desktop
+/// entry, then the newest release of the metainfo, then the file name —
+/// and with none of them the version stays empty. Nothing is run, and an
+/// AppImage never goes through the archive detection.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn an_appimage_is_read_for_its_name_icon_and_version_without_being_run() {
+    let h = harness();
+    let detected = |fixture: AppImageFixture| {
+        detect::detect(&h.appimage(fixture)).unwrap_or_else(|e| panic!("{fixture:?}: {e}"))
+    };
+
+    // The desktop entry's version wins over the metainfo's.
+    let entry = detected(AppImageFixture::Entry);
+    assert_eq!(entry.format, Format::AppImage);
+    assert_eq!(entry.name, "Fixapp");
+    assert_eq!(entry.app_id(), "fixapp");
+    assert_eq!(entry.version, "2.1.0");
+    assert_eq!(entry.kind, Kind::Gui);
+    assert_eq!(entry.main, Some(0));
+    assert_eq!(entry.candidates.len(), 1);
+    assert_eq!(entry.candidates[0].elf.machine, this_machine());
+    assert_eq!(entry.arch_mismatch, None);
+    assert_eq!(entry.source_pattern, "entry.AppImage");
+    let shipped = entry.desktop.as_ref().unwrap_or_else(|| panic!("an entry"));
+    assert_eq!(shipped.rel, "fixapp.desktop");
+    assert_eq!(shipped.entry.get("Exec"), Some("fixapp %U"));
+    assert_eq!(entry.wm_class().as_deref(), Some("Fixapp"));
+    // `.DirIcon` is a link to the PNG beside it, followed inside the image.
+    assert_eq!(entry.icons.len(), 1);
+    let icon = &entry.icons[0];
+    assert_eq!(
+        (icon.rel.as_str(), icon.ext.as_str(), icon.size),
+        (".DirIcon", "png", Some((64, 64)))
+    );
+    assert_eq!(icon.data.as_deref(), Some(&tiny_png(64)));
+    assert!(entry.icon_trusted);
+
+    // Then the newest release of the metainfo, wherever it is listed.
+    let metainfo = detected(AppImageFixture::Metainfo);
+    assert_eq!(
+        (metainfo.name.as_str(), metainfo.version.as_str()),
+        ("Fixmeta", "1.4.0")
+    );
+    // Then the file's name, whose version is masked in the pattern.
+    let named = detected(AppImageFixture::FileName);
+    assert_eq!(
+        (named.name.as_str(), named.version.as_str()),
+        ("Fixname", "3.2.1")
+    );
+    assert_eq!(named.source_pattern, "Fixname-*-x86_64.AppImage");
+    // With none of the three the version is left to the user.
+    let none = detected(AppImageFixture::NoVersion);
+    assert_eq!((none.name.as_str(), none.version.as_str()), ("Fixnone", ""));
+
+    // The magic alone tells one, whatever its name.
+    let magic = detected(AppImageFixture::MagicOnly);
+    assert_eq!(magic.format, Format::AppImage);
+    assert_eq!(
+        (magic.name.as_str(), magic.version.as_str()),
+        ("Fixmagic", "0.9.0")
+    );
+    // The architecture is the AppImage's own header's.
+    assert_eq!(
+        detected(AppImageFixture::WrongArch).arch_mismatch,
+        Some(other_machine())
+    );
+    // A link that points out of the image is not followed: no icon.
+    let links = detected(AppImageFixture::OutsideLinks);
+    assert_eq!(links.name, "Fixlinks");
+    assert!(links.icons.is_empty(), "{:?}", links.icons);
+    assert!(!links.icon_trusted);
+
+    // An image that cannot be read is no error: the file's name gives the
+    // name and the version, and there is neither entry nor icon.
+    let type1 = detected(AppImageFixture::Type1);
+    assert_eq!(type1.format, Format::AppImage);
+    assert_eq!((type1.name.as_str(), type1.version.as_str()), ("type1", ""));
+    assert!(type1.desktop.is_none() && type1.icons.is_empty());
+    let bytes = AppImageFixture::Entry
+        .bytes()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let cut = h.file(
+        "Fixcut-0.4.2-aarch64.AppImage",
+        &bytes[..bytes.len() - 200],
+        0o644,
+    );
+    let cut = detect::detect(&cut).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        (cut.name.as_str(), cut.version.as_str()),
+        ("Fixcut", "0.4.2")
+    );
+    assert!(cut.desktop.is_none() && cut.icons.is_empty());
+    let bare = h.file(
+        "fixbare-x86_64.AppImage",
+        &tiny_appimage(this_machine(), 2, &[]),
+        0o644,
+    );
+    let bare = detect::detect(&bare).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((bare.name.as_str(), bare.version.as_str()), ("fixbare", ""));
+    // A file that is only named like one is no program.
+    let text = h.file("notes.AppImage", b"text\n", 0o644);
+    let error = detect::detect(&text).err().map(|e| text_of(&e));
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|e| e.contains("not a program")),
+        "{error:?}"
+    );
+
+    assert!(h.fake.ran().is_empty(), "nothing was run");
+}
+
+/// The image is read whatever it is compressed with among gzip, xz, zstd
+/// and lz4, and stored without compression.
+#[test]
+fn an_image_is_read_through_every_compression_the_reader_has() {
+    use backhand::compression::Compressor;
+    let h = harness();
+    let desktop = crate::fixtures::appimage_desktop("Fixzip", "fixzip", Some("7.0"));
+    let png = tiny_png(48);
+    for compressor in [
+        Compressor::Gzip,
+        Compressor::Xz,
+        Compressor::Zstd,
+        Compressor::Lz4,
+        Compressor::Uncompressed,
+    ] {
+        let mut bytes = tiny_appimage(this_machine(), 2, &[]);
+        bytes.extend(
+            squashfs(
+                &[
+                    ("fixzip.desktop", Inside::File(desktop.as_bytes())),
+                    ("fixzip.png", Inside::File(&png)),
+                ],
+                compressor,
+            )
+            .unwrap_or_else(|e| panic!("{compressor:?}: {e}")),
+        );
+        let path = h.file("fixzip.AppImage", &bytes, 0o644);
+        let bundled = appimage::read_bundled(&path)
+            .unwrap_or_else(|| panic!("{compressor:?}: the image is not read"));
+        assert_eq!(
+            bundled.desktop.as_ref().map(|(name, _)| name.as_str()),
+            Some("fixzip.desktop"),
+            "{compressor:?}"
+        );
+        // No `.DirIcon` here: the icon is the one the entry names.
+        let icon = bundled
+            .icon
+            .unwrap_or_else(|| panic!("{compressor:?}: an icon"));
+        assert_eq!((icon.name.as_str(), icon.ext), ("fixzip.png", "png"));
+        assert_eq!(icon.data, png, "{compressor:?}");
+        assert_eq!(bundled.release, None);
+    }
+}
+
+/// Acceptance (issue 223): *Install as application…* on an AppImage reads
+/// name, icon and version from the file and installs it on the archive
+/// model. The version folder holds the AppImage itself under the fixed
+/// name `<app-id>.AppImage` with the execute bit, `current` points at it,
+/// the desktop entry is the AppImage's own with `Exec` through `current`
+/// and its arguments, without `TryExec` and with the installed icon's
+/// name, and no command is linked. The downloaded file is left as it was:
+/// the same bytes, still without the execute bit. Nothing was run.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn an_appimage_installs_as_one_file_and_the_download_is_left_as_it_was() {
+    let h = harness();
+    let path = h.appimage(AppImageFixture::Entry);
+    let install = h.action(INSTALL);
+    if !supported() {
+        assert_eq!(
+            install.availability(&h.ctx_file(&path)),
+            Availability::Hidden
+        );
+        return;
+    }
+    let layout = h.layout();
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(mode_of(&path), Some(0o644));
+    assert_eq!(
+        install.availability(&h.ctx_file(&path)),
+        Availability::Enabled
+    );
+    assert_eq!(
+        install.availability(&h.ctx_file(&h.appimage(AppImageFixture::MagicOnly))),
+        Availability::Enabled,
+        "by the magic alone"
+    );
+
+    h.install_file(&path, Vec::new());
+
+    // The dialogue, in AppImage mode.
+    let form = h.ui.last_form();
+    assert_eq!(form.title, "Install entry.AppImage as application");
+    assert_eq!(form.note.as_deref(), Some("AppImage: entry.AppImage"));
+    assert!(matches!(
+        field(&form, "name"),
+        ext::FieldKind::Text { value, .. } if value == "Fixapp"
+    ));
+    assert!(matches!(
+        field(&form, "version"),
+        ext::FieldKind::Text { value, .. } if value == "2.1.0"
+    ));
+    assert!(
+        form.fields.iter().all(|f| f.key != "exe"),
+        "there is no executable to pick"
+    );
+    assert!(matches!(
+        field(&form, "icon"),
+        ext::FieldKind::Choice { options, selected: 1 } if options[1] == ".DirIcon · 64×64"
+    ));
+    let commands: Vec<&ext::Field> = form
+        .fields
+        .iter()
+        .filter(|f| f.key.starts_with("cmd"))
+        .collect();
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    assert_eq!(
+        commands[0].label,
+        "Link command fixapp → current/fixapp.AppImage"
+    );
+    assert!(
+        matches!(commands[0].kind, ext::FieldKind::Check { on: false }),
+        "a command is offered and not ticked"
+    );
+    let rows = h.ui.last_rows();
+    let row = |from: &str| {
+        rows.iter()
+            .find(|r| r.from == from)
+            .map_or_else(|| panic!("no row {from} in {rows:?}"), |r| r.to.clone())
+    };
+    assert_eq!(
+        row("AppImage"),
+        "entry.AppImage, copied as it is; nothing in it is run"
+    );
+    assert_eq!(row("Mode"), "new install");
+    assert_eq!(row("Main executable"), "current/fixapp.AppImage");
+    assert!(row("Desktop entry").contains("the AppImage's own"));
+    assert!(
+        rows.iter()
+            .all(|r| r.from != "Command" && r.problem.is_none())
+    );
+
+    // What was written.
+    let version_dir = layout.version_dir("fixapp", "2.1.0");
+    let installed = version_dir.join("fixapp.AppImage");
+    assert_eq!(
+        files_under(&version_dir),
+        ["fixapp.AppImage"],
+        "the one file and nothing unpacked"
+    );
+    assert_eq!(fs::read(&installed).ok().as_ref(), Some(&bytes));
+    assert_eq!(mode_of(&installed), Some(0o755));
+    assert_eq!(h.current("fixapp"), "2.1.0");
+    let record = h.record("fixapp");
+    assert_eq!(record.name, "Fixapp");
+    assert_eq!(record.kind, Kind::Gui);
+    assert_eq!(record.version, "2.1.0");
+    assert_eq!(record.previous_version, None);
+    assert_eq!(record.main_executable, "fixapp.AppImage");
+    assert_eq!(record.source_archive, "entry.AppImage");
+    assert_eq!(record.startup_wm_class.as_deref(), Some("Fixapp"));
+    assert!(record.commands().is_empty(), "{:?}", record.commands());
+    assert_eq!(
+        record.external_files.len(),
+        2,
+        "{:?}",
+        record.external_files
+    );
+
+    let desktop_path = layout.desktop_path("fixapp");
+    let desktop = fs::read_to_string(&desktop_path).unwrap_or_else(|e| panic!("{e}"));
+    let entry = desktop::DesktopEntry::parse(&desktop);
+    let through = layout.current("fixapp").join("fixapp.AppImage");
+    assert_eq!(
+        entry.get("Exec"),
+        Some(format!("\"{}\" %U", through.display()).as_str()),
+        "{desktop}"
+    );
+    assert_eq!(entry.get("TryExec"), None, "{desktop}");
+    assert_eq!(entry.get("Icon"), Some("fixapp"));
+    assert_eq!(entry.get("Name"), Some("Fixapp"));
+    assert_eq!(entry.get("Comment"), Some("A fixture"));
+    assert_eq!(entry.get("StartupWMClass"), Some("Fixapp"));
+    if let Some(valid) = desktop::validate(&desktop_path) {
+        valid.unwrap_or_else(|e| panic!("desktop-file-validate: {e}\n{desktop}"));
+    }
+    assert_eq!(
+        fs::read(layout.icon_path("fixapp", "64x64", "png")).ok(),
+        Some(tiny_png(64))
+    );
+    assert!(fs::symlink_metadata(layout.bin_dir().join("fixapp")).is_err());
+
+    // The row in Installed Apps.
+    let row = h.row("Fixapp");
+    assert_eq!(h.cell(&row, VERSION_COLUMN), "2.1.0");
+
+    // The download: where it was and as it was.
+    assert_eq!(fs::read(&path).ok(), Some(bytes));
+    assert_eq!(mode_of(&path), Some(0o644));
+    assert!(h.fake.ran().is_empty(), "nothing was run");
+}
+
+/// Acceptance (issue 223): an update from a file with another name leaves
+/// the desktop entry untouched, because the path through `current` is the
+/// same; one previous version is kept and Revert goes back to it; Repair
+/// reads a lost icon out of the installed AppImage again; and Uninstall
+/// removes everything the install created, the downloads staying where
+/// they were.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn an_appimage_updates_reverts_repairs_and_uninstalls_like_an_archive() {
+    let h = harness();
+    if !supported() {
+        return;
+    }
+    let layout = h.layout();
+    let home_before = files_under(&h.home());
+    let first = h.appimage(AppImageFixture::Entry);
+    let second = h.appimage(AppImageFixture::UpdateV2);
+    h.install_file(&first, Vec::new());
+    let desktop_path = layout.desktop_path("fixapp");
+    let desktop = fs::read(&desktop_path).unwrap_or_else(|e| panic!("{e}"));
+    let written = fs::metadata(&desktop_path)
+        .and_then(|m| m.modified())
+        .unwrap_or_else(|e| panic!("{e}"));
+
+    // The same id is offered as an update.
+    h.install_file(&second, Vec::new());
+    let form = h.ui.last_form();
+    assert_eq!(form.title, "Fixapp 2.1.0 is installed — update to 2.2.0?");
+    assert_eq!(h.current("fixapp"), "2.2.0");
+    let record = h.record("fixapp");
+    assert_eq!(record.version, "2.2.0");
+    assert_eq!(record.previous_version.as_deref(), Some("2.1.0"));
+    assert_eq!(record.source_archive, "update-v2.AppImage");
+    assert_eq!(record.main_executable, "fixapp.AppImage");
+    let app_dir = layout.app_dir("fixapp");
+    assert_eq!(
+        fs::read(app_dir.join("2.2.0/fixapp.AppImage")).ok(),
+        fs::read(&second).ok()
+    );
+    assert!(
+        app_dir.join("2.1.0/fixapp.AppImage").is_file(),
+        "the previous version is kept"
+    );
+    assert_eq!(
+        fs::read(&desktop_path).ok().as_ref(),
+        Some(&desktop),
+        "the desktop entry is not rewritten"
+    );
+    assert_eq!(
+        fs::metadata(&desktop_path).and_then(|m| m.modified()).ok(),
+        Some(written),
+        "nor written again"
+    );
+
+    // Revert flips back; the entry still runs through current.
+    h.ok(REVERT, h.ctx_view(vec![h.row("Fixapp")]));
+    assert_eq!(h.current("fixapp"), "2.1.0");
+    assert_eq!(fs::read(&desktop_path).ok().as_ref(), Some(&desktop));
+
+    // A lost icon comes back out of the installed AppImage.
+    let icon = layout.icon_path("fixapp", "64x64", "png");
+    fs::remove_file(&icon).unwrap_or_else(|e| panic!("{e}"));
+    h.ok(REPAIR, h.ctx_view(vec![h.row("Fixapp")]));
+    assert_eq!(fs::read(&icon).ok(), Some(tiny_png(64)));
+
+    // Uninstall: exactly what the install created.
+    h.ok(UNINSTALL, h.ctx_view(vec![h.row("Fixapp")]));
+    assert_eq!(files_under(&h.home()), home_before);
+    assert!(first.is_file() && second.is_file(), "the downloads stay");
+    assert_eq!(mode_of(&first), Some(0o644));
+    assert!(h.fake.ran().is_empty(), "nothing was run");
+}
+
+/// Acceptance (issue 223): with no version in the desktop entry, the
+/// metainfo or the file name, *Install* waits for one. The field is
+/// empty and required, the summary names the problem, and nothing is
+/// written until the user has typed a version; no version is made up.
+#[test]
+fn an_appimage_without_a_version_waits_for_the_user_to_type_one() {
+    let h = harness();
+    if !supported() {
+        return;
+    }
+    let layout = h.layout();
+    let path = h.appimage(AppImageFixture::NoVersion);
+    h.ui.answer_form(Vec::new());
+    let (outcome, _) = h.run(INSTALL, h.ctx_file(&path));
+    let error = outcome.err().map(|e| text_of(&e));
+    assert!(
+        error.as_deref().is_some_and(|e| e.contains("version")),
+        "{error:?}"
+    );
+    let form = h.ui.last_form();
+    let version = form
+        .fields
+        .iter()
+        .find(|f| f.key == "version")
+        .unwrap_or_else(|| panic!("a version field"));
+    assert!(matches!(
+        &version.kind,
+        ext::FieldKind::Text { value, .. } if value.is_empty()
+    ));
+    assert_eq!(
+        version.required.as_deref(),
+        Some("Couldn't read the version from the AppImage — please enter it.")
+    );
+    assert!(
+        h.ui.last_rows().iter().any(|r| r.problem.is_some()),
+        "the summary holds the install back"
+    );
+    assert!(!layout.app_dir("fixnone").exists(), "nothing was written");
+
+    h.install_file(&path, vec![("version", Value::Text("0.1.0".to_owned()))]);
+    assert_eq!(h.current("fixnone"), "0.1.0");
+    assert!(
+        layout
+            .version_dir("fixnone", "0.1.0")
+            .join("fixnone.AppImage")
+            .is_file()
+    );
+}
+
+/// Where the image cannot be read — an AppImage of type 1 — the dialogue
+/// opens with a minimal entry from the file name and no icon, as for an
+/// archive without one, and the install generates the desktop entry.
+#[test]
+fn an_appimage_whose_image_cannot_be_read_installs_with_a_minimal_entry() {
+    let h = harness();
+    if !supported() {
+        return;
+    }
+    let layout = h.layout();
+    let path = h.appimage(AppImageFixture::Type1);
+    h.install_file(&path, vec![("version", Value::Text("1.0".to_owned()))]);
+    let form = h.ui.last_form();
+    assert!(matches!(
+        field(&form, "name"),
+        ext::FieldKind::Text { value, .. } if value == "type1"
+    ));
+    assert!(matches!(
+        field(&form, "icon"),
+        ext::FieldKind::Choice { options, selected: 0 } if options.len() == 1
+    ));
+    assert!(
+        h.ui.last_rows()
+            .iter()
+            .any(|r| r.from == "Desktop entry" && r.to.contains("generated"))
+    );
+    let record = h.record("type1");
+    assert_eq!(record.main_executable, "type1.AppImage");
+    let desktop =
+        fs::read_to_string(layout.desktop_path("type1")).unwrap_or_else(|e| panic!("{e}"));
+    let entry = desktop::DesktopEntry::parse(&desktop);
+    assert_eq!(entry.get("Name"), Some("type1"));
+    assert_eq!(
+        entry.get("Exec"),
+        Some(
+            format!(
+                "\"{}\"",
+                layout.current("type1").join("type1.AppImage").display()
+            )
+            .as_str()
+        ),
+        "{desktop}"
+    );
+    assert_eq!(entry.get("Icon"), None, "{desktop}");
+    assert_eq!(
+        record
+            .external_files
+            .iter()
+            .filter(|f| f.kind == crate::record::FileKind::Icon)
+            .count(),
+        0
+    );
+}
+
+/// The architecture check reads the AppImage's own ELF header: one built
+/// for another machine is refused in the dialogue, before anything is
+/// copied.
+#[test]
+fn an_appimage_of_another_machine_is_refused_by_the_dialogue() {
+    let h = harness();
+    if !supported() {
+        return;
+    }
+    let path = h.appimage(AppImageFixture::WrongArch);
+    h.ui.answer_form(Vec::new());
+    let (outcome, _) = h.run(INSTALL, h.ctx_file(&path));
+    let error = outcome.err().map(|e| text_of(&e));
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|e| e.contains("this AppImage is built for")),
+        "{error:?}"
+    );
+    assert!(!h.layout().app_dir("fixarch").exists());
+}
+
+/// `rick install <file>` and *Update from archive…* take an AppImage as
+/// they take an archive, by its name or by its magic.
+#[test]
+fn the_command_line_and_update_from_archive_take_an_appimage() {
+    let h = harness();
+    if !supported() {
+        return;
+    }
+    let command = h
+        .registry
+        .commands()
+        .iter()
+        .find(|c| c.name() == INSTALL_COMMAND)
+        .cloned()
+        .unwrap_or_else(|| panic!("the install command is registered"));
+    let cwd = h.dir.path().to_path_buf();
+    h.appimage(AppImageFixture::Entry);
+    h.appimage(AppImageFixture::MagicOnly);
+    for name in ["entry.AppImage", "magic-only"] {
+        let outcome = command
+            .run(
+                CliCtx {
+                    args: vec![name.to_owned()],
+                    cwd: cwd.clone(),
+                    pane: PaneId(1),
+                    location: Location::new(
+                        ProviderId::LOCAL,
+                        ext::platform::paths::from_path(&cwd),
+                    ),
+                },
+                &h.jobs,
+                &h.ui,
+            )
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(
+            matches!(outcome, CliOutcome::Outcome(ActionOutcome::Later(_))),
+            "{name}: {outcome:?}"
+        );
+        h.settle();
+    }
+
+    // Update from archive…, on the installed app's row, with the path of
+    // the next AppImage typed.
+    h.install_file(&h.appimage(AppImageFixture::Entry), Vec::new());
+    let next = h.appimage(AppImageFixture::UpdateV2);
+    *h.ui.prompt.lock().unwrap_or_else(PoisonError::into_inner) =
+        Some(next.to_string_lossy().into_owned());
+    h.ui.answer_form(Vec::new());
+    h.ok(UPDATE, h.ctx_view(vec![h.row("Fixapp")]));
+    assert_eq!(h.current("fixapp"), "2.2.0");
+    assert_eq!(
+        h.record("fixapp").previous_version.as_deref(),
+        Some("2.1.0")
+    );
 }

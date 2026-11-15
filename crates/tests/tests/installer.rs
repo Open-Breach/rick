@@ -15,7 +15,11 @@
 //!
 //! Issue 223: *Run* on an AppImage, and Enter on it, set the execute bit
 //! and start the file in its folder; one built for another machine is
-//! refused untouched.
+//! refused untouched. *Install as application…* on an AppImage reads its
+//! name, icon and version out of the file, installs the one file under
+//! `current`, updates it from a file of another name without touching the
+//! desktop entry, and uninstalls it without a trace, the downloads left
+//! as they were.
 
 use std::fs;
 use std::io::{self, Read, Write as _};
@@ -26,7 +30,9 @@ use std::time::{Duration, Instant};
 
 use app::{App, Command, Config, Event};
 use ext::{ActionId, Form, Invocation, Level, UiHost, Value, Values};
-use ext_installer::fixtures::{Fixture, other_machine, this_machine, tiny_appimage, tiny_elf};
+use ext_installer::fixtures::{
+    AppImageFixture, Fixture, other_machine, this_machine, tiny_appimage, tiny_elf,
+};
 use ext_installer::record::{Layout, Record};
 use model::{JobState, SelectionChange};
 use platform::{ConfigDir, Fake};
@@ -540,6 +546,115 @@ fn run_and_enter_start_an_appimage_through_the_app() {
     }
     assert_eq!(driver.fake.ran().len(), 2, "nothing more was started");
     assert_eq!(mode(&other), Some(0o644));
+}
+
+/// Acceptance (issue 223, item 3), through the app with the plugin
+/// loaded. An AppImage has *Run* and *Install as application…* in its
+/// menu. The install reads the file in the job *Reading AppImage…* and
+/// lands where an archive's lands: the one file under
+/// `~/.local/opt/<id>/<version>/`, `current`, the record, the AppImage's
+/// own desktop entry and icon. The launcher's entry starts the app
+/// through `current`, the app shows in Installed Apps, an update from a
+/// file of another name leaves the desktop entry as it is, and Uninstall
+/// leaves the home as it was. The downloaded files keep their bytes and
+/// stay without the execute bit.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn an_appimage_installs_updates_and_uninstalls_through_the_app() {
+    if !ext_installer::supported() {
+        eprintln!("the installer is Linux only; skipping");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().canonicalize().unwrap_or_else(|e| panic!("{e}"));
+    let first = AppImageFixture::Entry
+        .write(&root)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let second = AppImageFixture::UpdateV2
+        .write(&root)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let downloaded = fs::read(&first).unwrap_or_else(|e| panic!("{e}"));
+    let mode = |path: &Path| {
+        platform::fs::unix_mode(path)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .map(|mode| mode & 0o7777)
+    };
+    let mut d = Driver::new(&root);
+    let home = d.fake.home_dir();
+    let before = files_under(&home);
+    let layout = d.layout();
+
+    // Both entries, and the install.
+    d.select(&[AppImageFixture::Entry.file_name()]);
+    assert!(d.offers("installer.run") && d.offers("installer.install"));
+    d.ui.answer_form(Vec::new());
+    let events = d.run("installer.install");
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    assert!(
+        d.app
+            .model()
+            .jobs
+            .values()
+            .any(|job| job.name == ext_installer::actions::READING_APPIMAGE),
+        "the file is read in a job of its own: {:?}",
+        d.app.model().jobs
+    );
+    assert_eq!(d.current("fixapp"), "2.1.0");
+    let installed = layout
+        .version_dir("fixapp", "2.1.0")
+        .join("fixapp.AppImage");
+    assert_eq!(fs::read(&installed).ok().as_ref(), Some(&downloaded));
+    assert_eq!(mode(&installed), Some(0o755));
+    let record = d.record("fixapp");
+    assert_eq!(record.name, "Fixapp");
+    assert_eq!(record.main_executable, "fixapp.AppImage");
+    assert_eq!(record.external_files.len(), 2, "the entry and the icon");
+    assert!(layout.icon_path("fixapp", "64x64", "png").is_file());
+
+    // The launcher's entry starts the app, through current.
+    let desktop_path = layout.desktop_path("fixapp");
+    let desktop = fs::read(&desktop_path).unwrap_or_else(|e| panic!("{e}"));
+    let entry = ext_installer::desktop::DesktopEntry::parse(&String::from_utf8_lossy(&desktop));
+    let exec = entry.get("Exec").unwrap_or_default().to_owned();
+    let through = layout.current("fixapp").join("fixapp.AppImage");
+    assert_eq!(exec, format!("\"{}\" %U", through.display()));
+    assert_eq!(entry.get("Icon"), Some("fixapp"));
+    let status = std::process::Command::new(&through)
+        .status()
+        .unwrap_or_else(|e| panic!("running {}: {e}", through.display()));
+    assert!(status.success(), "{status}");
+
+    // The download is where it was and as it was.
+    assert_eq!(fs::read(&first).ok().as_ref(), Some(&downloaded));
+    assert_eq!(mode(&first), Some(0o644));
+    assert!(d.fake.ran().is_empty(), "the install ran nothing");
+
+    // Installed Apps lists it.
+    d.navigate(ext_installer::location());
+    assert_eq!(d.names(), ["Fixapp"]);
+
+    // The next version, from a file with another name: an update, and the
+    // desktop entry is not touched.
+    d.navigate(local(&root));
+    d.select(&[AppImageFixture::UpdateV2.file_name()]);
+    d.ui.answer_form(Vec::new());
+    let events = d.run("installer.install");
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    assert_eq!(d.current("fixapp"), "2.2.0");
+    let record = d.record("fixapp");
+    assert_eq!(record.previous_version.as_deref(), Some("2.1.0"));
+    assert_eq!(record.source_archive, "update-v2.AppImage");
+    assert_eq!(fs::read(&desktop_path).ok().as_ref(), Some(&desktop));
+    assert!(installed.is_file(), "one previous version is kept");
+
+    // Uninstall: the home is what it was, the downloads are still there.
+    d.navigate(ext_installer::location());
+    d.select(&["Fixapp"]);
+    let events = d.run("installer.uninstall");
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    assert_eq!(files_under(&home), before, "nothing of Rick's remains");
+    assert!(first.is_file() && second.is_file());
+    assert_eq!(mode(&second), Some(0o644));
 }
 
 /// Pseudo-random bytes, so a stored gzip stays as large as its contents.

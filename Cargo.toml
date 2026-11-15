@@ -98,6 +98,10 @@ sevenz-rust2 = { version = "0.25", default-features = false, features = ["compre
 unrar = "0.5"
 hadris-fs = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
 hadris-iso = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
+# The installer reads an AppImage's desktop entry, icon and metainfo out of
+# its SquashFS image without running the file (specs/ext-installer.md
+# "AppImages", issue 223): pure Rust, over the codec crates above.
+backhand = { version = "0.25", default-features = false, features = ["gzip", "xz", "zstd", "lz4"] }
 hadris-udf = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
 hadris-storage = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
 # The other previewer plugins of issue 18: Office metadata from the zip's

@@ -24,5 +24,7 @@ installer-advanced-summary = Kategorie, StartupWMClass, Befehle, PATH-Variable, 
 installer-commands-to-link = Zu verknüpfende Befehle
 installer-version-hint = z. B. 2026.2.4.1
 installer-version-missing = Die Version konnte nicht aus dem Archiv gelesen werden — bitte eingeben.
+installer-version-missing-appimage = Die Version konnte nicht aus dem AppImage gelesen werden — bitte eingeben.
 installer-archive-note = Archiv: { $name }
+installer-appimage-note = AppImage: { $name }
 installer-no-icon-generated = Kein Symbol gefunden · erzeugt

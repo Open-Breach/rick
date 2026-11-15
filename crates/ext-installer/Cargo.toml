@@ -37,6 +37,9 @@ flate2 = { workspace = true }
 liblzma = { workspace = true }
 bzip2 = { workspace = true }
 zstd = { workspace = true }
+# An AppImage's image is read by this crate too, never by running the file
+# (specs/ext-installer.md "AppImages").
+backhand = { workspace = true }
 
 [dev-dependencies]
 ext-installer = { path = ".", features = ["fixtures"] }

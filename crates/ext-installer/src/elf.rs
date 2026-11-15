@@ -54,6 +54,10 @@ pub struct Elf {
     pub rpath: Vec<String>,
     /// `DT_RUNPATH` entries.
     pub runpath: Vec<String>,
+    /// Where the ELF ends in its file: the end of the section header
+    /// table, which a linker writes last. What an AppImage carries behind
+    /// its runtime starts here. 0 when the header names no table.
+    pub end: u64,
 }
 
 impl Elf {
@@ -258,6 +262,20 @@ fn read_dynamic<R: Read + Seek>(reader: &mut Reader<R>, elf: &mut Elf) -> io::Re
             reader.u16(&header[44..46]),
         )
     };
+    let (shoff, shentsize, shnum) = if reader.class64 {
+        (
+            reader.u64(&header[40..48]),
+            reader.u16(&header[58..60]),
+            reader.u16(&header[60..62]),
+        )
+    } else {
+        (
+            u64::from(reader.u32(&header[32..36])),
+            reader.u16(&header[46..48]),
+            reader.u16(&header[48..50]),
+        )
+    };
+    elf.end = shoff.saturating_add(u64::from(shentsize) * u64::from(shnum));
     if phnum == 0 || phnum > 512 || usize::from(phentsize) < if reader.class64 { 56 } else { 32 } {
         return Ok(());
     }
