@@ -372,6 +372,16 @@ enum Msg {
         entry: Entry,
         location: Option<Location>,
     },
+    /// `Command::GoTo`'s job answered: where the typed path leads, `None`
+    /// where the provider could not say or nothing of it exists.
+    WentTo {
+        pane: PaneId,
+        tab: TabId,
+        /// Where the tab was when the path was typed.
+        from: Location,
+        typed: Location,
+        reached: Option<Reached>,
+    },
     /// The pause after the search box's last keystroke is over: ask the
     /// indexes.
     IndexSearchStart {
@@ -1698,6 +1708,7 @@ impl App {
                     }
                 }
             }
+            Command::GoTo { pane, to } => self.go_to(pane, to, events),
             Command::Open { pane, id } => self.open(pane, id, events),
             Command::Back(pane) => {
                 let before = self.selected_ids(pane);
@@ -4888,6 +4899,42 @@ impl App {
                     None => self.open_default(pane, entry, events),
                 }
             }
+            Msg::WentTo {
+                pane,
+                tab,
+                from,
+                typed,
+                reached,
+            } => {
+                // The pane may have moved on since; then the answer is moot.
+                if !self
+                    .model
+                    .active_tab(pane)
+                    .is_some_and(|(id, t)| id == tab && t.location == from)
+                {
+                    return;
+                }
+                let Some(reached) = reached else {
+                    self.dispatch(Command::Navigate { pane, to: typed }, events);
+                    return;
+                };
+                self.dispatch(
+                    Command::Navigate {
+                        pane,
+                        to: reached.folder,
+                    },
+                    events,
+                );
+                // After the navigation, which forgets what the tab said of
+                // the place it left.
+                self.model.set_missing(pane, reached.missing);
+                if let Some(name) = reached.file {
+                    // Selected once it is listed, as `rick reveal` selects.
+                    self.reveal_pending
+                        .insert(pane, (vec![name], std::time::Instant::now()));
+                    self.resolve_reveal(pane, false, events);
+                }
+            }
             Msg::Trash(Ok((items, size))) => {
                 let changed = self.model.trash.items != items || !self.model.trash.listed;
                 let share = self.trash_share(&items, size);
@@ -5381,11 +5428,52 @@ impl App {
             return;
         }
         if let Some(ids) = self.model.select(pane, SelectionChange::Set(ids)) {
-            events.push(Event::SelectionChanged { pane, ids });
+            events.push(Event::SelectionChanged {
+                pane,
+                ids: ids.clone(),
+            });
+            events.push(Event::Revealed { pane, ids });
         }
         if properties {
             self.show_properties(pane, events);
         }
+    }
+
+    /// Goes where a path typed into the path bar leads
+    /// ([`Command::GoTo`]): a job asks the provider what the path is and,
+    /// where it is not there, which of its folders is the deepest that
+    /// exists; [`Msg::WentTo`] navigates. A `rick://` view, and a path on a
+    /// provider that is not mounted, is navigated to as it always was.
+    fn go_to(&mut self, pane: PaneId, to: Location, events: &mut Vec<Event>) {
+        let Some((tab, from)) = self
+            .model
+            .active_tab(pane)
+            .map(|(id, tab)| (id, tab.location.clone()))
+        else {
+            return;
+        };
+        let provider = (to.provider != ProviderId::RICK)
+            .then(|| self.mounts.provider(to.provider))
+            .flatten();
+        let Some(provider) = provider else {
+            self.dispatch(Command::Navigate { pane, to }, events);
+            return;
+        };
+        let tx = self.mailbox.clone();
+        let handle = self
+            .jobs
+            .spawn_named(format!("Go to {}", to.path), move |_job| async move {
+                let reached = reach(&*provider, &to).await;
+                tx.send(Msg::WentTo {
+                    pane,
+                    tab,
+                    from,
+                    typed: to,
+                    reached,
+                });
+                Ok(())
+            });
+        self.internal.insert(handle.id);
     }
 
     /// Keeps each console and the explorer tab it was opened from in step
@@ -6049,6 +6137,83 @@ impl PreviewRun {
         });
         Ok(())
     }
+}
+
+/// Where a typed path leads ([`reach`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Reached {
+    /// The folder the pane goes to.
+    folder: Location,
+    /// The name of the file to select there: the path named a file.
+    file: Option<Vec<u8>>,
+    /// The rest of the path, which does not exist under `folder`.
+    missing: Option<String>,
+}
+
+/// Follows a typed path as far as it exists (SPEC.md *A file's path*, *A
+/// path that exists only in part*), by asking the provider what each
+/// place is. A folder is itself; a file is its folder with the file to
+/// select; a path that is not there is the deepest of its folders that
+/// is, with the rest as what is missing. A link counts as a folder,
+/// which is what navigating to one has always assumed.
+///
+/// `None` where the provider cannot say — any answer but "it is there" or
+/// "it is not there": a host that does not answer, a folder that refuses
+/// — and where nothing of the path exists.
+async fn reach(provider: &dyn ext::Provider, to: &Location) -> Option<Reached> {
+    let folder = |entry: &Entry| matches!(entry.kind, EntryKind::Dir | EntryKind::Symlink { .. });
+    match provider.stat(to).await {
+        Ok(entry) if folder(&entry) => {
+            return Some(Reached {
+                folder: to.clone(),
+                file: None,
+                missing: None,
+            });
+        }
+        Ok(_) => {
+            return Some(Reached {
+                folder: Location::new(to.provider, to.path.parent()?),
+                file: Some(to.path.file_name()?.to_vec()),
+                missing: None,
+            });
+        }
+        Err(Error::NotFound) => {}
+        Err(_) => return None,
+    }
+    let mut at = to.path.parent();
+    while let Some(path) = at {
+        let here = Location::new(to.provider, path.clone());
+        match provider.stat(&here).await {
+            Ok(entry) if folder(&entry) => {
+                return Some(Reached {
+                    missing: Some(rest_of(&to.path, &path)),
+                    folder: here,
+                    file: None,
+                });
+            }
+            // A file in the way is no folder to go to.
+            Ok(_) | Err(Error::NotFound) => at = path.parent(),
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+/// What of `whole` comes after its ancestor `folder`, as it was written:
+/// `reports/2026/q3` of `/home/serge/reports/2026/q3/` after
+/// `/home/serge`, with the separators the path has.
+fn rest_of(whole: &VPath, folder: &VPath) -> String {
+    let is_separator = |byte: &u8| matches!(byte, b'/' | b'\\');
+    let rest = whole
+        .as_bytes()
+        .strip_prefix(folder.as_bytes())
+        .unwrap_or(whole.as_bytes());
+    let start = rest.iter().position(|b| !is_separator(b)).unwrap_or(0);
+    let end = rest
+        .iter()
+        .rposition(|b| !is_separator(b))
+        .map_or(rest.len(), |last| last + 1);
+    String::from_utf8_lossy(&rest[start..end.max(start)]).into_owned()
 }
 
 /// The entry as a path on this machine, for an entry of the local
