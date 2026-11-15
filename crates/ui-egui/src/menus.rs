@@ -750,6 +750,7 @@ fn action_icon(id: &str) -> Option<&'static str> {
         "core.hash" => icons::HASH,
         // `DOWNLOAD_SIMPLE`: what comes down to the machine.
         "core.download" | "installer.install" => icons::INSTALL,
+        "installer.run" => icons::PLAY,
         _ => return None,
     })
 }
