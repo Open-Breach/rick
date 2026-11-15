@@ -304,7 +304,8 @@ fn title_widths(harness: &Harness<'_, RickUi>, title: &str) -> Vec<f32> {
 /// room. A second tab brings the button back on both and closing one
 /// takes it away again; with two windows the only tab of each closes its
 /// window and so has its button. Mod+W and a middle click on the tab
-/// without a button do nothing.
+/// without a button do nothing, and leave nothing for *Reopen closed
+/// tab* to bring back.
 #[test]
 fn the_tab_that_cannot_be_closed_has_no_close_button() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -331,6 +332,14 @@ fn the_tab_that_cannot_be_closed_has_no_close_button() {
     settle(&mut harness);
     assert_eq!(titles(&harness), [name]);
     assert_eq!(buttons(&harness), 0);
+    // Nothing closed, so there is nothing to reopen.
+    harness.key_press_modifiers(
+        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        egui::Key::T,
+    );
+    harness.step();
+    settle(&mut harness);
+    assert_eq!(titles(&harness), [name], "no tab was closed");
 
     // A second tab brings the button back on both, and the titles give
     // way to it.

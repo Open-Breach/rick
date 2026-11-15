@@ -3180,10 +3180,12 @@ impl RickUi {
     }
 
     /// Closes a workspace tab, remembering the folder of its focused pane
-    /// so that *Reopen closed tab* brings it back.
+    /// so that *Reopen closed tab* brings it back. The tab that cannot be
+    /// closed stays and is not remembered: there is nothing to bring back.
     fn close_workspace(&mut self, id: WorkspaceId) {
         let model = self.app.model();
-        if let Some(window) = model.window_of_workspace(id)
+        if model.can_close_workspace(id)
+            && let Some(window) = model.window_of_workspace(id)
             && let Some(ws) = model.workspaces(window).iter().find(|ws| ws.id == id)
             && let Some((_, tab)) = model.active_tab(ws.focused)
             && tab.kind.lists()
