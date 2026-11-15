@@ -202,6 +202,9 @@ pub const DOCUMENT: &str = ph::FILE_TEXT;
 pub const CODE: &str = ph::CODE;
 /// The app launcher entry among the integration items.
 pub const DESKTOP: &str = ph::DESKTOP;
+/// *Set as desktop background*, in the context menu and the preview
+/// pane's toolbar.
+pub const MONITOR: &str = ph::MONITOR;
 /// The EXIF badge.
 pub const CAMERA: &str = ph::CAMERA;
 /// The Git badge.

@@ -188,6 +188,9 @@ pub(crate) fn card_rows(
     rows
 }
 
+/// *Set as desktop background*, the core action the toolbar's button runs.
+const DESKTOP_BACKGROUND: ext::ActionId = ext::ActionId("core.set_desktop_background");
+
 /// What a toolbar control asked for.
 enum Act {
     Setting(SettingsChange),
@@ -202,6 +205,9 @@ enum Act {
     Volume(f32),
     /// Copy the whole file's text to the clipboard.
     Copy,
+    /// Set the file shown as the desktop's background, with the context
+    /// the action runs in.
+    DesktopBackground(ext::ActionCtx),
     Close,
 }
 
@@ -245,6 +251,10 @@ struct View<'a> {
     copy: bool,
     /// The media transport, when the document is media.
     transport: Option<TransportView>,
+    /// What *Set as desktop background* runs with, when the action applies
+    /// to the file shown: the followed pane's selection, which is that
+    /// file. `None` wherever the context menu does not offer the action.
+    background: Option<ext::ActionCtx>,
 }
 
 impl View<'_> {
@@ -600,6 +610,10 @@ fn apply_acts(
             (Act::Copy, Some(pane)) => {
                 requests.push(Request::Command(Command::PreviewCopy(pane)));
             }
+            (Act::DesktopBackground(ctx), _) => requests.push(Request::RunAction {
+                action: DESKTOP_BACKGROUND,
+                ctx,
+            }),
             (Act::Close, _) => close = true,
             (
                 Act::Page(_)
@@ -689,7 +703,19 @@ fn collect<'a>(ui: &egui::Ui, app: &'a App, previews: &mut Previews) -> View<'a>
         status: slot.map_or_default(|s| s.status().to_vec()),
         copy,
         transport: None,
+        background: None,
     };
+    // One action in two places: the toolbar asks the action itself, with
+    // what the context menu of the file would hand it.
+    view.background = pane
+        .filter(|_| entry.is_some() && shown.is_some())
+        .and_then(|pane| app.action_ctx(pane, Invocation::ContextMenu))
+        .filter(|ctx| {
+            app.registry().actions().iter().any(|action| {
+                action.id() == DESKTOP_BACKGROUND
+                    && action.availability(ctx) == ext::Availability::Enabled
+            })
+        });
     view.transport = pane
         .filter(|_| target.is_some())
         .and_then(|pane| previews.get_mut(pane).transport())
@@ -1001,6 +1027,19 @@ fn standard_controls(
         }
         if toggle(ui, state, icons::ACTUAL_SIZE, "1:1", view.actual_size) {
             acts.push(Act::ActualSize(true));
+        }
+        // After them, for an image the action applies to (SPEC.md
+        // *Toolbar*): absent wherever the context menu's entry is.
+        if let Some(ctx) = &view.background
+            && button(
+                ui,
+                state,
+                icons::MONITOR,
+                &t!("action-set-desktop-background"),
+                true,
+            )
+        {
+            acts.push(Act::DesktopBackground(ctx.clone()));
         }
     }
 }

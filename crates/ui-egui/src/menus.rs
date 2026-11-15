@@ -736,6 +736,7 @@ fn action_icon(id: &str) -> Option<&'static str> {
         "core.open_default" => icons::FOLDER_OPEN,
         "core.open_with" => icons::OPEN_WITH,
         "core.open_in_editor" => icons::EDIT,
+        "core.set_desktop_background" => icons::MONITOR,
         "core.mount" => icons::MOUNT,
         "core.open_containing" | "core.open_containing_tab" => icons::FOLDER,
         "core.reveal" => icons::REVEAL,
@@ -794,6 +795,7 @@ const FILE_GROUPS: &[&[&str]] = &[
         "core.reveal",
         "core.pin",
         "core.unpin",
+        "core.set_desktop_background",
     ],
     &[
         "core.cut",
