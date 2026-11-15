@@ -1,6 +1,7 @@
 # ext-installer — Deutsch: die Aktionen der Kontextmenüs; was fehlt, erscheint auf Englisch.
 
 installer-install-as-application = Als Anwendung installieren…
+installer-run = Ausführen
 installer-installed-apps = Installierte Anwendungen…
 installer-open-install-folder = Installationsordner öffnen
 installer-launch = Starten

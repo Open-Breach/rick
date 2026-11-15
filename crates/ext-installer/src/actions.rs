@@ -1,5 +1,5 @@
 //! The actions: *Install as application…* on an archive with its form,
-//! *Installed Apps…* opening the view (from the palette and the burger
+//! *Run* on an AppImage, *Installed Apps…* opening the view (from the palette and the burger
 //! menu's *Installer* submenu), and the per-row actions of the view
 //! (Open install folder, Launch, Update from archive…, Revert to previous
 //! version, Edit launcher…, Uninstall…, Repair, Forget, Remove staging
@@ -22,6 +22,7 @@ use ext::{
 };
 use types::{CancelToken, Entry, EntryKind, Error, Location, Progress, ProviderId};
 
+use crate::appimage;
 use crate::archive::{Format, OnProgress};
 use crate::detect::{self, CATEGORIES, Detected};
 use crate::error::{InstallError, err};
@@ -32,6 +33,10 @@ use crate::{is_view, location};
 
 /// Install the selected archive as an application.
 pub const INSTALL: ActionId = ActionId("installer.install");
+/// Run the selected AppImage as it is. The application names this id: Enter
+/// and a double-click on an AppImage run this action
+/// (specs/ext-installer.md "AppImages").
+pub const RUN: ActionId = ActionId("installer.run");
 /// Open the Installed Apps view.
 pub const APPS: ActionId = ActionId("installer.apps");
 /// Open the selected app's install folder.
@@ -85,6 +90,14 @@ const CMD_KEYS: [&str; 16] = [
 /// runs again.
 type Stamp = (u64, Option<SystemTime>);
 
+/// What a listing says of a file's size and modification time: a file
+/// whose header was looked at is looked at again only when they change.
+type Listed = (Option<u64>, Option<SystemTime>);
+
+/// How many answers about files being AppImages are kept before the list
+/// starts over.
+const APPIMAGES_KEPT: usize = 256;
+
 /// The actions' shared state: the view's provider and the detections of
 /// the archives looked at, so a second look at an unchanged file opens
 /// the form without reading it again.
@@ -92,6 +105,9 @@ pub struct Installer {
     /// The view, whose last scan the actions read.
     pub provider: Arc<AppsProvider>,
     detections: Mutex<HashMap<PathBuf, (Stamp, Arc<Detected>)>>,
+    /// Whether the files asked about carry the AppImage magic: a menu asks
+    /// on every frame, and a file's header is read once.
+    appimages: Mutex<HashMap<PathBuf, (Listed, bool)>>,
 }
 
 impl std::fmt::Debug for Installer {
@@ -113,7 +129,31 @@ impl Installer {
         Self {
             provider,
             detections: Mutex::new(HashMap::new()),
+            appimages: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Whether the local file `entry`, at `path`, is an AppImage: by its
+    /// name, or by the magic in its ELF header, which is read once for a
+    /// file as it was listed.
+    #[must_use]
+    pub fn is_appimage(&self, path: &Path, entry: &Entry) -> bool {
+        if appimage::has_extension(&entry.name) {
+            return true;
+        }
+        let listed: Listed = (entry.size, entry.modified);
+        let mut kept = lock(&self.appimages);
+        if let Some((as_listed, answer)) = kept.get(path)
+            && *as_listed == listed
+        {
+            return *answer;
+        }
+        let answer = appimage::magic_of(path).is_some();
+        if kept.len() >= APPIMAGES_KEPT {
+            kept.clear();
+        }
+        kept.insert(path.to_path_buf(), (listed, answer));
+        answer
     }
 
     /// The detection kept from an earlier look at the file at `path`, when
@@ -184,6 +224,7 @@ pub fn commands(installer: &Arc<Installer>) -> Vec<Arc<dyn CliCommand>> {
 #[must_use]
 pub fn all(installer: &Arc<Installer>) -> Vec<Arc<dyn Action>> {
     vec![
+        Arc::new(Run(Arc::clone(installer))),
         Arc::new(Install(Arc::clone(installer))),
         Arc::new(Apps),
         Arc::new(OpenFolder(Arc::clone(installer))),
@@ -215,6 +256,19 @@ fn selected_archive(ctx: &ActionCtx) -> Option<PathBuf> {
     }
     Format::by_name(&entry.name)?;
     local_path(&Location::new(entry.id.provider, entry.path.clone()))
+}
+
+/// The one selected local file that is an AppImage, when the selection is
+/// exactly that.
+fn selected_appimage(installer: &Installer, ctx: &ActionCtx) -> Option<PathBuf> {
+    let [entry] = ctx.selection.as_slice() else {
+        return None;
+    };
+    if entry.id.provider != ProviderId::LOCAL || entry.kind != EntryKind::File {
+        return None;
+    }
+    let path = local_path(&Location::new(entry.id.provider, entry.path.clone()))?;
+    installer.is_appimage(&path, entry).then_some(path)
 }
 
 /// The one selected row of the view, as an installed app.
@@ -1225,6 +1279,46 @@ impl Action for Install {
             "select one tar or zip archive on the local disk",
         ))?;
         Ok(install_through_form(&self.0, &archive, None, jobs))
+    }
+}
+
+/// *Run* on a selected AppImage: starts it as it is, with the checks of
+/// [`appimage::run`]. Nothing is installed.
+pub struct Run(Arc<Installer>);
+
+impl Action for Run {
+    fn id(&self) -> ActionId {
+        RUN
+    }
+    fn label(&self) -> String {
+        t!("installer-run")
+    }
+    fn group(&self) -> ActionGroup {
+        GROUP
+    }
+    fn default_shortcut(&self) -> Option<Shortcut> {
+        None
+    }
+    fn availability(&self, ctx: &ActionCtx) -> Availability {
+        if !crate::supported() || selected_appimage(&self.0, ctx).is_none() {
+            Availability::Hidden
+        } else {
+            Availability::Enabled
+        }
+    }
+    fn run(
+        &self,
+        ctx: ActionCtx,
+        _jobs: &JobRunner,
+        _ui: &dyn UiHost,
+    ) -> Result<ActionOutcome, Error> {
+        if !crate::supported() {
+            return Err(err(InstallError::Unsupported));
+        }
+        let path = selected_appimage(&self.0, &ctx)
+            .ok_or(Error::Unsupported("select one AppImage on the local disk"))?;
+        appimage::run(&**self.0.provider.platform(), &path)?;
+        Ok(ActionOutcome::Done)
     }
 }
 

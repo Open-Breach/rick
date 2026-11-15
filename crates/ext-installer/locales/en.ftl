@@ -7,6 +7,7 @@ installer-state = State
 installer-commands = Commands
 installer-installed-app = Installed app
 installer-install-as-application = Install as application…
+installer-run = Run
 installer-installed-apps = Installed Apps…
 installer-open-install-folder = Open install folder
 installer-launch = Launch

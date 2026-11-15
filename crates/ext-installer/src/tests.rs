@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use ext::platform::{ConfigDir, Fake};
+use ext::platform::{ConfigDir, Fake, fs as pfs};
 use ext::runtime::JobEvent;
 use ext::{
     ActionCtx, ActionOutcome, Availability, CellValue, CliCtx, CliOutcome, DecorateCtx, Depth,
@@ -17,11 +17,12 @@ use types::{Attrs, CancelToken, Entry, EntryId, EntryKind, Error, Location, Prov
 use super::*;
 use crate::actions::{
     APPS, EDIT_LAUNCHER, FORGET, INSTALL, INSTALL_COMMAND, INSTALL_RICK_COMMAND, LAUNCH,
-    OPEN_FOLDER, REMOVE_STAGING, REPAIR, REVERT, UNINSTALL, UPDATE,
+    OPEN_FOLDER, REMOVE_STAGING, REPAIR, REVERT, RUN, UNINSTALL, UPDATE,
 };
+use crate::appimage::{self, Type};
 use crate::archive::{Format, ItemKind};
 use crate::detect::{compare_versions, slug, split_version, strip_version};
-use crate::fixtures::{Fixture, other_machine, this_machine, tiny_elf};
+use crate::fixtures::{Fixture, other_machine, this_machine, tiny_appimage, tiny_elf};
 use crate::provider::{KIND_COLUMN, STATE_COLUMN, VERSION_COLUMN};
 use crate::record::{Kind, Layout, PathMode, Record};
 
@@ -172,6 +173,59 @@ impl Harness {
             invoked_from: Invocation::ContextMenu,
             other: None,
         }
+    }
+
+    /// Writes `bytes` to `name` beside the fixtures, with the permission
+    /// bits `mode` where the platform has them.
+    fn file(&self, name: &str, bytes: &[u8], mode: u32) -> PathBuf {
+        let path = self.dir.path().join(name);
+        fs::write(&path, bytes).unwrap_or_else(|e| panic!("{e}"));
+        pfs::set_unix_mode(&path, mode).unwrap_or_else(|e| panic!("{e}"));
+        path
+    }
+
+    /// The local file at `path` as a listing shows it.
+    #[allow(clippy::unused_self)]
+    fn file_entry(&self, path: &Path) -> Entry {
+        let meta = fs::metadata(path).unwrap_or_else(|e| panic!("{e}"));
+        Entry {
+            id: EntryId::new(ProviderId::LOCAL, u128::from(meta.len()) + 1),
+            name: path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            path: ext::platform::paths::from_path(path),
+            kind: if meta.is_dir() {
+                EntryKind::Dir
+            } else {
+                EntryKind::File
+            },
+            size: Some(meta.len()),
+            created: None,
+            modified: meta.modified().ok(),
+            accessed: None,
+            attrs: Attrs::empty(),
+            mime: None,
+        }
+    }
+
+    /// The fixtures' folder with `selection` selected in it.
+    fn ctx_selection(&self, selection: Vec<Entry>) -> ActionCtx {
+        ActionCtx {
+            pane: PaneId(1),
+            location: Location::new(
+                ProviderId::LOCAL,
+                ext::platform::paths::from_path(self.dir.path()),
+            ),
+            selection,
+            invoked_from: Invocation::ContextMenu,
+            other: None,
+        }
+    }
+
+    /// The fixtures' folder with the file at `path` selected.
+    fn ctx_file(&self, path: &Path) -> ActionCtx {
+        self.ctx_selection(vec![self.file_entry(path)])
     }
 
     #[allow(clippy::unused_self)]
@@ -405,7 +459,7 @@ fn the_extension_registers_the_view_the_columns_and_the_actions() {
     assert_eq!(h.registry.views()[0].0, VIEW);
     assert_eq!(h.registry.decorators().len(), 1);
     assert_eq!(h.registry.decorators()[0].columns().len(), 5);
-    assert_eq!(h.registry.actions().len(), 11);
+    assert_eq!(h.registry.actions().len(), 12);
     assert_eq!(
         h.registry.points(),
         Points::PROVIDER | Points::DECORATOR | Points::ACTION
@@ -2061,4 +2115,197 @@ fn the_install_rick_command_copies_the_folder_to_the_standard_location() {
     let record = h.record("rick");
     assert_eq!(record.version, "0.3.1");
     assert_eq!(record.previous_version.as_deref(), Some("0.3.0"));
+}
+
+/// An AppImage is told by its name, which ends in `.AppImage` in any
+/// case, or by the magic in its ELF header, `AI` and then 1 or 2 at
+/// offset 8 (specs/ext-installer.md "AppImages"). An ELF without the
+/// magic, the magic without an ELF header and a name that only resembles
+/// the extension are none.
+#[test]
+fn an_appimage_is_told_by_its_name_or_by_the_magic_in_its_header() {
+    for name in [
+        "Fix.AppImage",
+        "fix.appimage",
+        "FIX.APPIMAGE",
+        "Fix-1.2.3-x86_64.AppImage",
+        "Füx.AppImage",
+        ".AppImage",
+    ] {
+        assert!(appimage::has_extension(name), "{name}");
+    }
+    for name in ["Fix.AppImage.zsync", "appimage", "Fix.AppImag", "Füx", ""] {
+        assert!(!appimage::has_extension(name), "{name}");
+    }
+
+    let two = tiny_appimage(this_machine(), 2, &[]);
+    assert_eq!(appimage::magic(&two), Some(Type::Two));
+    assert_eq!(
+        appimage::magic(&tiny_appimage(other_machine(), 1, &[])),
+        Some(Type::One)
+    );
+    assert_eq!(
+        appimage::magic(&tiny_elf(this_machine(), &[])),
+        None,
+        "an ELF without the magic"
+    );
+    assert_eq!(
+        appimage::magic(&tiny_appimage(this_machine(), 3, &[])),
+        None,
+        "no type 3"
+    );
+    assert_eq!(
+        appimage::magic(b"\x7fELX\x02\x01\x01\0AI\x02"),
+        None,
+        "the magic without an ELF header"
+    );
+    assert_eq!(appimage::magic(&two[..10]), None, "a header cut short");
+
+    // On disk the header is read only where the name does not say it.
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let write = |name: &str, bytes: &[u8]| {
+        let path = dir.path().join(name);
+        fs::write(&path, bytes).unwrap_or_else(|e| panic!("{e}"));
+        path
+    };
+    assert!(appimage::is_appimage(&write("fix", &two), "fix"));
+    assert_eq!(appimage::magic_of(&dir.path().join("fix")), Some(Type::Two));
+    assert!(!appimage::is_appimage(
+        &write("tool", &tiny_elf(this_machine(), &[])),
+        "tool"
+    ));
+    assert!(!appimage::is_appimage(&write("short", b"\x7fELF"), "short"));
+    assert!(appimage::is_appimage(
+        &write("notes.AppImage", b"text\n"),
+        "notes.AppImage"
+    ));
+    assert!(!appimage::is_appimage(&dir.path().join("gone"), "gone"));
+}
+
+/// *Run* is in the menu of one AppImage on the local file system and of
+/// nothing else: not of another program, an archive, a folder, a
+/// selection of two, a file on another provider; and not at all outside
+/// Linux (specs/ext-installer.md "AppImages").
+#[test]
+fn run_is_offered_on_one_local_appimage_and_nowhere_else() {
+    let h = harness();
+    let run = h.action(RUN);
+    let image = tiny_appimage(this_machine(), 2, &[]);
+    let named = h.file("Fix.AppImage", &image, 0o644);
+    if !supported() {
+        assert_eq!(run.availability(&h.ctx_file(&named)), Availability::Hidden);
+        return;
+    }
+    assert_eq!(run.availability(&h.ctx_file(&named)), Availability::Enabled);
+    let magic_only = h.file("fix-magic", &image, 0o644);
+    assert_eq!(
+        run.availability(&h.ctx_file(&magic_only)),
+        Availability::Enabled,
+        "the magic under a name without the extension"
+    );
+    let program = h.file("fix-tool", &tiny_elf(this_machine(), &[]), 0o755);
+    assert_eq!(
+        run.availability(&h.ctx_file(&program)),
+        Availability::Hidden
+    );
+    assert_eq!(
+        run.availability(&h.ctx_archive(Fixture::GuiWithDesktop)),
+        Availability::Hidden
+    );
+    let folder = h.dir.path().join("Folder.AppImage");
+    fs::create_dir(&folder).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(run.availability(&h.ctx_file(&folder)), Availability::Hidden);
+    assert_eq!(
+        run.availability(&h.ctx_selection(Vec::new())),
+        Availability::Hidden
+    );
+    assert_eq!(
+        run.availability(&h.ctx_selection(vec![h.file_entry(&named), h.file_entry(&magic_only)])),
+        Availability::Hidden,
+        "one file, not two"
+    );
+    let mut remote = h.file_entry(&named);
+    remote.id = EntryId::new(ProviderId("ssh"), 7);
+    assert_eq!(
+        run.availability(&h.ctx_selection(vec![remote])),
+        Availability::Hidden,
+        "a file that is not on this machine"
+    );
+
+    // A file that becomes an AppImage is seen as one once it is listed
+    // anew, with its new size or time.
+    let grows = h.file("fix-grows", b"not yet", 0o644);
+    assert_eq!(run.availability(&h.ctx_file(&grows)), Availability::Hidden);
+    fs::write(&grows, &image).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(run.availability(&h.ctx_file(&grows)), Availability::Enabled);
+}
+
+/// Acceptance (issue 223): *Run* on an AppImage without the execute bit
+/// starts it, detached from Rick and in its folder, and the bit is set
+/// afterwards, for the owner and nobody else. The file's bytes are as
+/// they were, and a file that has the bit keeps its mode.
+#[test]
+fn run_sets_the_execute_bit_and_starts_the_appimage_in_its_folder() {
+    let h = harness();
+    if !supported() {
+        return;
+    }
+    let image = tiny_appimage(this_machine(), 2, &[]);
+    let path = h.file("Fix.AppImage", &image, 0o644);
+    let mode = |path: &Path| {
+        pfs::unix_mode(path)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .map(|mode| mode & 0o7777)
+    };
+    let outcome = h.ok(RUN, h.ctx_file(&path));
+    assert!(matches!(outcome, ActionOutcome::Done), "{outcome:?}");
+    assert_eq!(
+        h.fake.ran(),
+        [(path.clone(), Vec::new(), h.dir.path().to_path_buf())]
+    );
+    assert_eq!(mode(&path), Some(0o744), "the owner's bit, no other");
+    assert_eq!(fs::read(&path).ok(), Some(image));
+
+    pfs::set_unix_mode(&path, 0o500).unwrap_or_else(|e| panic!("{e}"));
+    h.ok(RUN, h.ctx_file(&path));
+    assert_eq!(h.fake.ran().len(), 2);
+    assert_eq!(mode(&path), Some(0o500), "a mode with the bit is kept");
+}
+
+/// *Run* on an AppImage built for another machine says so and stops, as
+/// the bonus check does: nothing is started and the execute bit is not
+/// set. A file that is only named like an AppImage is refused the same
+/// way.
+#[test]
+fn run_refuses_another_machines_appimage_before_touching_it() {
+    let h = harness();
+    if !supported() {
+        return;
+    }
+    let refused = |name: &str, bytes: &[u8]| {
+        let path = h.file(name, bytes, 0o644);
+        let (outcome, _) = h.run(RUN, h.ctx_file(&path));
+        let error = match outcome {
+            Err(error) => error.to_string(),
+            Ok(outcome) => panic!("{name} ran: {outcome:?}"),
+        };
+        assert!(h.fake.ran().is_empty(), "{name} was started");
+        assert_eq!(
+            pfs::unix_mode(&path)
+                .ok()
+                .flatten()
+                .map(|mode| mode & 0o777),
+            Some(0o644),
+            "{name} was made executable"
+        );
+        error
+    };
+    let error = refused("Other.AppImage", &tiny_appimage(other_machine(), 2, &[]));
+    assert!(
+        error.contains(&elf::machine_name(other_machine()))
+            && error.contains(&elf::machine_name(this_machine())),
+        "{error}"
+    );
+    let error = refused("notes.AppImage", b"only named like one\n");
+    assert!(error.contains("not a program"), "{error}");
 }

@@ -105,6 +105,22 @@ fn align(value: u64, to: u64) -> u64 {
     value.div_ceil(to) * to
 }
 
+/// The runtime of a fixture AppImage of type `kind` (1 or 2): the tiny
+/// program of [`tiny_elf`] with the AppImage magic, `AI` and the type, at
+/// offset 8 of its header, and with its section header table declared
+/// empty at the end of the file, so the ELF ends where the file does and
+/// an image appended to it starts there. It still exits 0 when run: the
+/// kernel reads neither the padding nor the section headers.
+#[must_use]
+pub fn tiny_appimage(machine: u16, kind: u8, needed: &[&str]) -> Vec<u8> {
+    let mut out = tiny_elf(machine, needed);
+    out[8..11].copy_from_slice(&[b'A', b'I', kind]);
+    let end = out.len() as u64;
+    out[0x28..0x30].copy_from_slice(&end.to_le_bytes()); // e_shoff
+    out[0x3a..0x3c].copy_from_slice(&64u16.to_le_bytes()); // e_shentsize
+    out
+}
+
 /// The machine of this process, for a fixture that must run here; x86-64
 /// where the reader does not know the machine.
 #[must_use]
