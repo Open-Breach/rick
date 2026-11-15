@@ -10,7 +10,11 @@
 //! previewers claim, the providers, the search connectors and the
 //! platforms they are for. [`features`], [`file_types`] and [`install`]
 //! write the Markdown from that, and [`regenerate`] puts it between the
-//! README's markers:
+//! README's markers. The installer's feature item is not written here a
+//! second time: its wording is fixed in specs/readme.md, and [`features`]
+//! takes the sentence from there ([`fixed_wording`]).
+//!
+//! The markers:
 //!
 //! ```text
 //! <!-- generated:features -->
@@ -46,6 +50,9 @@ pub enum ReadmeError {
     /// The status block has no line that starts with `v<version>`.
     #[error("the status line of README.md names no version")]
     NoVersion,
+    /// The spec's Features list quotes no wording for an item.
+    #[error("specs/readme.md quotes no wording for item {0} of its Features list")]
+    NoWording(u8),
     /// A previewer declares a file type the README has no kind for.
     #[error("{previewer} previews {name}, which has no kind in the README's file types")]
     NoKind {
@@ -455,11 +462,46 @@ fn and(items: &[String]) -> String {
     }
 }
 
+/// The item of the Features list that describes the installer
+/// (specs/readme.md, *Features*, item 5).
+const INSTALLER_ITEM: u8 = 5;
+
+/// The wording `spec`, the text of specs/readme.md, fixes for item
+/// `number` of its Features list: what the item's line quotes between its
+/// first pair of backticks. The line is the one that starts with the
+/// number, a full stop and the item's name in bold.
+///
+/// # Errors
+///
+/// [`ReadmeError::NoWording`] when the spec has no such line or the line
+/// quotes nothing.
+pub fn fixed_wording(spec: &str, number: u8) -> Result<&str, ReadmeError> {
+    let start = format!("{number}. **");
+    spec.lines()
+        .find(|line| line.starts_with(&start))
+        .and_then(|line| line.split('`').nth(1))
+        .map(str::trim)
+        .filter(|wording| !wording.is_empty())
+        .ok_or(ReadmeError::NoWording(number))
+}
+
 /// The six items of the Features list (specs/readme.md, *Features*): the
 /// first and the third from `facts`, the fourth with the tools' names
-/// from them, the others in their fixed wording.
-#[must_use]
-pub fn features(facts: &Facts) -> String {
+/// from them, the installer's in the wording `spec`, the text of
+/// specs/readme.md, fixes for it, the others in their fixed wording.
+///
+/// # Errors
+///
+/// [`ReadmeError::NoWording`] when the spec quotes no wording for the
+/// installer's item.
+pub fn features(facts: &Facts, spec: &str) -> Result<String, ReadmeError> {
+    // The spec's sentence, its opening in bold up to the first comma. The
+    // item is marked as Linux only for as long as `ext-installer` is.
+    let installer = fixed_wording(spec, INSTALLER_ITEM)?;
+    let installer = match installer.split_once(',') {
+        Some((opening, rest)) => format!("- **{opening}**,{rest} Linux only."),
+        None => format!("- **{installer}** Linux only."),
+    };
     let mut storage = vec!["local disks".to_owned()];
     storage.extend(facts.storage.iter().cloned());
     let cloud = if facts.cloud.is_empty() {
@@ -478,7 +520,7 @@ pub fn features(facts: &Facts) -> String {
     } else {
         format!(", like {}", and(&facts.tools))
     };
-    [
+    Ok([
         format!(
             "- **Previews {} file types**, listed by kind below.",
             facts.previews.len()
@@ -495,14 +537,11 @@ pub fn features(facts: &Facts) -> String {
             "- **Works with the tools you already use**{tools}: status badges in the file list \
              and actions in the context menu."
         ),
-        "- **Installs and uninstalls software distributed as tarballs and AppImages**, so a \
-         tar.gz or AppImage download becomes a managed install instead of a folder or file you \
-         forget about. Linux only."
-            .to_owned(),
+        installer,
         "- **Small things done right**, such as computing a file's hash from the context menu."
             .to_owned(),
     ]
-    .join("\n")
+    .join("\n"))
 }
 
 /// The previewed file types of the first feature item, complete, one
@@ -689,14 +728,18 @@ pub fn version(readme: &str) -> Result<String, ReadmeError> {
 
 /// The README brought up to the release `version`: the version in the
 /// status line and the call to action, whose wording stays as it is, the
-/// Features list and the file types from `facts` and the Install section
-/// for `platforms`. Everything outside the four blocks is left alone.
+/// Features list and the file types from `facts`, with the wording `spec`
+/// (the text of specs/readme.md) fixes for the installer's item, and the
+/// Install section for `platforms`. Everything outside the four blocks is
+/// left alone.
 ///
 /// # Errors
 ///
-/// [`ReadmeError`] when a block or the status line's version is missing.
+/// [`ReadmeError`] when a block or the status line's version is missing,
+/// or the spec quotes no wording for the installer's item.
 pub fn regenerate(
     readme: &str,
+    spec: &str,
     version: &str,
     facts: &Facts,
     platforms: &[String],
@@ -704,7 +747,7 @@ pub fn regenerate(
     let old = self::version(readme)?;
     let status = block(readme, STATUS)?.replace(&format!("v{old}"), &format!("v{version}"));
     let readme = with_block(readme, STATUS, &status)?;
-    let readme = with_block(&readme, FEATURES, &features(facts))?;
+    let readme = with_block(&readme, FEATURES, &features(facts, spec)?)?;
     let readme = with_block(&readme, FILE_TYPES, &file_types(facts))?;
     with_block(&readme, INSTALL, &install(version, platforms))
 }
@@ -718,6 +761,13 @@ mod tests {
         <!-- generated:features -->\nold\n<!-- /generated:features -->\n\n\
         <!-- generated:file-types -->\nold\n<!-- /generated:file-types -->\n\nComing:\n\n- more\n\n\
         ## Install\n\n<!-- generated:install -->\nold\n<!-- /generated:install -->\n\nEnd.\n";
+
+    /// The Features list of a spec, as specs/readme.md writes it.
+    const SPEC: &str = "### 3. Features (regenerated)\n\n\
+        4. **Tool integration** (fixed wording, live names). `Works with the tools.`\n\
+        5. **Package manager** (fixed). `Installs what you download, so a download becomes \
+        an install, whatever it is.` Marked as Linux only for as long as `ext-installer` is.\n\
+        6. **Convenience functions** (fixed). `Small things done right.`\n";
 
     fn facts() -> Facts {
         Facts {
@@ -750,7 +800,7 @@ mod tests {
 
     #[test]
     fn the_features_count_the_types_and_name_what_is_there() {
-        let text = features(&facts());
+        let text = features(&facts(), SPEC).unwrap_or_else(|e| panic!("{e}"));
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 6);
         assert_eq!(
@@ -764,11 +814,66 @@ mod tests {
         );
         assert!(lines[3].contains("you already use**, like Git and SVN: status badges"));
         // No tool, no name.
-        let none = features(&Facts {
-            tools: Vec::new(),
-            ..facts()
-        });
+        let none = features(
+            &Facts {
+                tools: Vec::new(),
+                ..facts()
+            },
+            SPEC,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
         assert!(none.contains("you already use**: status badges"));
+    }
+
+    /// The installer's item is the sentence the spec fixes, taken from the
+    /// spec's text and not kept here a second time: its opening in bold up
+    /// to the first comma, and marked as Linux only. A spec that quotes no
+    /// wording for the item is refused.
+    #[test]
+    fn the_installers_item_is_the_wording_the_spec_fixes() {
+        assert_eq!(
+            fixed_wording(SPEC, 5),
+            Ok("Installs what you download, so a download becomes an install, whatever it is.")
+        );
+        assert_eq!(fixed_wording(SPEC, 6), Ok("Small things done right."));
+        let text = features(&facts(), SPEC).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            text.lines().nth(4),
+            Some(
+                "- **Installs what you download**, so a download becomes an install, whatever \
+                 it is. Linux only."
+            )
+        );
+        // A sentence without a comma is bold as a whole.
+        let plain = features(&facts(), "5. **Installer** (fixed). `Installs things.`")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            plain.lines().nth(4),
+            Some("- **Installs things.** Linux only.")
+        );
+        // No such item, an item that quotes nothing, an empty quotation.
+        for spec in [
+            "",
+            "4. **Tool integration** (fixed). `Works.`\n15. **Other** (fixed). `No.`",
+            "5. **Installer** (fixed). Installs things.",
+            "5. **Installer** (fixed). ``",
+        ] {
+            assert_eq!(
+                fixed_wording(spec, 5),
+                Err(ReadmeError::NoWording(5)),
+                "{spec:?}"
+            );
+            assert_eq!(
+                features(&facts(), spec),
+                Err(ReadmeError::NoWording(5)),
+                "{spec:?}"
+            );
+            assert_eq!(
+                regenerate(README, spec, "0.5.0", &facts(), &[]),
+                Err(ReadmeError::NoWording(5)),
+                "{spec:?}"
+            );
+        }
     }
 
     #[test]
@@ -820,14 +925,15 @@ mod tests {
     fn regenerating_changes_the_blocks_and_nothing_else() {
         assert_eq!(version(README).as_deref(), Ok("0.4.0"));
         let platforms = ["linux-x64".to_owned()];
-        let new =
-            regenerate(README, "0.5.0", &facts(), &platforms).unwrap_or_else(|e| panic!("{e}"));
+        let new = regenerate(README, SPEC, "0.5.0", &facts(), &platforms)
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(version(&new).as_deref(), Ok("0.5.0"));
         assert_eq!(
             block(&new, STATUS),
             Ok("v0.5.0 · early · this page.\n\n[Download v0.5.0](#install) now.")
         );
-        assert_eq!(block(&new, FEATURES), Ok(features(&facts()).as_str()));
+        let list = features(&facts(), SPEC).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(block(&new, FEATURES), Ok(list.as_str()));
         assert_eq!(block(&new, FILE_TYPES), Ok(file_types(&facts()).as_str()));
         assert_eq!(
             block(&new, INSTALL),
@@ -837,7 +943,10 @@ mod tests {
         assert!(new.contains("<!-- /generated:file-types -->\n\nComing:\n\n- more\n\n## Install"));
         assert!(new.ends_with("<!-- /generated:install -->\n\nEnd.\n"));
         // The same again changes nothing.
-        assert_eq!(regenerate(&new, "0.5.0", &facts(), &platforms), Ok(new));
+        assert_eq!(
+            regenerate(&new, SPEC, "0.5.0", &facts(), &platforms),
+            Ok(new)
+        );
     }
 
     #[test]
