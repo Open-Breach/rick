@@ -48,6 +48,7 @@ mod launching;
 mod list_view;
 mod listing;
 mod locales;
+mod media_folders;
 mod menus;
 mod mount_linux;
 mod opening;

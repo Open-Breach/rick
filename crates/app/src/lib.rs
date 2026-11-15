@@ -1786,6 +1786,13 @@ impl App {
             }
             Command::SetView { pane, mode } => {
                 self.model.set_view(pane, mode);
+                // A size that is chosen is the size *Icons* opens in from
+                // then on, here and after a restart (SPEC.md *View mode*).
+                if let model::ViewMode::Icons(size) = mode
+                    && self.model.settings.icon_size != size
+                {
+                    self.change_settings(SettingsChange::IconSize(size));
+                }
             }
             Command::Sort { pane, by, dir } => {
                 self.model.set_sort(pane, by, dir);
@@ -5327,6 +5334,9 @@ impl App {
         };
         if result.is_ok() {
             self.decorate_if_empty(pane, events);
+            // The listing is complete: a folder of media shows itself in
+            // Icons, decided once for the tab's stay in it.
+            self.model.media_view(pane);
         }
         self.resolve_reveal(pane, true, events);
         // The Cloud overview's rows are the side panel's Cloud rows too, and

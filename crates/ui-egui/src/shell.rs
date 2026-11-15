@@ -3155,9 +3155,10 @@ impl RickUi {
                 }
             }
             Intent::ViewIcons => {
+                // In the size the tab shows, or the one chosen last.
                 let size = match self.app.model().active_tab(pane).map(|(_, t)| t.view) {
                     Some(ViewMode::Icons(size)) => size,
-                    _ => IconSize::Medium,
+                    _ => self.app.model().settings.icon_size,
                 };
                 self.handle(Command::SetView {
                     pane,

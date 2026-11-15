@@ -17,6 +17,17 @@ the pull request that brought the change.
   macOS, `gsettings` on GNOME and `plasma-apply-wallpaperimage` on KDE
   Plasma. It is offered for JPEG, PNG and BMP, on macOS for HEIC and TIFF
   as well, and not at all on another Linux desktop (#239).
+- A folder of media shows itself in the Icons view: when at least 80 %
+  of the files in a folder a pane enters are images or videos, by their
+  type from the name and folders aside, the tab shows Icons, and leaving
+  the folder puts back the view the tab had. A view picked by hand inside
+  such a folder stays until the tab leaves it. It is decided once, when
+  the listing is complete, from what is listed already (#240).
+- The icon size chosen last is remembered: whichever of the four sizes is
+  picked, from the View options menu, the palette, a shortcut or
+  Ctrl+scroll, is the size *Icons* opens in from then on, by hand or for
+  a folder of media, across restarts. It is the key `icon_size` of
+  `rick.toml` (#240).
 - `ext-zfs`, a plugin for OpenZFS snapshots, Linux only (placed by the review of
   #156): through the `zfs` command line
   it finds the dataset a folder lies in and, without `zfs` or outside a
