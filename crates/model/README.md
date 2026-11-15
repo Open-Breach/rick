@@ -6,12 +6,14 @@ each workspace's dock tree of panes, each pane's one tab, and per tab its
 kind (an explorer, or the window's Preview tab), the
 location and history, the listing with its sort, group, filter and
 selection, the view mode with the tree view's expanded folders and the
-scroll offset, the explorer tab the preview follows, the job table every
+scroll offset — and the rule that shows a folder of media in Icons for
+the tab's stay in it, decided once from the complete listing, with the
+view to put back on leaving — the explorer tab the preview follows, the job table every
 window shares (with a job's *Waiting* state when it queues behind another on
 its volume), the side panel's data (the Places list, the mounted volumes,
 the cloud providers' rows, the trash's count), the name conflicts jobs wait
 on, the settings snapshot, with the pinned locations, the drag and the
-search settings among them, and the integration items of
+search settings and the icon size chosen last among them, and the integration items of
 specs/system-integration.md §6: the records of `rick.toml`'s
 `[integration]` table (one per item with its state, the date of the last
 check and what Rick wrote for it, plus the `ask`, startup-check and

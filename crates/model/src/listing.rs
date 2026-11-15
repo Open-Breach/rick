@@ -391,6 +391,29 @@ pub fn type_of(entry: &Entry) -> String {
     }
 }
 
+/// The extensions of the image types, as the Type column names them.
+const IMAGE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "bmp", "webp", "tif", "tiff", "ico", "heic", "avif", "svg",
+];
+/// The extensions of the video types.
+const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "mov", "avi", "webm", "m4v"];
+
+/// Whether an entry is media as *Icons view for a folder of media* counts
+/// it (SPEC.md, under Functions): a file that is an image or a video by
+/// the type its name gives. Audio is not, and nothing is read from disk.
+#[must_use]
+pub fn is_media(entry: &Entry) -> bool {
+    entry.kind == EntryKind::File
+        && entry
+            .name
+            .rsplit_once('.')
+            .filter(|(stem, _)| !stem.is_empty())
+            .is_some_and(|(_, ext)| {
+                let ext = ext.to_ascii_lowercase();
+                IMAGE_EXTENSIONS.contains(&ext.as_str()) || VIDEO_EXTENSIONS.contains(&ext.as_str())
+            })
+}
+
 /// Case-insensitive name order, with case as the tie-break so equal names
 /// keep a stable order.
 fn name_cmp(a: &str, b: &str) -> Ordering {
