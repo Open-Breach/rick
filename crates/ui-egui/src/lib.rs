@@ -32,6 +32,7 @@ pub mod compare;
 pub mod conflict;
 pub mod console;
 pub mod content;
+pub mod copy_button;
 pub mod dialog;
 pub mod dnd;
 pub mod dock;

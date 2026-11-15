@@ -14,6 +14,7 @@ rename-ellipsis = Umbenennen…
 delete = Löschen
 open = Öffnen
 retry = Erneut versuchen
+copy-button-copied = Kopiert
 revert = Zurücksetzen
 skip = Überspringen
 open-in-new-tab = In neuem Tab öffnen

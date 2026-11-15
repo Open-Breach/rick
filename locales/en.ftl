@@ -58,6 +58,7 @@ jobs-expand = Expand the operations
 overview-connections = Connections
 overview-yes = Yes
 retry = Retry
+copy-button-copied = Copied
 pane-back = Back
 pane-forward = Forward
 pane-parent-directory = Parent directory

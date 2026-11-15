@@ -26,6 +26,7 @@ mod clipboard_chords;
 mod closeout;
 mod cloud;
 mod copy;
+mod copy_buttons;
 mod desktop_entry;
 mod dnd;
 mod extensions;

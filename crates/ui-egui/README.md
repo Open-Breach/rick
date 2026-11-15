@@ -75,7 +75,9 @@ buttons; a form's fields in a label-left grid with cards, disclosure
 cards, segmented controls, switches, file pickers and the preview as a
 card of effects — the install dialogue's shape — taken by every form,
 prompt and confirmation an action asks), the shared controls in
-`widgets.rs`, the paste-conflict dialogue (`conflict.rs`: *Replace file?* with its
+`widgets.rs`, the one copy button every copy control is
+(`copy_button.rs`: after a click the tick in `status/success` and
+*Copied* for 1.5 s, then the button as it was), the paste-conflict dialogue (`conflict.rs`: *Replace file?* with its
 place among the job's conflicts, the existing and the arriving entry as two
 cards, Skip, Replace or Merge, and Keep both as the default, 520 px wide
 whatever the name), the question dialogue an extension asks through, the

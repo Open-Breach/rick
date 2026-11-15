@@ -18,6 +18,7 @@
 use egui::{Align2, FontId, Rect, Sense, pos2, vec2};
 use ext::t;
 
+use crate::copy_button::CopyButton;
 use crate::icons;
 use crate::theme::{self, CARD_RADIUS, ICON, TEXT_BODY, TEXT_CAPS, TEXT_SECONDARY};
 use crate::widgets::{self, ButtonKind};
@@ -34,6 +35,8 @@ const LABEL: f32 = 88.0;
 const INSET: f32 = 14.0;
 /// The side of a row's button.
 const ROW_BUTTON: f32 = 22.0;
+/// The glyph of a row's button.
+const ROW_GLYPH: f32 = 14.0;
 /// The side of the pin button.
 const PIN_BUTTON: f32 = 24.0;
 
@@ -414,7 +417,11 @@ fn row(ui: &mut egui::Ui, index: usize, item: &Row) -> bool {
     };
     let copy = place();
     let name = t!("preview-copy-field", field = item.label.as_str());
-    if row_button(ui, copy, index, icons::COPY, &name, hovered).clicked() {
+    let copy = CopyButton::new(&name)
+        .glyph(ROW_GLYPH)
+        .faint(hovered)
+        .show_at(ui, copy, index);
+    if copy.clicked() {
         ui.ctx().copy_text(item.value.clone());
     }
     let mut clicked = false;
@@ -470,7 +477,7 @@ fn row_button(
         rect.center(),
         Align2::CENTER_CENTER,
         glyph,
-        FontId::proportional(14.0),
+        FontId::proportional(ROW_GLYPH),
         colour,
     );
     response
