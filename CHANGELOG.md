@@ -95,6 +95,12 @@ the pull request that brought the change.
   chevron of the folded path have names for a screen reader, *Copy path*,
   *Copy* and *Hidden ancestors*; they were named by their glyphs (#225,
   #230).
+- A video filmed upright on a phone plays upright in the preview pane,
+  and its first frame and its thumbnail are upright too, where they lay on
+  their side: the frames are turned as the container's orientation says —
+  the display matrix of an MP4 or MOV track, the orientation tag of
+  Matroska. The picture is fitted into the pane as it is; a video without
+  an orientation plays as before (#233).
 
 ## [0.4.1] - 2026-11-14
 

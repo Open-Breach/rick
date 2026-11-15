@@ -540,6 +540,119 @@ mod with_gstreamer {
         );
     }
 
+    /// The first frame of the clip at `path`, from the player.
+    fn first_frame(path: &Path) -> crate::gst::VideoFrame {
+        let mut player = Player::open(path, true, &CancelToken::new())
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        player
+            .frame()
+            .unwrap_or_else(|| panic!("{}: no first frame", path.display()))
+    }
+
+    /// The red, green and blue of the pixel at (`x`, `y`).
+    fn pixel(frame: &crate::gst::VideoFrame, x: u32, y: u32) -> [i32; 3] {
+        let at = (y as usize * frame.width as usize + x as usize) * 4;
+        [
+            i32::from(frame.data[at]),
+            i32::from(frame.data[at + 1]),
+            i32::from(frame.data[at + 2]),
+        ]
+    }
+
+    /// Whether two pixels are the same colour, within what a lossy
+    /// encoder moves a flat area.
+    fn same(a: [i32; 3], b: [i32; 3]) -> bool {
+        a.iter().zip(b).all(|(a, b)| (a - b).abs() < 24)
+    }
+
+    /// Issue 220 (SPEC.md *Audio and video*): a clip whose container says
+    /// it was filmed upright — frames stored 320 × 240, to be turned by a
+    /// quarter — gives frames taller than wide from the player, and its
+    /// first frame in the pane is upright: the picture is turned, not
+    /// only its size. A half turn is followed the same way, and a clip
+    /// without an orientation gives the frames it always gave.
+    #[test]
+    fn a_video_plays_in_the_orientation_its_container_gives() {
+        if !gstreamer_or_skip() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let stored = dir.path().join("stored.mp4");
+        let quarter = dir.path().join("quarter.mp4");
+        let half = dir.path().join("half.mp4");
+        if !encoder_or_skip(encode::mp4(&stored, 30, 320, 240), "mp4 fixture")
+            || !encoder_or_skip(
+                encode::mp4_turned(&quarter, 30, 320, 240, 90),
+                "mp4 fixture with a quarter turn",
+            )
+            || !encoder_or_skip(
+                encode::mp4_turned(&half, 30, 320, 240, 180),
+                "mp4 fixture with a half turn",
+            )
+        {
+            return;
+        }
+
+        // No orientation: as stored, the first colour bar at the left and
+        // the last at the right.
+        let plain = first_frame(&stored);
+        assert_eq!((plain.width, plain.height), (320, 240));
+        let (first_bar, last_bar) = (pixel(&plain, 10, 20), pixel(&plain, 309, 20));
+        assert!(!same(first_bar, last_bar), "the test pattern has bars");
+
+        // A quarter turn: taller than wide, and the bars run down the
+        // frame — the stored left edge is the turned frame's top.
+        let upright = first_frame(&quarter);
+        assert_eq!(
+            (upright.width, upright.height),
+            (240, 320),
+            "frames taller than wide"
+        );
+        assert!(
+            same(pixel(&upright, 219, 10), first_bar),
+            "the first bar is at the top: {:?} against {first_bar:?}",
+            pixel(&upright, 219, 10)
+        );
+        assert!(
+            same(pixel(&upright, 219, 309), last_bar),
+            "the last bar is at the bottom: {:?} against {last_bar:?}",
+            pixel(&upright, 219, 309)
+        );
+
+        // The pane's first frame, before anything plays, is that frame.
+        let mut doc = open(&quarter);
+        let Frame::Rgba { width, height, .. } = doc
+            .render(0, req(100, 100))
+            .unwrap_or_else(|e| panic!("{e}"))
+        else {
+            panic!("not a frame");
+        };
+        assert_eq!((width, height), (240, 320), "the first frame is upright");
+
+        // A half turn: the same size, the picture upside down.
+        let turned = first_frame(&half);
+        assert_eq!((turned.width, turned.height), (320, 240));
+        assert!(
+            same(pixel(&turned, 309, 219), first_bar),
+            "the first bar is at the right: {:?} against {first_bar:?}",
+            pixel(&turned, 309, 219)
+        );
+        assert!(same(pixel(&turned, 10, 219), last_bar));
+    }
+
+    /// Issue 220: without the element that turns the frames a video plays
+    /// as it is stored, and plays; nothing fails for want of it.
+    #[test]
+    fn without_the_turning_element_there_is_no_filter() {
+        if !gstreamer_or_skip() {
+            return;
+        }
+        assert!(crate::gst::upright("rick-no-such-element").is_none());
+        assert!(
+            crate::gst::upright("videoflip").is_some() || !crate::gst::has_element("videoflip")
+        );
+    }
+
     #[test]
     fn an_avi_and_an_mp3_open_with_their_facts() {
         if !gstreamer_or_skip() {

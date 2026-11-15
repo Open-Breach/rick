@@ -137,6 +137,62 @@ pub mod encode {
         )
     }
 
+    /// [`mp4`] with an orientation in its container, as a phone writes it
+    /// for a clip filmed upright: the frames are stored `width` × `height`
+    /// and the track's display matrix says they are shown turned by
+    /// `degrees` clockwise — 90, 180 or 270. The muxer writes no such
+    /// matrix by itself, so it is written into the finished file.
+    ///
+    /// # Errors
+    ///
+    /// [`GstError`] when [`mp4`] fails, for another angle, and when the
+    /// file cannot be rewritten or has no track header.
+    pub fn mp4_turned(
+        path: &Path,
+        frames: u32,
+        width: u32,
+        height: u32,
+        degrees: u16,
+    ) -> Result<(), GstError> {
+        /// 1.0 in the matrix's 16.16 fixed point, and in its 2.30.
+        const ONE: i32 = 1 << 16;
+        const W: i32 = 1 << 30;
+        let matrix: [i32; 9] = match degrees {
+            90 => [0, ONE, 0, -ONE, 0, 0, 0, 0, W],
+            180 => [-ONE, 0, 0, 0, -ONE, 0, 0, 0, W],
+            270 => [0, -ONE, 0, ONE, 0, 0, 0, 0, W],
+            other => {
+                return Err(GstError::Pipeline(format!(
+                    "a clip is turned by 90, 180 or 270 degrees, not {other}"
+                )));
+            }
+        };
+        mp4(path, frames, width, height)?;
+        let failed = |why: String| GstError::Pipeline(format!("{}: {why}", path.display()));
+        let mut file = std::fs::read(path).map_err(|e| failed(e.to_string()))?;
+        // The track header: its version and flags, the times, the track
+        // id and the duration — longer in version 1 — two reserved words,
+        // the layer, the group, the volume and a reserved one, then the
+        // matrix.
+        let header = file
+            .windows(4)
+            .position(|bytes| bytes == b"tkhd")
+            .ok_or_else(|| failed("no track header".to_owned()))?;
+        let times = if file.get(header + 4) == Some(&1) {
+            32
+        } else {
+            20
+        };
+        let at = header + 4 + 4 + times + 8 + 8;
+        let room = file
+            .get_mut(at..at + 36)
+            .ok_or_else(|| failed("the track header is cut short".to_owned()))?;
+        for (bytes, value) in room.as_chunks_mut::<4>().0.iter_mut().zip(matrix) {
+            *bytes = value.to_be_bytes();
+        }
+        std::fs::write(path, file).map_err(|e| failed(e.to_string()))
+    }
+
     /// Writes a Motion JPEG AVI of `frames` frames at 30 fps.
     ///
     /// # Errors
