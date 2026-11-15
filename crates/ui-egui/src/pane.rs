@@ -356,7 +356,8 @@ fn view_options_menu(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     } else if row.clicked() {
         cx.requests.push(Request::Command(Command::SetView {
             pane: cx.pane,
-            mode: ViewMode::Icons(current_size.unwrap_or(IconSize::Medium)),
+            // In the size the tab shows, or the one chosen last.
+            mode: ViewMode::Icons(current_size.unwrap_or(cx.app.model().settings.icon_size)),
         }));
         ui.close();
     }
