@@ -72,6 +72,7 @@ pub use connection::{
 };
 pub use decorator::{
     Badge, CellValue, Color, ColumnDef, ColumnId, DecorateCtx, Decoration, Decorator, PanelSection,
+    TimePoint, Timeline,
 };
 pub use form::{Field, FieldKind, Form, Header, HeaderIcon, Preview, PreviewRow, Value, Values};
 pub use futures::stream::BoxStream;

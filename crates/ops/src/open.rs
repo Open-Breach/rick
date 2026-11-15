@@ -207,7 +207,7 @@ impl Action for OpenDefault {
             return Ok(crate::download::start(&self.0, jobs, &files, &to));
         }
         for entry in &ctx.selection {
-            let path = local_path(&location_of(entry))?;
+            let path = self.0.os_path(&location_of(entry))?;
             self.0.platform.open(&path)?;
         }
         Ok(ActionOutcome::Done)
@@ -258,8 +258,9 @@ pub fn split_command(command: &str) -> Vec<String> {
 /// Opens the selected files in the editor (SPEC.md *Open in editor*): the
 /// command the user named in Settings → Behaviour → Editor, with the files'
 /// paths appended, or the system's default text editor where they named
-/// none. Offered for local files only: a file on a remote location or in
-/// an archive has no path on the machine.
+/// none. Offered for files with a path on the machine: local files and
+/// those a provider names one for, as in a ZFS snapshot; a file on a
+/// remote location or in an archive has none.
 pub(crate) struct OpenInEditor(pub(crate) Arc<State>);
 
 impl Action for OpenInEditor {
@@ -279,12 +280,9 @@ impl Action for OpenInEditor {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        let local = ctx.location.provider == vfs_local::PROVIDER_ID;
         let files = !ctx.selection.is_empty()
-            && ctx.selection.iter().all(|entry| {
-                entry.kind != EntryKind::Dir && entry.id.provider == vfs_local::PROVIDER_ID
-            });
-        if local && files {
+            && ctx.selection.iter().all(|entry| self.0.has_os_path(entry));
+        if files {
             Availability::Enabled
         } else {
             Availability::Hidden
@@ -299,7 +297,7 @@ impl Action for OpenInEditor {
         let paths = ctx
             .selection
             .iter()
-            .map(|entry| local_path(&location_of(entry)))
+            .map(|entry| self.0.os_path(&location_of(entry)))
             .collect::<Result<Vec<_>, _>>()?;
         let command = self
             .0

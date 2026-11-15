@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use app::Command;
 use egui::Align;
-use model::{IconSize, SettingsChange, ViewMode};
+use model::{IconSize, SettingsChange, TimelineState, ViewMode};
 use types::{EntryKind, Location};
 
 use crate::dnd::{self, Spring, Target, Zone};
@@ -44,6 +44,7 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         .show_separator_line(false)
         .frame(egui::Frame::NONE)
         .show(ui, |ui| toolbar(ui, cx));
+    crate::timeline_bar::show(ui, cx);
     if cx.tab.failure.is_some() {
         egui::Panel::top(egui::Id::new(("failure", cx.tab_id)))
             .show_separator_line(true)
@@ -322,6 +323,7 @@ fn view_options_menu(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     if row.clicked() {
         intent(cx, Intent::ToggleHidden);
     }
+    timeline_row(ui, cx);
     let folders_first = cx.app.model().settings.folders_first;
     let row = switch_row(ui, icons::FOLDER, &t!("pane-folders-first"), folders_first);
     if row.clicked() {
@@ -434,6 +436,37 @@ fn menu_separator(ui: &mut egui::Ui) {
 /// is the checkbox a screen reader hears.
 fn switch_row(ui: &mut egui::Ui, icon: &str, label: &str, on: bool) -> egui::Response {
     menu_row_with(ui, icon, label, false, Some(on), |ui| switch(ui, on))
+}
+
+/// The *Timeline* switch of the view options menu: absent where no source
+/// offers a timeline for the folder, disabled with the reason where the
+/// folder turned out to have no earlier states.
+fn timeline_row(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let model = cx.app.model();
+    let state = model.timeline(cx.pane);
+    if matches!(state, TimelineState::None) {
+        return;
+    }
+    let on = model.timeline_shown(cx.pane);
+    if matches!(state, TimelineState::Empty) {
+        let reason = t!("timeline-empty");
+        ui.add_enabled_ui(false, |ui| {
+            switch_row(ui, icons::TIMELINE, &t!("pane-timeline"), on)
+                .on_disabled_hover_text(&reason);
+        });
+        ui.horizontal(|ui| {
+            ui.add_space(36.0);
+            ui.label(
+                egui::RichText::new(reason)
+                    .size(TEXT_SECONDARY)
+                    .color(theme::scheme(ui).text_secondary),
+            );
+        });
+        return;
+    }
+    if switch_row(ui, icons::TIMELINE, &t!("pane-timeline"), on).clicked() {
+        intent(cx, Intent::ToggleTimeline);
+    }
 }
 
 /// One row of the menu: a 16 px icon slot at 10 px, the label at 36 px,

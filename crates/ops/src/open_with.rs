@@ -14,7 +14,7 @@ use platform::Application;
 use runtime::JobRunner;
 use types::Error;
 
-use crate::{State, local_path, location_of, needs_entries};
+use crate::{State, location_of, needs_entries};
 
 /// The file in the config directory that remembers the choice per type.
 pub const FILE: &str = crate::core_toml::FILE;
@@ -76,7 +76,7 @@ impl Action for OpenWith {
                 if !ctx
                     .selection
                     .iter()
-                    .all(|e| e.id.provider == vfs_local::PROVIDER_ID) =>
+                    .all(|e| e.id.provider == vfs_local::PROVIDER_ID || self.0.has_os_path(e)) =>
             {
                 Availability::Disabled(t!("reason-only-local-files-open-elsewhere"))
             }
@@ -92,7 +92,7 @@ impl Action for OpenWith {
         let Some(first) = ctx.selection.first() else {
             return Ok(ActionOutcome::Done);
         };
-        let first_path = local_path(&location_of(first))?;
+        let first_path = self.0.os_path(&location_of(first))?;
         let key = type_key(&first_path);
         let mut apps = self.0.platform.applications(&first_path)?;
         let file = self.file();
@@ -152,7 +152,7 @@ impl Action for OpenWith {
                 .ok_or(Error::Unsupported("no such application"))?
         };
         for entry in &ctx.selection {
-            let path = local_path(&location_of(entry))?;
+            let path = self.0.os_path(&location_of(entry))?;
             self.0.platform.open_with(&path, &app)?;
         }
         if values.check("remember") {

@@ -326,6 +326,18 @@ pub trait Provider: Send + Sync + 'static {
         None
     }
 
+    /// The path on this machine's file system that holds the file at
+    /// `loc` as it is, for a provider whose files are local files under
+    /// another name: a ZFS snapshot's file in the dataset's
+    /// `.zfs/snapshot` directory. The kernel hands it to the system to
+    /// open it, with an application or in the editor, where it would
+    /// otherwise offer nothing. `None`, the default, is a file that has no
+    /// such path.
+    fn local_path(&self, loc: &Location) -> Option<std::path::PathBuf> {
+        let _ = loc;
+        None
+    }
+
     /// Streams entries in batches. The first batch must arrive within the
     /// first-screen budget. Cancelling the token ends the stream within one
     /// batch.

@@ -23,6 +23,7 @@ mod panel;
 pub mod placement;
 mod session;
 mod settings;
+mod timeline;
 mod tree;
 
 use std::collections::hash_map::Entry as Slot;
@@ -50,6 +51,7 @@ pub use settings::{
     SidePanel, SidePanelChange, TextPreview, Theme, TitlebarColour, WindowFrame, WindowSettings,
     parse_location,
 };
+pub use timeline::{PaneTimeline, TimelineState};
 pub use tree::{Tree, TreeRow};
 use types::{
     Conflict, ConflictId, Entry, EntryId, ExtId, JobId, Location, Progress, ProviderId, Question,
@@ -291,6 +293,10 @@ impl Dock {
 pub struct Pane {
     tabs: Vec<TabId>,
     active: Option<TabId>,
+    /// The time slider's toggle, saved with the session.
+    timeline_shown: bool,
+    /// What is known about the timeline of the folder the pane shows.
+    timeline: PaneTimeline,
 }
 
 impl Pane {
@@ -1018,6 +1024,7 @@ impl Model {
             Pane {
                 tabs: vec![tab],
                 active: Some(tab),
+                ..Pane::default()
             },
         );
         let w = self.windows.get_mut(&window)?;
@@ -1051,6 +1058,7 @@ impl Model {
             Pane {
                 tabs: vec![tab],
                 active: Some(tab),
+                ..Pane::default()
             },
         );
         self.tabs.insert(tab, Tab::new(location, &self.settings));
@@ -1087,6 +1095,7 @@ impl Model {
             Pane {
                 tabs: vec![tab],
                 active: Some(tab),
+                ..Pane::default()
             },
         );
         (pane, tab)
@@ -1411,6 +1420,7 @@ impl Model {
             let mut pane_id = None;
             for (i, saved_tab) in saved_pane.tabs.iter().enumerate() {
                 let (pane, tab) = self.pane_with_tab(saved_tab.location.clone());
+                self.set_timeline_shown(pane, saved_pane.timeline);
                 if let Some(state) = self.tabs.get_mut(&tab) {
                     // A hand-edited file naming a console or a comparison:
                     // the view is gone, the location stays.
@@ -1551,6 +1561,7 @@ impl Model {
                         .filter(|id| self.tabs.get(id).is_some_and(|t| !t.kind.is_view()))
                         .collect();
                     PaneSession {
+                        timeline: pane.is_some_and(|p| p.timeline_shown),
                         active: pane
                             .and_then(Pane::active)
                             .and_then(|a| tabs.iter().position(|t| *t == a))
@@ -3388,10 +3399,12 @@ mod tests {
                     PaneSession {
                         active: Some(1),
                         tabs: vec![tab("/a"), tab("/b"), tab("/c")],
+                        timeline: false,
                     },
                     PaneSession {
                         active: None,
                         tabs: vec![tab("/d")],
+                        timeline: false,
                     },
                 ],
                 ..WindowSession::default()

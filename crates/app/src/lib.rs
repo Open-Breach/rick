@@ -83,6 +83,7 @@ mod places;
 pub mod plugins;
 mod session;
 pub mod settings;
+mod timeline;
 
 pub use command::{
     Command, ConnectionOp, Contents, Event, FolderContents, PropertiesInfo, TransferMode,
@@ -255,6 +256,13 @@ enum Msg {
         pane: PaneId,
         generation: u64,
         items: Vec<(EntryId, Decoration)>,
+    },
+    /// A pane's timeline was read: the merged answer of its sources.
+    Timeline {
+        pane: PaneId,
+        generation: u64,
+        location: Location,
+        timeline: Option<ext::Timeline>,
     },
     /// Something a pane's decorators depend on changed; decorate again.
     Invalidate {
@@ -716,6 +724,8 @@ pub struct App {
     preview_with: BTreeMap<PaneId, (EntryId, ExtId)>,
     /// Thumbnails being rendered, so a cell asked for twice renders once.
     thumbnails: BTreeSet<(EntryId, u32)>,
+    /// The time slider's reads, answers and travels.
+    timelines: timeline::Timelines,
     /// Events from start-up, delivered on the first poll.
     pending: Vec<Event>,
     /// The forms actions will show once a job of theirs finishes
@@ -1085,6 +1095,7 @@ impl App {
             jobs,
             job_events,
             decor_jobs: JobRunner::new(),
+            timelines: timeline::Timelines::default(),
             mailbox,
             rx,
             live: BTreeMap::new(),
@@ -1698,6 +1709,12 @@ impl App {
                     Self::selection_cleared(pane, before, events);
                 }
             }
+            Command::TimeTravel { pane, to, first } => {
+                let before = self.selection_len(pane);
+                self.time_travel(pane, to, first);
+                Self::selection_cleared(pane, before, events);
+            }
+            Command::ToggleTimeline(pane) => self.toggle_timeline(pane, events),
             Command::Transfer {
                 items,
                 from,
@@ -3767,6 +3784,7 @@ impl App {
                     decorator.invalidate(&live.key.location);
                 }
             }
+            self.forget_timeline(&key.location);
             let stale = self
                 .model
                 .active_tab(pane)
@@ -3916,6 +3934,7 @@ impl App {
                 children: BTreeMap::new(),
             },
         );
+        self.sync_timeline(pane);
     }
 
     /// Whether `location` can be searched beneath (SPEC.md, *Footer*):
@@ -4293,12 +4312,36 @@ impl App {
     }
 
     /// Runs the pane's decorators over `entries`, records what they answer at
-    /// once and routes what they publish later through the mailbox.
+    /// once and routes what they publish later through the mailbox. An
+    /// empty batch asks nobody.
     fn decorate(&mut self, pane: PaneId, entries: &[Entry], events: &mut Vec<Event>) {
+        if !entries.is_empty() {
+            self.decorate_folder(pane, entries, events);
+        }
+    }
+
+    /// Batches are decorated as they come; a folder listed without entries
+    /// had no batch, and its decorators are asked once, with none.
+    fn decorate_if_empty(&mut self, pane: PaneId, events: &mut Vec<Event>) {
+        if self
+            .model
+            .active_tab(pane)
+            .is_some_and(|(_, tab)| tab.listing.entries().is_empty())
+        {
+            self.decorate_folder(pane, &[], events);
+        }
+    }
+
+    /// The same for all of the folder's entries, once its listing is
+    /// complete: also when it has none, so that a decorator whose answers
+    /// are about the folder itself starts its reads there too (the ZFS
+    /// plugin reads the folder's snapshots, which *Browse snapshots*
+    /// needs, in a job it starts from `decorate`).
+    fn decorate_folder(&mut self, pane: PaneId, entries: &[Entry], events: &mut Vec<Event>) {
         let Some(live) = self.live.get(&pane) else {
             return;
         };
-        if live.decorators.is_empty() || entries.is_empty() {
+        if live.decorators.is_empty() {
             return;
         }
         let generation = live.generation;
@@ -4365,7 +4408,7 @@ impl App {
             .model
             .active_tab(pane)
             .map_or_default(|(_, tab)| tab.listing.entries().to_vec());
-        self.decorate(pane, &entries, events);
+        self.decorate_folder(pane, &entries, events);
     }
 
     // One arm per message: the enum is the table.
@@ -4860,14 +4903,20 @@ impl App {
                 self.integration_applied(results, relaunch, events);
             }
             Msg::Invalidate { pane, generation } => {
-                if self
-                    .live
-                    .get(&pane)
-                    .is_some_and(|l| l.generation == generation)
+                if let Some(live) = self.live.get(&pane)
+                    && live.generation == generation
                 {
+                    let location = live.key.location.clone();
+                    self.forget_timeline(&location);
                     self.redecorate(pane, events);
                 }
             }
+            Msg::Timeline {
+                pane,
+                generation,
+                location,
+                timeline,
+            } => self.timeline_read(pane, generation, location, timeline, events),
         }
     }
 
@@ -5128,9 +5177,20 @@ impl App {
         if live.generation != generation {
             return;
         }
+        let location = live.key.location.clone();
+        match result {
+            Err(error) if self.travel_missed(pane, &location, error, events) => {
+                self.sync_panes(events);
+                return;
+            }
+            Err(_) => {}
+            Ok(()) => self.travel_arrived(pane),
+        }
+        let Some(live) = self.live.get_mut(&pane) else {
+            return;
+        };
         live.complete = true;
         let buffered = live.buffer.take();
-        let location = live.key.location.clone();
         // A remote location that cannot be reached keeps the pane where it
         // is, with the card and *Retry* (SPEC.md *Removed and unreachable
         // locations*). Any other failure is the tab's banner with *Retry*,
@@ -5172,6 +5232,9 @@ impl App {
                 Vec::new()
             }
         };
+        if result.is_ok() {
+            self.decorate_if_empty(pane, events);
+        }
         self.resolve_reveal(pane, true, events);
         // The Cloud overview's rows are the side panel's Cloud rows too, and
         // the Network overview's provider rows its Network rows (the

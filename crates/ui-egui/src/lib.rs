@@ -68,6 +68,7 @@ pub mod surface;
 pub mod table;
 pub mod theme;
 pub mod thumbs;
+pub mod timeline_bar;
 pub mod views;
 pub mod widgets;
 

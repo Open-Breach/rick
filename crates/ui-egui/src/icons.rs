@@ -77,6 +77,8 @@ pub const PIN: &str = ph::PUSH_PIN;
 pub const UNPIN: &str = ph::PUSH_PIN_SLASH;
 /// Recent.
 pub const RECENT: &str = ph::CLOCK_COUNTER_CLOCKWISE;
+/// The time slider under the toolbar and its view options entry.
+pub const TIMELINE: &str = ph::CLOCK_COUNTER_CLOCKWISE;
 /// Network.
 pub const NETWORK: &str = ph::NETWORK;
 /// Trash.

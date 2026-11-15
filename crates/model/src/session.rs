@@ -209,6 +209,9 @@ pub struct PaneSession {
     pub active: Option<usize>,
     /// The pane's tab; several in a file of 0.2, whose panes had strips.
     pub tabs: Vec<TabSession>,
+    /// The time slider is switched on; absent (off) in older files.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub timeline: bool,
 }
 
 /// One tab of a session.

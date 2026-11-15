@@ -19,6 +19,12 @@ path = "src/lib.rs"
 name = "rick"
 path = "src/main.rs"
 
+# The ZFS plugin's privileged helper (`ext_zfs::helper`), beside `rick`
+# like `rick-perms`.
+[[bin]]
+name = "rick-zfs"
+path = "src/bin/rick-zfs.rs"
+
 # Built-in extensions are features, default-on; a lean build turns them off.
 # `git`, `svn`, `vfs-trash`, `vfs-archive`, `ssh`, the three cloud
 # providers, `preview-hex` and the five `search-*` connectors compile a
@@ -46,6 +52,9 @@ preview-icons = ["dep:ext-preview-icons"]
 gstreamer = ["preview-media", "ext-preview-media/gstreamer"]
 git = ["dep:ext-git"]
 svn = ["dep:ext-svn"]
+# `zfs` compiles the ZFS plugin in; the crate itself is always a
+# dependency, because the privileged helper `rick-zfs` is built from it.
+zfs = []
 vfs-trash = ["dep:ext-vfs-trash"]
 vfs-archive = ["dep:ext-vfs-archive"]
 search-walk = ["dep:ext-search-walk"]
@@ -94,6 +103,7 @@ ext-preview-media = { workspace = true, optional = true }
 ext-preview-archive = { workspace = true, optional = true }
 ext-preview-markup = { workspace = true, optional = true }
 ext-svn = { workspace = true, optional = true }
+ext-zfs = { workspace = true }
 ext-search-walk = { workspace = true, optional = true }
 ext-search-windows = { workspace = true, optional = true }
 ext-search-spotlight = { workspace = true, optional = true }

@@ -488,6 +488,21 @@ pub enum Command {
         /// Whether this is the drag's first step in the pane.
         first: bool,
     },
+    /// A step along the pane's time slider: navigates like `Navigate` to a
+    /// point of the pane's timeline, or back to its live folder, but
+    /// records history only on the first step of a run (`first: true`), so
+    /// one Back returns to where the run started. A point that does not
+    /// hold the folder shows its nearest existing parent and a notice.
+    TimeTravel {
+        /// The pane.
+        pane: PaneId,
+        /// The point's location, or the live folder.
+        to: Location,
+        /// Whether this is the first step of a run.
+        first: bool,
+    },
+    /// Switch the pane's time slider on or off.
+    ToggleTimeline(PaneId),
     /// Pin to the side panel, undoable; `at` is the position in the Pinned
     /// list, `None` the end.
     Pin {
@@ -607,6 +622,11 @@ pub enum Event {
         pane: PaneId,
         /// What changed, already applied to the model.
         change: FsChange,
+    },
+    /// What is known about a pane's timeline changed; the model holds it.
+    Timeline {
+        /// The pane.
+        pane: PaneId,
     },
     /// A decorator produced badges or cells.
     Decorated {
@@ -902,6 +922,7 @@ impl fmt::Debug for Event {
             Self::Decorated { pane, items } => {
                 pane_struct(f, "Decorated", *pane, "items", &items.len())
             }
+            Self::Timeline { pane } => f.debug_struct("Timeline").field("pane", pane).finish(),
             Self::JobProgress { id, progress } => f
                 .debug_struct("JobProgress")
                 .field("id", id)

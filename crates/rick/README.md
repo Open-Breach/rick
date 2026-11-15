@@ -47,6 +47,10 @@ it hands over to, takes the name. It is the only crate that uses `anyhow`. Its s
 binary, `rick-perms`, is the privileged helper: the one program Rick runs
 as the administrator, through the platform's prompt, to apply a permission
 change the user may not make by themselves (`platform::perms::helper`);
-the bundle lays it beside `rick`. It depends on `types`, `runtime`,
+the bundle lays it beside `rick`. A third binary, `rick-zfs`, is the ZFS
+plugin's privileged helper (`ext_zfs::helper`), which runs one checked
+`zfs snapshot`, `rename` or `destroy` of a snapshot; the bundle lays it
+beside `rick` where the ZFS plugin is bundled, so `ext-zfs` is always a
+dependency and the `zfs` feature only compiles the plugin in. It depends on `types`, `runtime`,
 `platform`, `vfs-local`, `model`, `app`, `ui-egui` and `plugins-native`;
 nothing depends on it.

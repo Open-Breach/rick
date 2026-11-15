@@ -79,6 +79,20 @@ pane-icons-medium = Medium icons
 pane-icons-large = Large icons
 pane-show-hidden = Show hidden files
 pane-folders-first = Folders first
+pane-timeline = Timeline
+timeline-now = Now
+timeline-read-only = Read-only
+timeline-states = { $count ->
+    [one] { $count } earlier state
+   *[other] { $count } earlier states
+}
+timeline-reading = Reading earlier states…
+timeline-back-to-now = Back to now
+timeline-empty = No earlier states of this folder
+timeline-no-source = No timeline for this folder
+timeline-toggle = Toggle timeline
+timeline-point = { $date } · { $label } · { $source }
+timeline-missing = { $folder } did not exist then; showing the nearest folder that did.
 pane-refresh-now = Refresh now
 pane-show-all = Show all
 pane-type-folders = Folders

@@ -337,6 +337,20 @@ pane-icons-medium = Mittlere Symbole
 pane-icons-large = Große Symbole
 pane-show-hidden = Versteckte Dateien anzeigen
 pane-folders-first = Ordner zuerst
+pane-timeline = Zeitleiste
+timeline-now = Jetzt
+timeline-read-only = Schreibgeschützt
+timeline-states = { $count ->
+    [one] { $count } früherer Stand
+   *[other] { $count } frühere Stände
+}
+timeline-reading = Frühere Stände werden gelesen…
+timeline-back-to-now = Zurück zu jetzt
+timeline-empty = Keine früheren Stände dieses Ordners
+timeline-no-source = Keine Zeitleiste für diesen Ordner
+timeline-toggle = Zeitleiste ein/aus
+timeline-point = { $date } · { $label } · { $source }
+timeline-missing = { $folder } gab es damals nicht; gezeigt wird der nächste Ordner, den es gab.
 pane-refresh-now = Jetzt aktualisieren
 pane-show-all = Alle anzeigen
 pane-type-folders = Ordner

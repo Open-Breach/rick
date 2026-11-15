@@ -139,7 +139,7 @@ fn the_facts_are_read_from_the_registries() {
     once.sort();
     once.dedup();
     assert_eq!(once.len(), facts.previews.len(), "a type is named twice");
-    assert_eq!(facts.storage, ["Archives", "SSH"]);
+    assert_eq!(facts.storage, ["Archives", "SSH", "ZFS"]);
     assert_eq!(facts.cloud, ["S3", "Azure Blob", "Google Cloud Storage"]);
     assert_eq!(
         facts.search,
