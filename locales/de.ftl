@@ -320,6 +320,7 @@ hash-matches = Stimmt mit { $algorithm } überein
 hash-no-match = Keine Übereinstimmung
 hash-from-clipboard = aus der Zwischenablage
 shell-new-tab = Neuer Tab
+shell-all-tabs = Alle Tabs
 shell-close-tab = Tab schließen
 shell-drop-for-new-tab = Für neuen Tab ablegen
 shell-dragging-pane = Bereich { $title } wird gezogen

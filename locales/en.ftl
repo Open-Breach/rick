@@ -379,6 +379,7 @@ shell-layout-name = layout-name
 shell-layout-name-2 = Layout name
 shell-this-tab-s-content-is = This tab's content is gone; close it.
 shell-new-tab = New tab
+shell-all-tabs = All tabs
 shell-close-tab = Close tab
 shell-drop-for-new-tab = Drop for new tab
 shell-dragging-pane = Dragging pane { $title }

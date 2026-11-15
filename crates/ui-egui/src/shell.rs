@@ -41,6 +41,7 @@ use crate::preview::Previews;
 use crate::search::{Pick, SearchBox};
 use crate::shortcuts::ShortcutsScreen;
 use crate::side_panel::SidePanelState;
+use crate::tab_row::{NEW_TAB_WIDTH, TAB_GAP};
 use crate::thumbs::Thumbnails;
 use crate::{compare, console};
 use crate::{
@@ -393,6 +394,11 @@ pub struct WindowUi {
     tab_row: Option<egui::Rect>,
     /// A workspace tab being dragged along the title row.
     workspace_drag: Option<TabDrag>,
+    /// The first workspace tab the row showed in the last frame, where
+    /// they do not all fit: the run of shown tabs moves from there.
+    tab_first: usize,
+    /// How the tabs shared the row in the last frame, for tests.
+    tab_layout: Option<crate::tab_row::TabRow>,
     /// Where each tab of the row is drawn while the tabs slide apart for
     /// a dragged one; `None` is the new-tab button after them.
     tab_slides: crate::drag::Slides<Option<WorkspaceId>>,
@@ -436,6 +442,8 @@ impl WindowUi {
             screen: None,
             tab_row: None,
             workspace_drag: None,
+            tab_first: 0,
+            tab_layout: None,
             tab_slides: crate::drag::Slides::default(),
             slide_until: 0.0,
             pane_drop_slot: None,
@@ -1029,13 +1037,9 @@ pub type Relaunch = Arc<dyn Fn(&std::path::Path) + Send + Sync>;
 
 /// How many dispatched intents are remembered.
 const RECENTS: usize = 64;
-/// The room between two workspace tabs.
-const TAB_GAP: f32 = 2.0;
 /// From a workspace tab's left edge to its icon, and from the title's end
 /// to its right edge where the tab has no close button.
 const TAB_INSET: f32 = 14.0;
-/// The new-tab button's width.
-const NEW_TAB_WIDTH: f32 = 28.0;
 /// The slot the tab row shows where a dropped pane would land as a new tab.
 const DROP_SLOT_WIDTH: f32 = 160.0;
 /// A new window's inner size before the user resizes it.
@@ -1374,6 +1378,13 @@ impl RickUi {
     /// opens.
     pub fn set_inspector_width(&mut self, width: f32) {
         self.inspector_width = width;
+    }
+
+    /// How the root window's workspace tabs shared their row in the last
+    /// frame (SPEC.md *Tabs that outgrow the row*), for tests.
+    #[must_use]
+    pub fn tab_layout(&self) -> Option<crate::tab_row::TabRow> {
+        self.windows.get(&self.root).and_then(|w| w.tab_layout)
     }
 
     /// Where the root window's Preview tab drew its content in the last
@@ -3575,9 +3586,11 @@ impl RickUi {
             });
     }
 
-    /// The workspace tabs from `left` to `right`, each `TAB_WIDTH` wide and
-    /// `tab/height` tall on the bottom edge of the row, the new-tab button
-    /// directly after the last; the row clips what does not fit. A tab
+    /// The workspace tabs from `left` to `right`, as wide as the row lets
+    /// them be ([`crate::tab_row`]) and `tab/height` tall on the bottom
+    /// edge of the row, the new-tab button directly after the last; where
+    /// they do not all fit, a dropdown button with the list of every tab
+    /// stands before it. A tab
     /// dragged along the row reorders the tabs, its neighbours sliding
     /// apart to open the gap where it will land; one dragged off the row
     /// follows the cursor as its ghost. A tab holding exactly one pane —
@@ -3607,7 +3620,7 @@ impl RickUi {
         window: WindowId,
         focused: PaneId,
     ) {
-        use crate::theme::{ICON, TAB_WIDTH, TEXT_BODY};
+        use crate::theme::{ICON, TEXT_BODY};
         let metrics = crate::theme::metrics(ctx);
         let scheme = crate::theme::scheme(ui);
         let row = egui::Rect::from_min_max(
@@ -3641,7 +3654,16 @@ impl RickUi {
         };
         w.tab_row = Some(row);
         w.tab_headers.clear();
-        let pitch = TAB_WIDTH + TAB_GAP;
+        // How the tabs share the row (SPEC.md *Tabs that outgrow the
+        // row*): 220 px while they fit, all narrower together down to the
+        // minimum, then a run of as many as fit with the list of all of
+        // them behind a dropdown button.
+        let active_at = active.and_then(|a| tabs.iter().position(|(id, _)| *id == a));
+        let layout = crate::tab_row::lay_out(row.width(), tabs.len(), active_at, w.tab_first);
+        w.tab_first = layout.first;
+        w.tab_layout = Some(layout);
+        let tab_width = layout.width;
+        let pitch = tab_width + TAB_GAP;
         let pointer = ctx.pointer_latest_pos();
         let primary_down = ctx.input(|i| i.pointer.primary_down());
         let released = ctx.input(|i| i.pointer.any_released());
@@ -3657,7 +3679,8 @@ impl RickUi {
             w.workspace_drag = None;
         }
         let dragged = drag.and_then(|d| tabs.iter().position(|(id, _)| *id == d.id));
-        let others = tabs.len() - usize::from(dragged.is_some());
+        // The tabs of the row that stay in their places.
+        let others = layout.count - usize::from(dragged.is_some_and(|i| layout.shows(i)));
         // The tab over this window: its own, or another window's.
         let carried = drag.filter(|_| dragged.is_some()).or(visiting);
         let pane_carried = w.pane_drag.is_some() || visiting_pane;
@@ -3685,8 +3708,10 @@ impl RickUi {
             .and_then(|d| cursor.map(|p| slot_of(p.x - d.grab.x, others)));
         let pane_over_row =
             pane_carried && cursor.is_some_and(|p| row.expand2(egui::vec2(0.0, 6.0)).contains(p));
-        let drop_slot = pane_over_row.then(|| cursor.map(|p| slot_of(p.x, tabs.len())));
-        w.pane_drop_slot = drop_slot.flatten();
+        let drop_slot = pane_over_row.then(|| cursor.map(|p| slot_of(p.x, layout.count)));
+        // A slot is a place in the row; among all the tabs it is that
+        // many past the first one shown.
+        w.pane_drop_slot = drop_slot.flatten().map(|slot| layout.first + slot);
         // Off the row, a tab that holds exactly one pane can be docked: the
         // pane under the cursor shows the four side targets, and the tile
         // under the cursor is where the tab's pane would go. The model says
@@ -3728,10 +3753,10 @@ impl RickUi {
             .zip(cursor)
             .map(|((d, slot), p)| {
                 let x =
-                    (p.x - d.grab.x).clamp(row.left(), (row.right() - TAB_WIDTH).max(row.left()));
+                    (p.x - d.grab.x).clamp(row.left(), (row.right() - tab_width).max(row.left()));
                 (slot, x - (row.left() + slot as f32 * pitch))
             });
-        let quarter = TAB_WIDTH / 4.0 + TAB_GAP;
+        let quarter = tab_width / 4.0 + TAB_GAP;
         let mut rested_on: Option<WorkspaceId> = None;
 
         let clip = row.intersect(ui.clip_rect());
@@ -3760,7 +3785,12 @@ impl RickUi {
                 crate::theme::Scheme::ON_BUTTON,
             );
         };
-        for (i, (id, label)) in tabs.iter().enumerate() {
+        let run = tabs
+            .iter()
+            .enumerate()
+            .skip(layout.first)
+            .take(layout.count);
+        for (i, (id, label)) in run {
             if dragged == Some(i) {
                 continue;
             }
@@ -3779,7 +3809,7 @@ impl RickUi {
             };
             let tab_rect = egui::Rect::from_min_size(
                 egui::pos2(drawn, row.top()),
-                egui::vec2(TAB_WIDTH, row.height()),
+                egui::vec2(tab_width, row.height()),
             );
             let (response, close) = workspace_tab(
                 &mut child,
@@ -3861,8 +3891,56 @@ impl RickUi {
         } else {
             w.tab_slides.put(None, x, now)
         };
+        // The tabs the row has no room for are in the list behind the
+        // dropdown button, which stands after the last tab shown and
+        // before the new-tab button.
+        let mut picked: Option<WorkspaceId> = None;
+        let mut plus_left = drawn;
+        if layout.overflow {
+            let list_rect = egui::Rect::from_min_size(
+                egui::pos2(drawn, row.top()),
+                egui::vec2(NEW_TAB_WIDTH, row.height()),
+            );
+            plus_left = list_rect.right();
+            let list = child.interact(
+                list_rect,
+                egui::Id::new(("all-tabs", window.0)),
+                egui::Sense::click(),
+            );
+            list.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t!("shell-all-tabs"))
+            });
+            let open = egui::Popup::is_id_open(ctx, egui::Popup::default_response_id(&list));
+            let band = crate::theme::band(&child);
+            if list.hovered() || open {
+                child
+                    .painter()
+                    .rect_filled(list_rect, metrics.corner_radius(), band.hover);
+            }
+            child.painter().text(
+                list_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                icons::DROPDOWN,
+                egui::FontId::proportional(ICON),
+                band.icon,
+            );
+            let list = if open {
+                list
+            } else {
+                list.on_hover_text(t!("shell-all-tabs"))
+            };
+            let entries: Vec<menus::TabEntry<'_>> = tabs
+                .iter()
+                .map(|(id, label)| menus::TabEntry {
+                    icon: label.icon,
+                    title: &label.title,
+                    active: Some(*id) == active,
+                })
+                .collect();
+            picked = menus::all_tabs(&list, &entries).map(|at| tabs[at].0);
+        }
         let plus_rect = egui::Rect::from_min_size(
-            egui::pos2(drawn, row.top()),
+            egui::pos2(plus_left, row.top()),
             egui::vec2(NEW_TAB_WIDTH, row.height()),
         );
         let plus = child.interact(
@@ -3900,18 +3978,19 @@ impl RickUi {
             Some((d, p, label))
         });
         if let Some((d, p, label)) = lifted {
-            let size = egui::vec2(TAB_WIDTH, row.height());
+            let size = egui::vec2(tab_width, row.height());
             let float = if riding {
                 let x =
-                    (p.x - d.grab.x).clamp(row.left(), (row.right() - TAB_WIDTH).max(row.left()));
+                    (p.x - d.grab.x).clamp(row.left(), (row.right() - tab_width).max(row.left()));
                 // Released, it settles into the gap from where it rides.
                 w.tab_slides.put(Some(d.id), x, now);
                 egui::Rect::from_min_size(egui::pos2(x, row.top()), size)
             } else {
                 // Off the row its place in the row is the one it came from.
                 if let Some(i) = dragged {
+                    let place = i.saturating_sub(layout.first);
                     w.tab_slides
-                        .put(Some(d.id), row.left() + i as f32 * pitch, now);
+                        .put(Some(d.id), row.left() + place as f32 * pitch, now);
                 }
                 egui::Rect::from_min_size(p + crate::drag::GHOST_OFFSET - d.grab, size)
             };
@@ -3960,7 +4039,7 @@ impl RickUi {
         // land it; a pane's dock target is added when the panes are drawn.
         w.offer = drag_slot
             .or(drop_slot.flatten())
-            .map(Offer::Row)
+            .map(|slot| Offer::Row(layout.first + slot))
             .or_else(|| {
                 dock.and_then(|(pane, _, zone)| zone.map(|zone| Offer::Dock { pane, zone }))
             });
@@ -4027,6 +4106,11 @@ impl RickUi {
             self.requests
                 .push(Request::Command(Command::ActivateWorkspace(id)));
         }
+        // Chosen from the list of all tabs: the row moves to hold it.
+        if let Some(id) = picked {
+            self.requests
+                .push(Request::Command(Command::ActivateWorkspace(id)));
+        }
         if let Some(id) = closed {
             self.close_workspace(id);
         }
@@ -4045,6 +4129,7 @@ impl RickUi {
             // returns to its place (QUESTIONS.md 274).
             (Some((d, _)), None) if in_window => {
                 if let Some(to) = drag_slot {
+                    let to = layout.first + to;
                     self.handle(Command::MoveWorkspace { id: d.id, to });
                 } else if let Some((pane, _, Some(zone))) = dock
                     && let Some(side) = zone.side()
