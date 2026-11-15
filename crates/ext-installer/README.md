@@ -1,6 +1,7 @@
 # ext-installer
 
-`ext-installer` is the tarball installer of `specs/ext-installer.md`: the
+`ext-installer` is the installer of tarballs and AppImages of
+`specs/ext-installer.md`: the
 action *Install as application…* on a tar (gz, xz, bz2, zst) or zip archive
 returns at once and the job *Reading archive…*, with byte progress over
 the file and a cancel, reads the archive's index and the first bytes of
@@ -36,7 +37,31 @@ folder, with the per-row actions; *Installed Apps…* opens it from the
 command palette and the burger menu's *Installer* submenu. System-wide
 installs are shown as unavailable until the privileged helper of the
 spec's own milestone exists.
+An AppImage, told by a name ending in `.AppImage` or by the magic in its
+ELF header and never taken for an archive, has two actions. *Run* starts
+it as it is: the file's machine type is compared with the running
+machine, the execute bit is set for the owner when it is missing, and the
+file is started detached in its folder through the platform; Enter and a
+double-click on an AppImage run the same action. *Install as application…*
+installs it on the same model as an archive (`Format::AppImage`, an
+archive whose only entry is the file): the job *Reading AppImage…* reads
+the desktop entry, the icon (`.DirIcon`, or the one the entry names) and
+the AppStream metainfo out of the SquashFS image that starts where the
+file's ELF ends, with the `backhand` crate and with links followed only
+inside the image, and nothing from the file is run; the version is
+`X-AppImage-Version`, then the newest release of the metainfo, then the
+file name, and is typed when none has one; an image that cannot be read
+leaves the file name's name and version and no icon. The version folder
+holds the AppImage itself as `<app-id>.AppImage`, so the path through
+`current` and the desktop entry stay the same from one update to the next;
+the AppImage's own desktop entry is reused without its `TryExec`, and the
+downloaded file is only read. An AppImage on the older runtime needs
+`libfuse.so.2`, which is read from its runtime as the name it opens the
+library by: where the loader cache and the library folders lack it, *Run*
+stops with the warning and its install lines, and an install works and
+carries the warning in its summary.
 The plugin loads on every platform, and its actions are hidden and its view
 answers "unsupported on this platform" anywhere but Linux. It depends on
-`ext` and `types` only (the tar and zip crates are its own); `rick` (behind
-`installer`) and `tests` link it, and the plugin host loads it.
+`ext` and `types` only (the tar and zip crates and the SquashFS reader are
+its own); `rick` (behind `installer`) and `tests` link it, and the plugin
+host loads it.

@@ -3162,3 +3162,82 @@ fn an_install_without_fuse2_works_and_carries_the_warning_in_its_summary() {
     assert_eq!(warning(&h.ui.last_rows()), None);
     assert_eq!(summary(&h), "Fixfuse 1.0.0 installed.");
 }
+
+/// The AppImage fixtures are the ten of the spec's table, under its
+/// names and in its order (specs/ext-installer.md "Test fixtures"): each
+/// is the tiny ELF with the AppImage magic in its header, of type 2 with
+/// a SquashFS image where the ELF ends but for `type1.AppImage`, built
+/// anew with the same bytes every time, and written without the execute
+/// bit. The two rows no other test asks of the fixture itself: the magic
+/// alone offers both entries, and another machine's is refused by *Run*.
+#[test]
+fn the_appimage_fixtures_are_the_ones_of_the_specs_table() {
+    let names: Vec<&str> = AppImageFixture::ALL.iter().map(|f| f.file_name()).collect();
+    assert_eq!(
+        names,
+        [
+            "entry.AppImage",
+            "metainfo.AppImage",
+            "Fixname-3.2.1-x86_64.AppImage",
+            "no-version.AppImage",
+            "type1.AppImage",
+            "magic-only",
+            "fuse2.AppImage",
+            "wrong-arch.AppImage",
+            "outside-links.AppImage",
+            "update-v2.AppImage",
+        ]
+    );
+    let h = harness();
+    for fixture in AppImageFixture::ALL {
+        let bytes = fixture
+            .bytes()
+            .unwrap_or_else(|e| panic!("{fixture:?}: {e}"));
+        assert_eq!(
+            fixture.bytes().ok().as_ref(),
+            Some(&bytes),
+            "{fixture:?} is the same every time"
+        );
+        let wanted = if fixture == AppImageFixture::Type1 {
+            Type::One
+        } else {
+            Type::Two
+        };
+        assert_eq!(appimage::magic(&bytes), Some(wanted), "{fixture:?}");
+        let header = elf::read_bytes(&bytes).unwrap_or_else(|| panic!("{fixture:?}: no ELF"));
+        let end = usize::try_from(header.end).unwrap_or(usize::MAX);
+        let image = bytes.get(end..end + 4);
+        if wanted == Type::Two {
+            assert_eq!(image, Some(&b"hsqs"[..]), "{fixture:?}: the image");
+        } else {
+            assert_ne!(image, Some(&b"hsqs"[..]), "{fixture:?}: no image");
+        }
+        let path = h.appimage(fixture);
+        assert_eq!(fs::read(&path).ok(), Some(bytes), "{fixture:?}");
+        if supported() {
+            assert_eq!(mode_of(&path), Some(0o644), "{fixture:?}");
+        }
+    }
+    if !supported() {
+        return;
+    }
+    let magic_only = h.appimage(AppImageFixture::MagicOnly);
+    for action in [RUN, INSTALL] {
+        assert_eq!(
+            h.action(action).availability(&h.ctx_file(&magic_only)),
+            Availability::Enabled,
+            "{}",
+            action.0
+        );
+    }
+    let other = h.appimage(AppImageFixture::WrongArch);
+    let (outcome, _) = h.run(RUN, h.ctx_file(&other));
+    let error = outcome.err().map(|e| text_of(&e));
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|e| e.contains("this AppImage is built for")),
+        "{error:?}"
+    );
+    assert!(h.fake.ran().is_empty(), "nothing is started");
+}

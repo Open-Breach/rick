@@ -495,8 +495,9 @@ pub fn features(facts: &Facts) -> String {
             "- **Works with the tools you already use**{tools}: status badges in the file list \
              and actions in the context menu."
         ),
-        "- **Installs and uninstalls software distributed as tarballs**, so a tar.gz download \
-         becomes a managed install instead of a folder you forget about. Linux only."
+        "- **Installs and uninstalls software distributed as tarballs and AppImages**, so a \
+         tar.gz or AppImage download becomes a managed install instead of a folder or file you \
+         forget about. Linux only."
             .to_owned(),
         "- **Small things done right**, such as computing a file's hash from the context menu."
             .to_owned(),
