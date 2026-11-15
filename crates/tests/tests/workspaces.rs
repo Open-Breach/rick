@@ -2313,16 +2313,14 @@ fn list_entries(harness: &Harness<'_, RickUi>, titles: &[String]) -> Vec<(egui::
     titles
         .iter()
         .map(|title| {
-            harness
+            let entry = harness
                 .query_all_by_label(title)
                 .find(|n| (n.rect().height() - 30.0).abs() < 1.0 && n.rect().width() > 200.0)
-                .map(|n| {
-                    (
-                        n.rect(),
-                        n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True),
-                    )
-                })
-                .unwrap_or_else(|| panic!("{title} is not in the list"))
+                .unwrap_or_else(|| panic!("{title} is not in the list"));
+            (
+                entry.rect(),
+                entry.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True),
+            )
         })
         .collect()
 }
