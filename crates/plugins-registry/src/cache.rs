@@ -124,10 +124,17 @@ impl Cache {
 /// is [`Cache::fetched`].
 #[must_use]
 pub fn due(fetched: Option<SystemTime>, now: SystemTime) -> bool {
+    due_after(fetched, now, CHECK_EVERY)
+}
+
+/// [`due`] for a check that is made every `every`: whether an index last
+/// fetched at `fetched` is that old at `now`, or there is none.
+#[must_use]
+pub fn due_after(fetched: Option<SystemTime>, now: SystemTime, every: Duration) -> bool {
     fetched.is_none_or(|fetched| {
         now.duration_since(fetched)
             // A file from the future says nothing about its age.
-            .map_or(true, |age| age >= CHECK_EVERY)
+            .map_or(true, |age| age >= every)
     })
 }
 

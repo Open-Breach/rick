@@ -16,7 +16,8 @@ signature verifies (`minisign-verify`, the legacy form refused) and its
 `schema` is one this Rick reads; `Cache` keeps the last index that
 verified with its signature in `registry/` of Rick's cache directory and
 verifies it again on every read; `refresh` is a fetch written to the
-cache, and `due` says whether the daily check is due. `Index::offer` is
+cache, and `due` says whether the daily check is due (`due_after`
+for a check at another interval). `Index::offer` is
 the rule of what fits: a build is for one platform and one release of
 Rick, compared as whole strings, a pre-release Rick fits nothing, and
 neither does one older than the registry's oldest release. `download`
