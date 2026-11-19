@@ -49,6 +49,8 @@ Which plugins are separate is said by each plugin's crate, under `[package.metad
 
 `README.md` describes the latest release and is brought up to date in the release pull request only (specs/readme.md). `cargo xtask readme` does it: it writes the version, the Features list and the Install section from what the extensions register, and renders the two screenshots of `docs/screenshots/` afresh (it needs a wgpu adapter; a software one such as lavapipe will do). `cargo test --workspace` fails when the README of a release version is not what that command writes.
 
+One part of the release pull request of 0.6.0 is written by hand: the privacy paragraph of specs/readme.md, section 9, word for word, as the first line under the rule above the closing links. The same test asks for it as soon as the status line names 0.6.0, and refuses it before.
+
 ## Writing a plugin
 
 Start from `crates/plugins-native/README.md`. The numbers 0.2.0 was measured against are in [BENCHMARKS.md](../BENCHMARKS.md).
