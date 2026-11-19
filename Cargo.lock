@@ -2194,8 +2194,8 @@ dependencies = [
 name = "ext-action-rename"
 version = "0.5.0"
 dependencies = [
- "chrono",
  "ext",
+ "jiff",
  "platform",
  "regex",
  "runtime",
