@@ -15,9 +15,10 @@ vfs-local = { workspace = true }
 vfs-rick = { workspace = true }
 model = { workspace = true }
 app = { workspace = true }
-chrono = { workspace = true }
-# The system's locale, for the *System* date format.
+jiff = { workspace = true }
+# The system's locale and how it writes a date, for the *System* date format.
 sys-locale = { workspace = true }
+pure-rust-locales = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
 egui_dock = { workspace = true }

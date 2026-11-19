@@ -1036,7 +1036,6 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
- "pure-rust-locales",
  "wasm-bindgen",
  "windows-link",
 ]
@@ -8821,7 +8820,6 @@ version = "0.5.0"
 dependencies = [
  "ab_glyph",
  "app",
- "chrono",
  "eframe",
  "egui",
  "egui-phosphor",
@@ -8830,9 +8828,11 @@ dependencies = [
  "egui_kittest",
  "ext",
  "image",
+ "jiff",
  "model",
  "percent-encoding",
  "platform",
+ "pure-rust-locales",
  "regex",
  "resvg",
  "runtime",
