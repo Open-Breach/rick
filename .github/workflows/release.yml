@@ -611,7 +611,15 @@ jobs:
             grep -Eq "^preview-media +[^|]* +previewer +loaded +.*[/\\]Rick[/\\]plugins[/\\]preview-media" plugins.txt \
               || { echo "the media plugin did not load from the per-user folder"; exit 1; }
           fi
-          LD_LIBRARY_PATH=. DYLD_LIBRARY_PATH=. "./preview_check$exe" "$GITHUB_WORKSPACE/check/sample.mp4" --play | tee media.txt
+          sample="$GITHUB_WORKSPACE/check/sample.mp4"
+          if ! LD_LIBRARY_PATH=. DYLD_LIBRARY_PATH=. "./preview_check$exe" "$sample" --play | tee media.txt; then
+            # GStreamer's own account of what refused, for whoever reads
+            # this log: its warnings and errors, which name the element.
+            echo "the sample did not play; once more with GStreamer's warnings:"
+            GST_DEBUG=2 LD_LIBRARY_PATH=. DYLD_LIBRARY_PATH=. "./preview_check$exe" "$sample" --play 2>&1 \
+              | grep -v "^plugin .*: loaded, " | tail -40 || true
+            exit 1
+          fi
           grep -q "^plugin preview-media: loaded, $from, " media.txt || { echo "the media plugin was not loaded from $from"; exit 1; }
           grep -q "^preview ok: .*first frame 320x240, played to " media.txt || { echo "the sample video did not play"; exit 1; }
 
