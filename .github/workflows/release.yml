@@ -322,7 +322,9 @@ jobs:
       # A short video for the smoke test to play: the test pattern, H.264
       # where an encoder is there and MPEG-4 part 2 otherwise, written by
       # the GStreamer the build has (the system's on Linux, the official
-      # runtime on macOS and Windows).
+      # runtime on macOS and Windows). The frames are 4:2:0, as a camera
+      # or a phone writes them: left to itself the encoder keeps the
+      # pattern's 4:4:4, which the decoder of macOS does not take.
       - name: media sample
         shell: bash
         run: |
@@ -336,7 +338,7 @@ jobs:
           echo "encoder: $encoder"
           gst-launch-1.0 -q videotestsrc num-buffers=90 pattern=smpte ! \
             video/x-raw,width=320,height=240,framerate=30/1 ! videoconvert ! \
-            "$encoder" ! mp4mux ! filesink location=check/sample.mp4
+            video/x-raw,format=I420 ! "$encoder" ! mp4mux ! filesink location=check/sample.mp4
           ls -l check/sample.mp4
       - uses: actions/download-artifact@v4
         with: { name: third-party-licenses }
