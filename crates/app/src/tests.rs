@@ -386,14 +386,21 @@ fn settings_changes_are_saved_and_disk_edits_are_picked_up() {
     )));
 
     fs::write(&path, "font_size = \n").unwrap_or_else(|e| panic!("{e}"));
-    h.settle();
-    assert!(h.events.iter().any(|e| matches!(
-        e,
-        Event::Notify {
-            level: Level::Warning,
-            ..
-        }
-    )));
+    // The watcher reports this write when the platform gets to it, as it
+    // did the one above, and `settle` returns once nothing has arrived for
+    // 80 ms: the warning is waited for, as the reload was (issue 263).
+    let warned = wait_until(&mut h, Duration::from_secs(10), |h| {
+        h.events.iter().any(|e| {
+            matches!(
+                e,
+                Event::Notify {
+                    level: Level::Warning,
+                    ..
+                }
+            )
+        })
+    });
+    assert!(warned, "no warning for the broken file: {:?}", h.events);
     assert_eq!(
         h.app.model().settings.font_size,
         15,
@@ -1524,8 +1531,16 @@ fn select_all_selects_what_is_shown_and_counts_the_hidden_it_left_out() {
     for name in [".cache", ".secret"] {
         fs::write(h.root.path().join(name), name).unwrap_or_else(|e| panic!("{e}"));
     }
-    h.settle();
+    // The start location is being listed by now: the two are in the
+    // listing from its read of the folder, or from the watcher's report
+    // when the read came first, and `settle` waits for the read only.
     let pane = h.app.model().focused;
+    let listed = wait_until(&mut h, Duration::from_secs(10), |h| {
+        let hidden = h.tab(pane).listing.entries().iter();
+        hidden.filter(|e| e.name.starts_with('.')).count() == 2
+    });
+    assert!(listed, "the hidden files are not listed");
+    h.settle();
     assert_eq!(h.names(), ["sub", "a.txt", "b.txt", "c.txt"]);
     h.take_events();
     let hidden_notices = |events: &[Event]| -> Vec<String> {
@@ -3276,6 +3291,15 @@ fn enter_on_an_appimage_runs_the_installers_run() {
         fs::write(&path, elf).unwrap_or_else(|e| panic!("{e}"));
         platform::fs::set_unix_mode(&path, mode).unwrap_or_else(|e| panic!("{e}"));
     }
+    // Listed by the start location's read of the folder, or by the
+    // watcher's report when the read came first: waited for either way.
+    let listed = wait_until(&mut h, Duration::from_secs(10), |h| {
+        let names = h.names();
+        ["Downloaded.AppImage", "Marked.AppImage"]
+            .iter()
+            .all(|name| names.iter().any(|listed| listed == name))
+    });
+    assert!(listed, "the two files are not listed: {:?}", h.names());
     h.settle();
     let seen =
         |ran: &Mutex<Vec<String>>| ran.lock().unwrap_or_else(PoisonError::into_inner).clone();
