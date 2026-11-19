@@ -190,7 +190,10 @@ enum Piece {
     Conversion(char, Option<char>),
 }
 
-/// The pieces of a locale's `strftime` pattern, in order.
+/// The pieces of a locale's `strftime` pattern, in order. The modifiers
+/// `E` and `O` ask for the locale's own era and digits, which Rick does
+/// not write: the conversion is read as it is without them, the year of
+/// the common era in Western digits.
 fn pieces(pattern: &str) -> impl Iterator<Item = Piece> {
     let mut chars = pattern.chars().peekable();
     std::iter::from_fn(move || {
@@ -199,6 +202,7 @@ fn pieces(pattern: &str) -> impl Iterator<Item = Piece> {
             return Some(Piece::Plain(c));
         }
         let flag = chars.next_if(|c| matches!(c, '-' | '_' | '0'));
+        while chars.next_if(|c| matches!(c, 'E' | 'O')).is_some() {}
         // A percent sign the pattern ends in stands for itself.
         Some(
             chars
@@ -529,6 +533,18 @@ mod tests {
         };
         assert_eq!(write(0), "03/05/2026 12:07 AM");
         assert_eq!(write(12), "03/05/2026 12:07 PM");
+    }
+
+    /// A locale whose pattern asks for its own digits or era (`%Od`,
+    /// `%Ey`) is written with the common ones. It used to end in a panic.
+    #[test]
+    fn a_locale_with_its_own_digits_or_era_is_written_with_the_common_ones() {
+        let now = at(2026, 8, 27, 16, 30);
+        let time = at(2026, 8, 24, 14, 12);
+        let write = |locale| written(&time, &now, DateFormat::System, locale);
+        assert_eq!(write(Locale::th_TH), "24/08/26 14:12");
+        assert_eq!(write(Locale::fa_IR), "26/08/24 14:12");
+        assert_eq!(write(Locale::or_IN), "24-08-26 02:12 PM");
     }
 
     /// A moment after the year 9999 is one the calendar does not count: it
