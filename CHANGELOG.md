@@ -111,7 +111,10 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   the apt and dnf repositories on get.openbreach.dev. Rick is installed
   to `/usr/lib/rick/` with `rick` on the path. The packages and the Linux
   archive are built by Trebuchet's workflow, each inside the container of
-  its release; the archive is built on the oldest of them (#282).
+  its release; the archive is built on the oldest of them, so it needs
+  glibc 2.36 where it needed 2.39. Each package is tested where it is
+  installed, in a container that has its dependencies and nothing else:
+  its plugins load, pdfium opens a PDF and a video plays (#282).
 - ***Look for plugins and updates online*** on the Behaviour page of the
   settings, on by default; `[registry] check` in `rick.toml`. On, Rick
   fetches the plugin list when the *Available* list is opened and, in the
