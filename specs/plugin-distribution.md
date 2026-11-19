@@ -115,7 +115,7 @@ A suggestion says that a plugin exists for what the user is looking at. It is ma
 
 - A plugin installed from the registry was checked twice: the index against the compiled-in key, the package against the index. Its hash is in the record.
 - When the trust check of `specs/system-integration.md` §9 arrives, a plugin the record marks `registry` whose folder still matches is not asked about; one from a file, from an address or put there by hand is, as that section says.
-- The per-package Sigstore signatures of that section stay a matter of the release. The registry does not depend on them.
+- The build attestations of that section stay a matter of the release. The registry does not depend on them.
 
 ## 10. Milestones
 

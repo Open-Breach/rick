@@ -1,6 +1,6 @@
 # Rick — System integration & distribution
 
-Status: decided 2026-11-07 and 2026-11-09; part of Version 0.3 (see SPEC.md, *Version 0.3*). Binding in the same way as SPEC.md; where the two disagree, the question goes into the pull request. Design reference for the dialogs: the Figma file *Rick - FileExplorer*, section *System integration* (frames *Integration dialog — first run (Linux)* and *Settings — Integration*, plus the yellow *Spec notes — integration* frame).
+Status: decided 2026-11-07 and 2026-11-09; the distribution parts were revised on 2026-11-19 and follow `docs/spec.md` in `Open-Breach/trebuchet`; part of Version 0.3 (see SPEC.md, *Version 0.3*). Binding in the same way as SPEC.md; where the two disagree, the question goes into the pull request. Design reference for the dialogs: the Figma file *Rick - FileExplorer*, section *System integration* (frames *Integration dialog — first run (Linux)* and *Settings — Integration*, plus the yellow *Spec notes — integration* frame).
 
 ## 1. Purpose and scope
 
@@ -15,8 +15,8 @@ Out of scope, by decision: replacing the system file chooser (the portal `FileCh
 1. **Linux:** Rick can be set as the default file manager. It ships a desktop entry and the `org.freedesktop.FileManager1` D-Bus service.
 2. **macOS:** Rick runs alongside Finder and never claims to replace it.
 3. **Windows:** alongside Explorer by default; *Make Rick the default* is an opt-in setting with a warning, a repair action and a one-click revert.
-4. **Distribution:** how a release is built and published is decided in `docs/spec.md` of `Open-Breach/trebuchet` (sections 2 to 6), which replaced what stood here; §10 says what that means for Rick. On Linux a tarball, a deb and an rpm in Open-Breach's own apt and dnf repositories, plus the AUR plus an AppImage; on macOS a notarised DMG for Apple Silicon plus a Homebrew cask; on Windows an unsigned Inno Setup installer and a zip, plus winget.
-5. **Provenance:** every release artifact, including every plugin file, carries a Sigstore signature and a GitHub build attestation.
+4. **Distribution:** how a release is built and published is decided in `docs/spec.md` of `Open-Breach/trebuchet` (sections 2 to 6), which replaced what stood here; §10 says what that means for Rick. On Linux a tarball, a deb and an rpm in Open-Breach's own apt and dnf repositories, plus the AUR; on macOS a notarised DMG for Apple Silicon plus a Homebrew cask; on Windows an unsigned Inno Setup installer and a zip, plus winget.
+5. **Provenance:** every release artefact, the plugin packages included, carries a GitHub build attestation.
 6. **Plugin permissions** are declarative, not enforced, until a WASM host exists; the Extensions screen says so.
 7. **Single instance:** one Rick process per user session; a second launch hands its arguments to the running instance and exits.
 8. **Clipboard:** system clipboard only; the internal in-memory file clipboard is dropped.
@@ -104,12 +104,12 @@ Per the Figma frame: header with the app icon, title *Set up Rick on this system
 
 ## 9. Signing, provenance and plugin security
 
-- **Signing.** Every file in a release — the archives, installers, DMG, AppImage, and every plugin file inside them — gets a Sigstore `cosign` keyless signature tied to the release workflow's GitHub Actions identity, and a GitHub build attestation (`actions/attest-build-provenance`) in the same job. Verification instructions (`gh attestation verify … --owner Open-Breach`) go into the README's download section.
-- The apt and dnf repositories are Open-Breach's own and are signed with the Open-Breach GPG key (`Release` and `InRelease`, `repomd.xml`): the public key is in `Open-Breach/trebuchet` (`keys/`), the private key a secret of that repository, with an expiry and a rotation plan.
+- **Provenance.** Every file in a release — the archives, the packages, the installers, the DMG and the plugin packages — gets a GitHub build attestation, made by the workflow that builds it. Which workflow that is, Rick's release workflow or one of Trebuchet's that it calls, is not decided here: it is an open point for Trebuchet's spec. Verification instructions (`gh attestation verify … --owner Open-Breach`) go into the README's download section.
+- The apt and dnf repositories are Open-Breach's own and are signed with the Open-Breach GPG key (`Release` and `InRelease`, `repomd.xml`): the public key is in `Open-Breach/trebuchet` (`keys/`), the private key a secret of that repository. It has no expiry and no rotation plan: a key that leaks is replaced, the new public key is published, and users add it again.
 - macOS: Developer ID signing and notarisation of `Rick.app` and the DMG (`notarytool`, API key as CI secrets), stapled. Windows: unsigned for now, the installer and the binaries alike. SmartScreen shows *Windows protected your PC* at the first run of each new release and the user clicks through; signing is taken up again, with Azure Trusted Signing or SignPath, if Rick gains a Windows audience.
 - **The README states plainly that signing proves origin, not safety.**
 - **Plugin permissions** are a declaration: the manifest lists what the plugin uses (`permissions = ["network", "filesystem", "credentials", …]`); the Extensions screen shows the list under the plugin with the sentence *Declared by the plugin — Rick cannot enforce this for native plugins.* Enforcement arrives with the WASM host.
-- **First-party plugins** (shipped in the release's `plugins/` folder) are verified at load against the release's signature bundle (`plugins/signatures.json`, produced by the release job); a mismatch refuses the plugin with the reason in the Extensions screen.
+- **First-party plugins** (shipped in the release's `plugins/` folder) are not verified against a signature bundle at load: there is no `plugins/signatures.json`. A plugin installed from the registry is covered by the signed index (`specs/plugin-distribution.md` §9).
 - **Third-party plugins** (from the per-user plugins folder) are **trust on first use**: the first load shows an approval dialog naming the file, its SHA-256 and its declared permissions; approval pins the hash in `rick.toml`; a changed hash prompts again. Nothing is loaded without approval.
 - **Load rules:** plugins load only from the install's `plugins/` folder and the per-user plugins folder (already the case); never from the working directory, from a world-writable directory, or from a path given on the command line. The user folder must be owned by the user and not world-writable, or its plugins are refused with a message.
 - **Security hygiene:** `SECURITY.md` with a disclosure contact and a response target; `cargo deny` (already) plus `cargo audit` in the quick checks; the privacy statement in the README, whose place and wording `specs/readme.md` fixes (section 9) and which the README has from 0.6.0, the first release that fetches the plugin list by itself:
@@ -127,7 +127,7 @@ How a release is built and published is specified in `docs/spec.md` of `Open-Bre
 - **Plugins:** the `rick` package carries the plugins of every install; each separate plugin is a package of its own, `rick-plugin-<id>`, that depends on the exact version of `rick`, and `rick-plugins` pulls in all of them (`specs/plugin-distribution.md` §4).
 - **AUR:** `rick-bin` from the release tarball of the running architecture; Trebuchet's publisher pushes the PKGBUILD and `.SRCINFO` to the AUR over SSH on every release. A from-source `rick` package optional, later.
 - **NixOS:** no binaries. A `flake.nix` in this repository builds Rick with `buildRustPackage`, and CI checks `nix build` on every push to `main`.
-- **AppImage** built in the release workflow (`appimagetool`), no integration of its own; the integration dialog's *Install to the standard location* row is how an AppImage user gets integrated.
+- **Without installing:** the tarball is the way to run Rick without installing it. It has no integration of its own; the integration dialog's *Install to the standard location* row (§6.1) is how someone who runs Rick from the archive gets integrated. Rick itself is not released as an AppImage; installing other applications' AppImages stays the installer plugin's (`specs/ext-installer.md`).
 - **Uninstall:** the packages' post-remove scripts delete the desktop entry, icons, D-Bus service file and `mimeapps.list` default; the installer-plugin path removes the same through its record.
 - Official distribution inclusion is not pursued before 1.0: `cargo-debstatus` shows a large share of the ~540 crates missing from Debian, mostly the egui/wgpu stack.
 
@@ -152,9 +152,9 @@ How a release is built and published is specified in `docs/spec.md` of `Open-Bre
 
 Things only Serge can do: accounts, identities, certificates and secrets. The checklist of distribution is section 9 of Trebuchet's spec, which replaced the one that stood here: the GPG key of the apt and dnf repositories, the registry's signing key, the AUR account and its SSH key, the token for the winget pull requests and the Homebrew tap, the bucket's token and the runners are Trebuchet's. What is left for `Open-Breach/rick`, as GitHub Actions secrets of this repository or of the organisation:
 
-- Once: the publisher identity shown by code signing (Open-Breach or personal name) — consistent across Apple and the Linux repository key; a reverse-DNS identifier (`org.open-breach.rick`, already in use); `id-token: write` and `attestations: write` permissions for the release workflow.
+- Once: the publisher identity shown by code signing (Open-Breach or personal name) — consistent across Apple and the Linux repository key; a reverse-DNS identifier (`org.open-breach.rick`, already in use); the `attestations: write` permission for the release workflow, and `id-token: write` with it, which GitHub's attestation step needs as well.
 - Linux: nothing here. No account at build.opensuse.org is needed.
-- macOS: a *Developer ID Application* certificate exported as `.p12` (`MACOS_CERT_P12`, `MACOS_CERT_PASSWORD`); an App Store Connect API key for `notarytool` (`NOTARY_KEY_ID`, `NOTARY_ISSUER_ID`, `NOTARY_KEY_P8`); the bundle identifier registered. The tap is `Open-Breach/homebrew-tap`, not a repository of Rick's own, and there is no Sparkle key.
+- macOS: a *Developer ID Application* certificate exported as `.p12`, its password, and an App Store Connect API key for `notarytool`; the bundle identifier registered. Their secrets are not named here: Trebuchet's checklist (its section 9) is the one place that names secrets. The tap is `Open-Breach/homebrew-tap`, not a repository of Rick's own, and there is no Sparkle key.
 - Windows: nothing while the installer is unsigned. An Azure Trusted Signing account, whose identity validation takes days, is needed only when signing is taken up.
 
 The release workflow skips a channel whose secrets are missing and says so in the job summary, so a release never fails on a missing account.
@@ -170,7 +170,7 @@ Issues in this order, each merged into `dev` when green; the design refresh of i
 5. macOS integration items (§7.3).
 6. Notifications and progress; watcher rules verified (§8).
 7. Signing, provenance, plugin security and hygiene (§9).
-8. Linux distribution: the deb, the rpm and the tarball through Trebuchet's workflow, the apt and dnf repositories, the AUR, the flake, the AppImage, uninstall (§10.1).
+8. Linux distribution: the deb, the rpm and the tarball through Trebuchet's workflow, the apt and dnf repositories, the AUR, the flake, uninstall (§10.1).
 9. macOS distribution: DMG, notarisation, Homebrew (§10.2).
 10. Windows distribution: the Inno Setup installer and winget (§10.3). The update notice of §10.4 is built.
 
