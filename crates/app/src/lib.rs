@@ -2088,6 +2088,7 @@ impl App {
             Command::RemovePlugin(path) => self.remove_plugin(path),
             Command::InstallAvailable(id) => self.install_available(&id),
             Command::UpdateAll => self.update_all(),
+            Command::InstallPluginFrom(url) => self.install_from_address(&url, events),
             Command::PreviewWith { pane, previewer } => {
                 if let Some(job) = self.preview.get(&pane) {
                     self.preview_with.insert(pane, (job.entry, previewer));

@@ -155,6 +155,7 @@ extensions-install = Aus Datei installieren…
 extensions-install-title = Plugin aus einer Datei installieren
 plugins-download-mismatch = Der Download stimmt nicht mit der Plugin-Liste überein
 plugins-download-failed = Das Plugin konnte nicht heruntergeladen werden: { $reason }
+plugins-address-refused = { $url } ist keine https://-Adresse
 extensions-tab-installed = Installiert
 extensions-tab-available = Verfügbar
 extensions-tab-available-count = Verfügbar { $count }

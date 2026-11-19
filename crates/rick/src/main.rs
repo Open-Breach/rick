@@ -365,6 +365,9 @@ fn run() -> anyhow::Result<ExitCode> {
     if launch.config_dir.is_none() {
         app.set_cache_dir(platform::cache_dir());
     }
+    // A Rick a package manager installed says so in a file beside it,
+    // and then takes its separate plugins from that package manager.
+    app.set_packaging(app::plugins::Packaging::beside(&exe));
     // The rest of the command line before the first frame; a new tab
     // reports nothing the UI would miss (its listing arrives through the
     // app's polling like the start location's), and a plugin command's

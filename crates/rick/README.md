@@ -23,7 +23,9 @@ error toast otherwise.
 One Rick runs per user session and config directory (`--config-dir <dir>`
 picks another, and keeps its cache in `cache/` inside it, where a Rick on
 the platform's config directory uses the platform's cache directory,
-`platform::cache_dir`): a launch first hands its command line to the running
+`platform::cache_dir`; a file `package` beside the binary, which the deb
+and the rpm install, makes it show its package manager's command for a
+plugin where an archive's Rick has **Install**): a launch first hands its command line to the running
 instance over the platform's single-instance endpoint, prints the reply
 and exits with the instance's status within a second, and only binds the
 endpoint and opens the window itself when nothing listens; the instance

@@ -27,6 +27,57 @@ pub struct Downloaded {
     pub sha256: String,
 }
 
+/// Whether `url` is an address a package may be downloaded from on the
+/// user's word alone, as *Install from URL…* does: `https://` with a
+/// host. Plain `http://` is taken for this machine only — `localhost` and
+/// the loopback addresses — where nothing travels.
+#[must_use]
+pub fn is_package_address(url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(url.trim()) else {
+        return false;
+    };
+    match (url.scheme(), url.host_str()) {
+        ("https", Some(host)) => !host.is_empty(),
+        ("http", Some(host)) => {
+            host == "localhost"
+                || host
+                    .trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|address| address.is_loopback())
+        }
+        _ => false,
+    }
+}
+
+/// The name of the file `url` names, for the package it is downloaded
+/// to: the last segment of its path, kept to letters, digits, `.`, `-`
+/// and `_`, and ending in `.rkp`. `plugin.rkp` when the address names no
+/// file.
+#[must_use]
+pub fn package_name(url: &str) -> String {
+    let segment = reqwest::Url::parse(url.trim())
+        .ok()
+        .and_then(|url| {
+            url.path_segments()
+                .and_then(|mut segments| segments.next_back().map(str::to_owned))
+        })
+        .unwrap_or_default();
+    let name: String = segment
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        .collect();
+    // Without the extension it gets back, and never a hidden file.
+    let stem = name
+        .strip_suffix(".rkp")
+        .unwrap_or(&name)
+        .trim_start_matches('.');
+    if stem.is_empty() {
+        "plugin.rkp".to_owned()
+    } else {
+        format!("{stem}.rkp")
+    }
+}
+
 /// The file a download writes, deleted again unless the download is kept:
 /// on an error, on a package that is another one, and when the download
 /// is dropped half way, as a cancelled job's is.

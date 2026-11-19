@@ -60,7 +60,7 @@ mod tests;
 use std::path::PathBuf;
 
 pub use cache::{CACHE_DIR, CHECK_EVERY, Cache, Cached, INDEX_FILE, SIGNATURE_FILE, due, refresh};
-pub use download::{Downloaded, Expected, download};
+pub use download::{Downloaded, Expected, download, is_package_address, package_name};
 pub use fetch::{Fetched, fetch, user_agent};
 pub use index::{
     Build, Connection, Index, Meta, Offer, Offered, Plugin, SCHEMA, Triggers, is_pre_release,

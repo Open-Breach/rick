@@ -390,6 +390,7 @@ extensions-install-title = Install a plugin from a file
 # An install from the plugin registry that failed (issue 251).
 plugins-download-mismatch = The download did not match the plugin list
 plugins-download-failed = The plugin could not be downloaded: { $reason }
+plugins-address-refused = { $url } is not an https:// address
 # The plugin registry in the Extensions dialogue
 # (specs/plugin-distribution.md §6 and §7, issue 251).
 extensions-tab-installed = Installed

@@ -5758,4 +5758,142 @@ mod install {
         );
         assert_eq!(announced(&h.take_events()), None);
     }
+
+    #[test]
+    fn install_from_an_address_is_handled_as_a_file_and_notes_the_address() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        server.publish(&signer, &index(&server, &package("1.2.0")));
+        // A package of the user's own, somewhere else on the same server.
+        let bytes = package("3.0.0");
+        server.put("downloads/hello.rkp", bytes.clone());
+        let address = server.url("downloads/hello.rkp");
+        let mut h = start(&server, &signer);
+        h.take_events();
+        h.send(Command::InstallPluginFrom(format!("  {address} ")));
+        h.settle();
+
+        assert_eq!(
+            jobs(&h.app),
+            [("Install hello.rkp".to_owned(), JobState::Done)]
+        );
+        let plugins_dir = h.app.plugins_dir();
+        let folder = plugins_dir.join("hello");
+        assert!(folder.join("plugin.toml").is_file());
+        let noted = h.app.installed().get(&folder).cloned();
+        let noted = noted.unwrap_or_else(|| panic!("an entry"));
+        assert_eq!(noted.source, Origin::Url);
+        assert_eq!(noted.version, "3.0.0");
+        assert_eq!(
+            noted.sha256,
+            sha256(&bytes),
+            "noted, and checked against nothing"
+        );
+        assert_eq!(noted.url.as_deref(), Some(address.as_str()));
+        let text = fs::read_to_string(plugins_dir.join(RECORD_FILE)).unwrap_or_default();
+        assert!(text.contains("source = \"url\""), "{text}");
+        assert!(text.contains(&format!("url = \"{address}\"")), "{text}");
+        let row = &h.app.plugins()[0];
+        assert_eq!(
+            (row.id.as_str(), &row.status),
+            ("hello", &PluginStatus::Installed)
+        );
+        let downloads = h.fake.config_dir().join(crate::CACHE_DIR).join("downloads");
+        assert_eq!(fs::read_dir(&downloads).map(Iterator::count).ok(), Some(0));
+        // Installed from an address, it is nobody's to update.
+        assert_eq!(h.app.updates(), []);
+    }
+
+    #[test]
+    fn an_address_that_is_not_https_is_refused_and_a_download_that_fails_says_so() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        server.publish(&signer, &index(&server, &package("1.2.0")));
+        let mut h = start(&server, &signer);
+        h.take_events();
+
+        // Not https, and not this machine: no job, a notice.
+        for refused in [
+            "http://example.org/hello.rkp",
+            "hello.rkp",
+            "ftp://example.org/h.rkp",
+        ] {
+            h.send(Command::InstallPluginFrom(refused.to_owned()));
+            h.settle();
+            let events = h.take_events();
+            let notice = format!("{refused} is not an https:// address");
+            assert!(
+                events.iter().any(|e| matches!(
+                    e,
+                    Event::Notify { level: Level::Error, text } if *text == notice
+                )),
+                "{refused}: {events:?}"
+            );
+        }
+        assert_eq!(jobs(&h.app), []);
+
+        // Nothing at the address.
+        h.send(Command::InstallPluginFrom(server.url("downloads/none.rkp")));
+        h.settle();
+        let ended = jobs(&h.app);
+        let [(name, JobState::Failed(said))] = ended.as_slice() else {
+            panic!("the job failed: {ended:?}");
+        };
+        assert_eq!(name, "Install none.rkp");
+        assert!(
+            said.starts_with("The plugin could not be downloaded: "),
+            "{said}"
+        );
+
+        // Something that is no package: it is handled as such a file is.
+        server.put("downloads/page.rkp", "<html>not a package</html>");
+        h.send(Command::InstallPluginFrom(server.url("downloads/page.rkp")));
+        h.settle();
+        let ended = jobs(&h.app);
+        let Some((_, JobState::Failed(said))) = ended.last() else {
+            panic!("the job failed: {ended:?}");
+        };
+        assert!(said.contains("is not a plugin package"), "{said}");
+        assert_eq!(h.app.plugins(), [], "nothing was installed");
+        let downloads = h.fake.config_dir().join(crate::CACHE_DIR).join("downloads");
+        assert_eq!(fs::read_dir(&downloads).map(Iterator::count).ok(), Some(0));
+    }
+
+    #[test]
+    fn a_packaged_rick_downloads_no_plugin_and_has_no_update_to_offer() {
+        use crate::plugins::Packaging;
+        let (server, signer) = (Server::start(), Signer::new(1));
+        let bytes = package("1.2.0");
+        server.put(PACKAGE, bytes.clone());
+        server.publish(&signer, &index(&server, &bytes));
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let folder = installed_before(&fake, "1.1.0", "registry");
+        let refused = PluginStatus::Refused("Built for Rick 0.5.0".to_owned());
+        let mut h = start_with(
+            &fake,
+            &server,
+            &signer,
+            RICK,
+            vec![row(&folder, "1.1.0", refused)],
+        );
+        assert_eq!(h.app.packaging(), None);
+        assert_eq!(h.app.updates().len(), 1);
+
+        h.app.set_packaging(Some(Packaging::Deb));
+        assert_eq!(h.app.packaging(), Some(Packaging::Deb));
+        assert_eq!(h.app.updates(), [], "the package manager moves its plugins");
+        h.send(Command::UpdateAll);
+        h.send(Command::InstallAvailable("hello".to_owned()));
+        h.settle();
+        assert_eq!(jobs(&h.app), []);
+        assert!(
+            folder.join("old.txt").is_file(),
+            "nothing was installed over it"
+        );
+        assert!(
+            server
+                .requests()
+                .iter()
+                .all(|request| request.path != PACKAGE),
+            "nothing was downloaded"
+        );
+    }
 }

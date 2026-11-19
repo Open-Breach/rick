@@ -61,6 +61,59 @@ pub enum PluginError {
     Io(PathBuf, #[source] io::Error),
 }
 
+/// The file beside the binary by which a Rick that a package manager
+/// installed says so: the deb and the rpm install it, holding `deb` or
+/// `rpm`, and the archives have none (specs/plugin-distribution.md §7,
+/// *A packaged Rick*).
+pub const PACKAGE_FILE: &str = "package";
+
+/// The package manager a packaged Rick takes its separate plugins from,
+/// as `rick-plugin-<id>` packages. Such a Rick shows the command and
+/// downloads nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Packaging {
+    /// A deb: `apt`.
+    Deb,
+    /// An rpm: `dnf`.
+    Rpm,
+}
+
+impl Packaging {
+    /// What the file [`PACKAGE_FILE`] beside the binary `exe` says;
+    /// `None` without the file — an archive, a development build — and
+    /// for a file that names neither kind, which is logged.
+    #[must_use]
+    pub fn beside(exe: &Path) -> Option<Self> {
+        let file = exe.parent()?.join(PACKAGE_FILE);
+        let text = fs::read_to_string(&file).ok()?;
+        match text.trim() {
+            "deb" => Some(Self::Deb),
+            "rpm" => Some(Self::Rpm),
+            other => {
+                tracing::warn!(file = %file.display(), says = other, "not a kind of package");
+                None
+            }
+        }
+    }
+
+    /// The command that installs the plugin `id`: `sudo apt install
+    /// rick-plugin-git`, `sudo dnf install rick-plugin-git`.
+    #[must_use]
+    pub fn command(self, id: &str) -> String {
+        match self {
+            Self::Deb => format!("sudo apt install rick-plugin-{id}"),
+            Self::Rpm => format!("sudo dnf install rick-plugin-{id}"),
+        }
+    }
+}
+
+/// Whether `url` is an address *Install from URL…* takes: `https://` with
+/// a host, or `http://` on this machine.
+#[must_use]
+pub fn is_package_address(url: &str) -> bool {
+    plugins_registry::is_package_address(url)
+}
+
 /// The error of an install job that fails with `text`, the user's words
 /// for what went wrong.
 pub(crate) fn failure(text: impl Into<String>) -> types::Error {
@@ -641,6 +694,28 @@ mod tests {
         assert!(elsewhere.is_dir() && plugins.is_dir());
         remove(&hello, &plugins).unwrap_or_else(|e| panic!("{e}"));
         assert!(!hello.exists() && plugins.is_dir());
+    }
+
+    /// A packaged Rick says so in the file `package` beside its binary
+    /// (specs/plugin-distribution.md §7): `deb` or `rpm`, and the command
+    /// that installs a plugin follows from it.
+    #[test]
+    fn the_package_file_beside_the_binary_names_the_package_manager() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let exe = dir.path().join("rick");
+        // An archive has no such file.
+        assert_eq!(Packaging::beside(&exe), None);
+        for (says, kind, command) in [
+            ("deb\n", Packaging::Deb, "sudo apt install rick-plugin-git"),
+            ("rpm", Packaging::Rpm, "sudo dnf install rick-plugin-git"),
+        ] {
+            fs::write(dir.path().join(PACKAGE_FILE), says).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(Packaging::beside(&exe), Some(kind));
+            assert_eq!(kind.command("git"), command);
+        }
+        // A file that names no kind of package is none.
+        fs::write(dir.path().join(PACKAGE_FILE), "flatpak").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(Packaging::beside(&exe), None);
     }
 
     #[test]

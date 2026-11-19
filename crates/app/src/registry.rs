@@ -21,7 +21,7 @@
 //! - A Rick with a pre-release part in its version fits nothing the
 //!   registry has, and asks for nothing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -224,6 +224,11 @@ pub(crate) struct RegistryRun {
     job: Option<JobId>,
     /// The installs from the registry that are running, by plugin id.
     installing: BTreeMap<String, JobId>,
+    /// The installs from an address that are running.
+    from_address: BTreeSet<JobId>,
+    /// The package manager this Rick was installed by, when it was: it
+    /// then shows the command for a plugin and downloads none.
+    pub(crate) packaging: Option<plugins::Packaging>,
     /// Where the index is and which key signs it, as `rick.toml` had it
     /// at the start: another address or key is taken up by the next start.
     source: Source,
@@ -250,6 +255,8 @@ impl RegistryRun {
             cache_read: false,
             job: None,
             installing: BTreeMap::new(),
+            from_address: BTreeSet::new(),
+            packaging: None,
             source,
         }
     }
@@ -424,10 +431,16 @@ impl App {
     /// the record marks them as the registry's, the plugin list has a
     /// build that fits this Rick, and the host refused the one that is
     /// there or the list's build is of a higher version. Empty without a
-    /// plugin list, and for a plugin updated in this session.
+    /// plugin list, for a plugin updated in this session, and for a Rick
+    /// a package manager installed.
     #[must_use]
     pub fn updates(&self) -> Vec<Update> {
         let run = &self.plugin_registry;
+        // A packaged Rick has no update of its own to offer: the package
+        // manager moves its plugins with it.
+        if run.packaging.is_some() {
+            return Vec::new();
+        }
         let Some(index) = &run.view.index else {
             return Vec::new();
         };
@@ -536,7 +549,8 @@ impl App {
     /// plugins folder.
     pub(crate) fn install_available(&mut self, id: &str) {
         let run = &self.plugin_registry;
-        if run.installing.contains_key(id) {
+        // A packaged Rick downloads nothing: its plugins are packages.
+        if run.packaging.is_some() || run.installing.contains_key(id) {
             return;
         }
         let Some(index) = run.view.index.clone() else {
@@ -601,13 +615,84 @@ impl App {
             .insert(id.to_owned(), handle.id);
     }
 
-    /// A job ended: when it was an install from the registry, that
-    /// install is no longer running, and `true` says it was one.
+    /// A job ended: when it was an install from the registry or from an
+    /// address, that install is no longer running, and `true` says it
+    /// was one.
     pub(crate) fn install_finished(&mut self, job: JobId) -> bool {
-        let installing = &mut self.plugin_registry.installing;
-        let before = installing.len();
-        installing.retain(|_, running| *running != job);
-        installing.len() < before
+        let run = &mut self.plugin_registry;
+        let before = run.installing.len();
+        run.installing.retain(|_, running| *running != job);
+        run.installing.len() < before || run.from_address.remove(&job)
+    }
+
+    /// *Install from URL…*: a job that downloads the plugin package at
+    /// `url` into the cache and then handles it exactly as *Install from
+    /// file…* handles a file — nothing is checked, a plugin of the same
+    /// folder name is replaced — and notes it in the record with the
+    /// address it came from. An address that is not `https://` is no job
+    /// but an error notice.
+    pub(crate) fn install_from_address(&mut self, url: &str, events: &mut Vec<Event>) {
+        let url = url.trim().to_owned();
+        if !plugins::is_package_address(&url) {
+            events.push(Event::Notify {
+                level: ext::Level::Error,
+                text: t!("plugins-address-refused", url = url.as_str()),
+            });
+            return;
+        }
+        let run = &self.plugin_registry;
+        let name = plugins_registry::package_name(&url);
+        let rick = run.view.rick.clone();
+        let downloads = run.cache_dir.join(DOWNLOADS_DIR);
+        let package = downloads.join(&name);
+        let dir = self.plugins_dir();
+        let tx = self.mailbox.clone();
+        let handle = self
+            .jobs
+            .spawn_named(format!("Install {name}"), move |job| async move {
+                job.progress.report(Progress::Bytes {
+                    done: 0,
+                    total: None,
+                });
+                std::fs::create_dir_all(&downloads)?;
+                let progress = job.progress.clone();
+                download(&url, &package, &rick, None, &mut |done| {
+                    progress.report(Progress::Bytes { done, total: None });
+                })
+                .await
+                .map_err(|error| failure(&error))?;
+                let unpacked = {
+                    let package = package.clone();
+                    runtime::handle()
+                        .spawn_blocking(move || {
+                            let unpacked = plugins::unpack(&package, &dir, Origin::Url, Some(url));
+                            let _ = std::fs::remove_file(&package);
+                            unpacked
+                        })
+                        .await
+                };
+                let (plugin, record) = unpacked
+                    .map_err(|join| plugins::failure(join.to_string()))?
+                    .map_err(|error| plugins::failure(error.to_string()))?;
+                tx.send(Msg::PluginRecord(record));
+                tx.send(Msg::PluginInstalled(Ok(Box::new(plugin))));
+                Ok(())
+            });
+        self.plugin_registry.from_address.insert(handle.id);
+    }
+
+    /// Says which package manager installed this Rick, when one did: the
+    /// binary reads the file `package` beside itself. A packaged Rick
+    /// shows the command for an available plugin and downloads none.
+    pub fn set_packaging(&mut self, packaging: Option<plugins::Packaging>) {
+        self.plugin_registry.packaging = packaging;
+    }
+
+    /// The package manager this Rick was installed by; `None` for an
+    /// archive and for a development build.
+    #[must_use]
+    pub fn packaging(&self) -> Option<plugins::Packaging> {
+        self.plugin_registry.packaging
     }
 
     /// An index that verified is the one to show.
