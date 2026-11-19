@@ -308,8 +308,11 @@ fn restore_brings_every_detail_back_and_writes_at_most_once_per_second() {
     // Debounced: at most one write per second since the start, plus the
     // first one.
     d.wait_for_writes(1);
-    let elapsed = started.elapsed();
+    // The count first and the time after it: read the other way round, a
+    // write that finishes between the two is held against a time taken
+    // before it.
     let writes = d.app.session_writes();
+    let elapsed = started.elapsed();
     assert!(
         writes <= elapsed.as_secs() + 1,
         "{writes} writes in {elapsed:?}"
