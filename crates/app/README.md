@@ -125,7 +125,20 @@ into the build counts only once the binary has said so
 test is, knows only a key its `rick.toml` names, and so never asks the
 real registry. The cache is
 `cache/` in the config directory unless the binary names the platform's
-(`App::set_cache_dir`). It depends on `types`,
+(`App::set_cache_dir`). It says which plugin that is not there would
+serve what the user is looking at (`suggest`,
+specs/plugin-distribution.md §8), from the plugin list it holds and the
+manifests of the plugins folders and from nothing else, so that a file
+selected or a folder entered never makes a request:
+`App::suggestion_for_file` by a file's extension, `suggestion_for_folder`
+by an entry of a folder's listing that is one of a plugin's markers, and
+`suggested_connections` for a section of the side panel. A plugin of the
+list that fits this Rick and is in neither plugins folder is suggested
+with *Install*, one that is on the disk and disabled from its own
+manifest with *Enable*, and the one on the disk first. Nothing is
+suggested with `[plugins] suggest` off, for an id in `[plugins]
+no_suggest` (`Command::SuggestNever`, taken back by `SuggestAgain`), and
+for a plugin `Command::SuggestNotNow` silenced until the next start. It depends on `types`,
 `runtime`, `platform`, `ext`, `vfs`, `vfs-local`, `vfs-rick`, `model`,
 `ops` (the built-in operations it loads) and `plugins-registry`; only
 `ui-egui`, `rick` and `tests` may depend on it.

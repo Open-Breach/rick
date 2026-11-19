@@ -753,6 +753,8 @@ fn rows(host: &Host) -> Vec<app::Plugin> {
             version: p.version.clone(),
             points: p.points,
             previews: p.previews.clone(),
+            markers: Vec::new(),
+            connections: Vec::new(),
             status: match &p.status {
                 PluginStatus::Loaded => app::PluginStatus::Loaded,
                 PluginStatus::Disabled => app::PluginStatus::Disabled,
