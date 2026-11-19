@@ -36,9 +36,18 @@ The archives are not signed or notarised yet: macOS may refuse an app downloaded
 
 A release also makes a deb for each supported Debian and Ubuntu release and an rpm for each supported Fedora release, for x64 and arm64. They are built by Trebuchet's reusable workflow `linux-packages.yml` ([Open-Breach/trebuchet](https://github.com/Open-Breach/trebuchet), `docs/linux-packages.md`), which the release workflow calls. That workflow owns the list of releases; for each one it runs `.github/scripts/linux-package.sh` inside that release's container, packages the result with the metadata in `crates/rick/Cargo.toml`, installs the package in a fresh container and runs `rick --version` there. One build per architecture is also the Linux archive, with the plugin packages that fit it.
 
+In that fresh container the workflow also runs `.github/scripts/linux-smoke.sh`, Rick's own part of the test, after the package is installed and once more for the unpacked archive:
+
+- every plugin of the package loads, and no other plugin is in it;
+- pdfium, from beside the binary, opens a PDF and renders a page;
+- the media previewer plays a video through the system's GStreamer;
+- where the build is also the archive, each of its plugin packages is unpacked into the per-user folder and loads from there.
+
+The container has the package's dependencies and nothing of the build, so a library missing from the dependency list fails the release there. The test programs it runs, `pdfium_check` and `preview_check`, and the video come from the same build, as one tar file among the job's files; the release does not publish it. Two things a container cannot show: a window, with the libraries the user interface loads for X11, Wayland, Vulkan and EGL when it opens one, and sound.
+
 What a package installs:
 
-- `/usr/lib/rick/`: the binary with everything beside it, as in an archive: the shared libraries, `plugins/` with the default set, `third-party.json`, and `package`, a file holding `deb` or `rpm`, which tells Rick that its separate plugins come from the package manager;
+- `/usr/lib/rick/`: the binary with everything beside it, as in an archive: the shared libraries, `plugins/` with the default set, `third-party.json`, `licenses/` with the texts pdfium and the standard library bring, and `package`, a file holding `deb` or `rpm`, which tells Rick that its separate plugins come from the package manager;
 - `/usr/bin/rick`: a script that starts the binary there;
 - `/usr/share/applications/rick.desktop` and the icons under `/usr/share/icons/hicolor/`;
 - the licence: `/usr/share/doc/rick/copyright` and `THIRD-PARTY-LICENSES.md` beside it in a deb, both under `/usr/share/licenses/rick/` in an rpm.

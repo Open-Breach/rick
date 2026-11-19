@@ -129,10 +129,16 @@ jobs:
   # the licence lists of the job above as its build artifact, runs
   # .github/scripts/linux-package.sh as the build, packages with the
   # metadata of crates/rick/Cargo.toml, installs each package in a fresh
-  # container of its release and runs `rick --version` there. Nothing is
-  # attached by it: the release job below gathers its files with the
-  # others'. The dependencies are per distribution. To build: GStreamer's
-  # development files, beyond a compiler. To run, all of them by name
+  # container of its release and runs `rick --version` there. In that
+  # container, which has the package's dependencies and nothing of the
+  # build, it then runs .github/scripts/linux-smoke.sh: every plugin of the
+  # package loads, pdfium opens a PDF, a video plays, and where the build
+  # is also the archive its plugin packages install into the per-user
+  # folder and load, for the package and once more for the unpacked
+  # archive. Nothing is attached by it: the release job below gathers its
+  # files with the others'. The dependencies are per distribution. To
+  # build: GStreamer's development files, beyond a compiler, and its tools
+  # and plug-ins to write the smoke test's video. To run, all of them by name
   # (crates/rick/Cargo.toml says why the tools do not find them): what the
   # binaries link — the C and C++ runtimes, GLib and GStreamer — the
   # GStreamer plug-in sets the media previewer plays through, and the
@@ -148,14 +154,24 @@ jobs:
       version: ${{ needs.licenses.outputs.version }}
       build-artifact: third-party-licenses
       build-command: .github/scripts/linux-package.sh
+      smoke-command: .github/scripts/linux-smoke.sh
       bundle-dir: target/release/bundle
       desktop-file: packaging/linux/rick.desktop
       icon: assets/icons/linux/hicolor
       build-deps: |
         {
-          "debian": ["libgstreamer1.0-dev", "libgstreamer-plugins-base1.0-dev"],
-          "ubuntu": ["libgstreamer1.0-dev", "libgstreamer-plugins-base1.0-dev"],
-          "fedora": ["gstreamer1-devel", "gstreamer1-plugins-base-devel"]
+          "debian": [
+            "libgstreamer1.0-dev", "libgstreamer-plugins-base1.0-dev",
+            "gstreamer1.0-tools", "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good"
+          ],
+          "ubuntu": [
+            "libgstreamer1.0-dev", "libgstreamer-plugins-base1.0-dev",
+            "gstreamer1.0-tools", "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good"
+          ],
+          "fedora": [
+            "gstreamer1-devel", "gstreamer1-plugins-base-devel",
+            "gstreamer1", "gstreamer1-plugins-base", "gstreamer1-plugins-good"
+          ]
         }
       runtime-deps: |
         {
@@ -572,8 +588,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux: linux-package.sh checks the bundle before it is packaged,
-          # and Trebuchet's workflow tests every package and archive.
+          # Linux: Trebuchet's workflow tests every package and archive
+          # where it is installed, with .github/scripts/linux-smoke.sh.
           - { os: "${{ vars.RUNNER_MACOS || 'macos-latest' }}", platform: macos-arm64 }
           - { os: "${{ vars.RUNNER_WINDOWS || 'windows-latest' }}", platform: windows-x64 }
     runs-on: ${{ matrix.os }}
@@ -793,9 +809,16 @@ jobs:
           set -euo pipefail
           cd dist
           ls -l
+          # The test programs the Linux builds sent to their smoke tests
+          # came along in the same folders; they are not release files.
+          rm -f ./rick-*-smoke-*.tar
           for arch in x64 arm64; do
             test -f "rick-${TAG#v}-linux-$arch.tar.gz" || { echo "no Linux archive for $arch"; exit 1; }
             test -f "plugins-linux-$arch.json" || { echo "no plugin list for linux-$arch"; exit 1; }
+            # The manifest of the Linux packages, as the smoke test checks
+            # it for the other platforms: nine of them, each a file that is
+            # here with the size and the SHA-256 the manifest gives.
+            python3 ../.github/scripts/check-packages.py "plugins-linux-$arch.json" "linux-$arch"
           done
           # The build job wrote a checksum file beside each of its files;
           # the Linux files come without, and get theirs here.

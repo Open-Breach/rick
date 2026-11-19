@@ -12,10 +12,12 @@
 #   linux-package.sh
 #
 #   TREBUCHET_ARCH      x86_64 or aarch64
+#   TREBUCHET_TARGET    the distribution release, such as debian-12
+#   TREBUCHET_VERSION   the release's version
 #   TREBUCHET_TARBALL   true in the one job per architecture whose build
 #                       is also the release archive
-#   TREBUCHET_DIST      the folder whose files the workflow uploads and the
-#                       release attaches
+#   TREBUCHET_DIST      the folder the workflow uploads whole: its files go
+#                       to the smoke test and to the release job
 #
 # What it leaves, under target/release/:
 #
@@ -35,9 +37,18 @@
 #               plugin and plugins-linux-<arch>.json. They fit the archive
 #               of this very build and no other, so the job that makes the
 #               archive hands them out with it.
+#   smoke/      What .github/scripts/linux-smoke.sh needs from this build
+#               to test the package where it is installed: the test
+#               programs pdfium_check and preview_check, which only run
+#               against the libraries they were built with, and a short
+#               video. They leave as one tar file in TREBUCHET_DIST, which
+#               the release job does not publish.
 #
 # Before it packages, it checks the bundle the way the release's smoke test
 # checks an archive: the default set loads and no separate plugin is left.
+# That check is of the build. Whether the package asks for every library
+# the binary needs is the smoke test's to find out, in a container that
+# has none of the build's.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
@@ -117,10 +128,30 @@ cp "$bundle/plugins/vfs-archive/7-Zip-License.txt" "$bundle/7-Zip-License.txt"
 mkdir -p "$bundle/share/polkit-1/actions"
 cp packaging/linux/org.openbreach.rick.zfs.policy "$bundle/share/polkit-1/actions/"
 
-# The plugin packages and their manifest belong to the archive of this
-# build, so they leave with it, once per architecture.
-if [ "${TREBUCHET_TARBALL:-}" = true ]; then
-  mkdir -p "${TREBUCHET_DIST:?}"
-  cp "$packages"/*.rkp "$manifest" "$TREBUCHET_DIST/"
+# For the smoke test: the two test programs of this build, and a video for
+# preview_check to play. Motion JPEG in AVI is what the two GStreamer
+# plug-in sets the package asks for decode by themselves, so the clip plays
+# where the package's dependencies are all there is. It is the test
+# pattern, three seconds of it, written by the GStreamer of this container.
+smoke=target/release/smoke
+rm -rf "$smoke"
+mkdir -p "$smoke"
+cp target/release/examples/pdfium_check target/release/examples/preview_check "$smoke/"
+gst-launch-1.0 -q videotestsrc num-buffers=90 pattern=smpte ! \
+  video/x-raw,width=320,height=240,framerate=30/1 ! videoconvert ! \
+  jpegenc ! avimux ! filesink location="$smoke/sample.avi"
+ls -l "$smoke"
+
+if [ -n "${TREBUCHET_DIST:-}" ]; then
+  mkdir -p "$TREBUCHET_DIST"
+  # One per job, named after it: the release job gathers the files of
+  # every job into one folder.
+  tar --create --file "$TREBUCHET_DIST/rick-${TREBUCHET_VERSION:?}-smoke-${TREBUCHET_TARGET:?}-$platform.tar" \
+    --directory "$smoke" pdfium_check preview_check sample.avi
+  # The plugin packages and their manifest belong to the archive of this
+  # build, so they leave with it, once per architecture.
+  if [ "${TREBUCHET_TARBALL:-}" = true ]; then
+    cp "$packages"/*.rkp "$manifest" "$TREBUCHET_DIST/"
+  fi
   ls -l "$TREBUCHET_DIST"
 fi
