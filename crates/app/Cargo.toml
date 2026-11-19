@@ -18,6 +18,7 @@ model = { workspace = true }
 ops = { workspace = true }
 plugins-registry = { workspace = true }
 futures = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true }
 # The SHA-256 of a plugin package, for the record of what was installed.
 sha2 = { workspace = true }

@@ -5144,6 +5144,11 @@ mod install {
     /// An index that offers Hello for [`RICK`] on this platform as the
     /// package `described`, served at [`PACKAGE`].
     fn index(server: &Server, described: &[u8]) -> serde_json::Value {
+        index_for(server, described, RICK)
+    }
+
+    /// [`index`] with the build made for the release `rick` of Rick.
+    fn index_for(server: &Server, described: &[u8], rick: &str) -> serde_json::Value {
         json!({
             "schema": 1,
             "generated": "2026-11-19T02:00:00Z",
@@ -5155,7 +5160,7 @@ mod install {
                 "meta": { "points": ["action"], "triggers": { "markers": [".hello"] } },
                 "builds": [{
                     "version": "1.2.0",
-                    "app_version": RICK,
+                    "app_version": rick,
                     "api_version": API_VERSION,
                     "platform": plugins_registry::platform(),
                     "url": server.url(PACKAGE),
@@ -5449,5 +5454,284 @@ mod install {
         assert_eq!(again.app.installed(), &Record::default());
         assert_eq!(Record::read(&plugins_dir), Record::default());
         assert!(plugins_dir.join("by-hand").is_dir());
+    }
+
+    /// A config directory whose per-user plugins folder holds Hello in
+    /// version `version`, noted in the record as coming from `source`.
+    fn installed_before(fake: &Arc<Fake>, version: &str, source: &str) -> std::path::PathBuf {
+        let plugins_dir = fake.config_dir().join(crate::plugins::PLUGINS_DIR);
+        let folder = plugins_dir.join("hello");
+        fs::create_dir_all(&folder).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(folder.join("old.txt"), "the build before").unwrap_or_else(|e| panic!("{e}"));
+        fs::write(
+            plugins_dir.join(RECORD_FILE),
+            format!("[hello]\nsource = \"{source}\"\nversion = \"{version}\"\nsha256 = \"00\"\n"),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        folder
+    }
+
+    /// Hello's row as the binary hands it over: in the per-user folder,
+    /// in version `version`, with what the host made of it.
+    fn row(folder: &Path, version: &str, status: PluginStatus) -> crate::Plugin {
+        crate::Plugin {
+            id: "hello".to_owned(),
+            name: "Hello".to_owned(),
+            description: String::new(),
+            version: version.to_owned(),
+            points: Points::ACTION,
+            previews: Vec::new(),
+            status,
+            path: folder.to_owned(),
+            built_in: false,
+            removed: false,
+        }
+    }
+
+    /// A Rick of version `rick` on `fake`'s config directory with `rows`
+    /// from its plugin host, after its start read the plugin list.
+    fn start_with(
+        fake: &Arc<Fake>,
+        server: &Server,
+        signer: &Signer,
+        rick: &str,
+        rows: Vec<crate::Plugin>,
+    ) -> Harness {
+        let config = fake.config_dir();
+        fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+        let settings = format!(
+            "[registry]\nurl = \"{}\"\npublic_key = \"{}\"\n",
+            server.index_url(),
+            signer.public_key()
+        );
+        fs::write(config.join(SETTINGS_FILE), settings).unwrap_or_else(|e| panic!("{e}"));
+        let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let ui = Arc::new(Scripted::default());
+        let mut app = App::new(Config {
+            platform: fake.clone(),
+            ui: ui.clone(),
+            extensions: Vec::new(),
+            config_dir: Some(config),
+            start: Some(local(root.path())),
+        });
+        app.set_rick_version(rick);
+        app.set_plugins(rows);
+        let mut harness = Harness {
+            root,
+            fake: fake.clone(),
+            ui,
+            app,
+            events: Vec::new(),
+        };
+        harness.settle();
+        harness.take_events();
+        harness.send(Command::Registry(RegistryCommand::Start));
+        harness.settle();
+        harness
+    }
+
+    /// How many plugins the start said have an update, when it said so.
+    fn announced(events: &[Event]) -> Option<usize> {
+        events.iter().find_map(|event| match event {
+            Event::PluginUpdates { count } => Some(*count),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_registry_plugin_built_for_the_rick_before_is_an_update_and_update_installs_it() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        let bytes = package("1.2.0");
+        server.put(PACKAGE, bytes.clone());
+        server.publish(&signer, &index(&server, &bytes));
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let folder = installed_before(&fake, "1.1.0", "registry");
+        let refused = || PluginStatus::Refused("Built for Rick 0.5.0".to_owned());
+
+        let mut h = start_with(
+            &fake,
+            &server,
+            &signer,
+            RICK,
+            vec![row(&folder, "1.1.0", refused())],
+        );
+        let updates = h.app.updates();
+        let [update] = updates.as_slice() else {
+            panic!("one update: {updates:?}");
+        };
+        assert_eq!(
+            (update.id.as_str(), update.version.as_str()),
+            ("hello", "1.2.0")
+        );
+        assert_eq!(update.path, folder);
+        assert!(update.refused && !update.updating);
+        // In the folder, so not on offer; and the start says so, once.
+        assert_eq!(offered(&h.app), [] as [String; 0]);
+        assert_eq!(announced(&h.take_events()), Some(1));
+
+        // The next start of the same release has the update still, and
+        // says nothing again.
+        let mut again = start_with(
+            &fake,
+            &server,
+            &signer,
+            RICK,
+            vec![row(&folder, "1.1.0", refused())],
+        );
+        assert_eq!(again.app.updates().len(), 1);
+        assert_eq!(announced(&again.take_events()), None);
+        drop(again);
+
+        // Update all: an install over the old folder.
+        h.send(Command::UpdateAll);
+        assert!(
+            h.app
+                .updates()
+                .first()
+                .is_some_and(|update| update.updating)
+        );
+        h.settle();
+        assert_eq!(jobs(&h.app), [("Install Hello".to_owned(), JobState::Done)]);
+        assert_eq!(
+            fs::read_to_string(folder.join("libhello.so"))
+                .ok()
+                .as_deref(),
+            Some("library")
+        );
+        assert!(!folder.join("old.txt").exists(), "the old build is gone");
+        let noted = h.app.installed().get(&folder).cloned();
+        let noted = noted.unwrap_or_else(|| panic!("an entry"));
+        assert_eq!(
+            (noted.source, noted.version.as_str()),
+            (Origin::Registry, "1.2.0")
+        );
+        assert_eq!(noted.sha256, sha256(&bytes));
+        let rows = h.app.plugins();
+        assert_eq!(rows.len(), 1, "the row is the same one: {rows:?}");
+        assert_eq!(rows[0].status, PluginStatus::Installed);
+        assert_eq!(
+            h.app.updates(),
+            [],
+            "it waits for the next start, and is no update"
+        );
+    }
+
+    #[test]
+    fn only_a_plugin_the_registry_installed_and_has_a_build_for_is_an_update() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        let bytes = package("1.2.0");
+        server.publish(&signer, &index(&server, &bytes));
+        let refused = || PluginStatus::Refused("Built for Rick 0.5.0".to_owned());
+        let fake = || Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+
+        // Installed from a file: nobody's to update, and nothing is said.
+        let own = fake();
+        let folder = installed_before(&own, "1.1.0", "file");
+        let mut h = start_with(
+            &own,
+            &server,
+            &signer,
+            RICK,
+            vec![row(&folder, "1.1.0", refused())],
+        );
+        assert_eq!(h.app.updates(), []);
+        assert_eq!(announced(&h.take_events()), None);
+
+        // Put there by hand: no entry at all.
+        let own = fake();
+        let folder = installed_before(&own, "1.1.0", "registry");
+        fs::remove_file(own.config_dir().join("plugins").join(RECORD_FILE))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let h = start_with(
+            &own,
+            &server,
+            &signer,
+            RICK,
+            vec![row(&folder, "1.1.0", refused())],
+        );
+        assert_eq!(h.app.updates(), []);
+
+        // The registry's, and the list has no build for this Rick.
+        let own = fake();
+        let folder = installed_before(&own, "1.1.0", "registry");
+        let h = start_with(
+            &own,
+            &server,
+            &signer,
+            "0.7.0",
+            vec![row(&folder, "1.1.0", refused())],
+        );
+        assert_eq!(h.app.updates(), []);
+
+        // The registry's and loaded: an update only for a higher version.
+        let own = fake();
+        let folder = installed_before(&own, "1.2.0", "registry");
+        let h = start_with(
+            &own,
+            &server,
+            &signer,
+            RICK,
+            vec![row(&folder, "1.2.0", PluginStatus::Loaded)],
+        );
+        assert_eq!(h.app.updates(), [], "the same version");
+        let own = fake();
+        let folder = installed_before(&own, "1.1.9", "registry");
+        let mut h = start_with(
+            &own,
+            &server,
+            &signer,
+            RICK,
+            vec![row(&folder, "1.1.9", PluginStatus::Loaded)],
+        );
+        let updates = h.app.updates();
+        assert_eq!(updates.len(), 1, "{updates:?}");
+        assert!(!updates[0].refused);
+        assert_eq!(announced(&h.take_events()), Some(1));
+    }
+
+    #[test]
+    fn the_updates_of_another_release_of_rick_are_said_again() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        let bytes = package("1.2.0");
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let folder = installed_before(&fake, "1.1.0", "registry");
+        let refused = || PluginStatus::Refused("Built for Rick 0.5.0".to_owned());
+
+        server.publish(&signer, &index_for(&server, &bytes, "0.6.0"));
+        let mut h = start_with(
+            &fake,
+            &server,
+            &signer,
+            "0.6.0",
+            vec![row(&folder, "1.1.0", refused())],
+        );
+        assert_eq!(announced(&h.take_events()), Some(1));
+        drop(h);
+        // Rick is updated again before the plugin was: the new release's
+        // builds are another occasion.
+        server.publish(&signer, &index_for(&server, &bytes, "0.6.1"));
+        let cached = fake
+            .config_dir()
+            .join(crate::CACHE_DIR)
+            .join(plugins_registry::CACHE_DIR)
+            .join(plugins_registry::INDEX_FILE);
+        fs::remove_file(cached).unwrap_or_else(|e| panic!("{e}"));
+        let mut h = start_with(
+            &fake,
+            &server,
+            &signer,
+            "0.6.1",
+            vec![row(&folder, "1.1.0", refused())],
+        );
+        assert_eq!(announced(&h.take_events()), Some(1));
+        drop(h);
+        let mut h = start_with(
+            &fake,
+            &server,
+            &signer,
+            "0.6.1",
+            vec![row(&folder, "1.1.0", refused())],
+        );
+        assert_eq!(announced(&h.take_events()), None);
     }
 }

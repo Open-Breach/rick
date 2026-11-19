@@ -1,7 +1,7 @@
-//! Acceptance (issue 251, item 2, specs/plugin-distribution.md §6 and
-//! §7): the *Available* view of the Extensions dialogue, against a
-//! registry of the test's own — a server on this machine and a key made
-//! here. No test asks get.openbreach.dev.
+//! Acceptance (issue 251, items 2 and 3, specs/plugin-distribution.md §6
+//! and §7): the *Available* view of the Extensions dialogue and the
+//! updates, against a registry of the test's own — a server on this
+//! machine and a key made here. No test asks get.openbreach.dev.
 //!
 //! A plugin the registry has for this Rick and that is not installed
 //! shows under *Available*, with its size; **Install** puts it into the
@@ -12,6 +12,13 @@
 //! view says why — not set up in this build, a pre-release, too old a
 //! Rick, offline, switched off — and an index that does not verify
 //! leaves the last good one in place and says so.
+//!
+//! A plugin of the per-user folder that was built for another Rick, that
+//! the record marks as the registry's and that the list has this Rick's
+//! build of is an update: its card reads the host's reason and offers
+//! **Update**, the header counts it, the footer has **Update all**, and
+//! the first start that finds it says so in a toast. After the update
+//! and a restart the plugin loads.
 
 use std::fs;
 use std::io::Write as _;
@@ -107,6 +114,8 @@ struct Start<'a> {
     rick: &'a str,
     /// The folder the first tab shows.
     folder: &'a Path,
+    /// The plugins the host found.
+    rows: Vec<app::Plugin>,
 }
 
 /// The binaries *Restart now* asked to continue in.
@@ -115,6 +124,16 @@ type Restarts = Arc<Mutex<Vec<PathBuf>>>;
 /// A window of Rick with the Extensions dialogue open, and the list of
 /// the binaries a restart was asked for.
 fn window(start: &Start<'_>) -> (Harness<'static, RickUi>, Restarts) {
+    let (mut harness, restarts) = shell(start);
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::Extensions, pane);
+    steps(&mut harness);
+    assert!(harness.state().extensions_open());
+    (harness, restarts)
+}
+
+/// A window of Rick after its start, with no dialogue open.
+fn shell(start: &Start<'_>) -> (Harness<'static, RickUi>, Restarts) {
     let config = start.fake.config_dir();
     fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
     fs::write(config.join(app::SETTINGS_FILE), &start.settings).unwrap_or_else(|e| panic!("{e}"));
@@ -127,6 +146,7 @@ fn window(start: &Start<'_>) -> (Harness<'static, RickUi>, Restarts) {
         start: Some(local(start.folder)),
     });
     app.set_rick_version(start.rick);
+    app.set_plugins(start.rows.clone());
     let restarts = Restarts::default();
     let hook: ui_egui::Relaunch = {
         let restarts = Arc::clone(&restarts);
@@ -142,10 +162,6 @@ fn window(start: &Start<'_>) -> (Harness<'static, RickUi>, Restarts) {
         .with_pixels_per_point(1.0)
         .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx).with_relaunch(hook));
     settle(&mut harness);
-    let pane = harness.state().app().model().focused;
-    harness.state_mut().queue(Intent::Extensions, pane);
-    steps(&mut harness);
-    assert!(harness.state().extensions_open());
     (harness, restarts)
 }
 
@@ -223,6 +239,7 @@ fn an_available_plugin_is_installed_and_loaded_after_restart_now() {
         settings: registry::rick_toml(&server, &signer, true),
         rick: RICK,
         folder: dir.path(),
+        rows: Vec::new(),
     });
     // A session worth restoring: a second tab.
     harness
@@ -342,6 +359,7 @@ fn a_package_that_differs_from_the_list_is_deleted_and_nothing_is_installed() {
         settings: registry::rick_toml(&server, &signer, true),
         rick: RICK,
         folder: dir.path(),
+        rows: Vec::new(),
     });
     choose(&mut harness, "Available 1");
     click(&mut harness, "Install");
@@ -380,6 +398,7 @@ fn an_index_with_a_bad_signature_is_not_used_and_the_view_says_so() {
         settings: registry::rick_toml(&server, &signer, true),
         rick: RICK,
         folder: dir.path(),
+        rows: Vec::new(),
     });
     choose(&mut harness, "Available 1");
     assert!(listed(&harness, "Git"));
@@ -440,6 +459,7 @@ fn a_build_without_a_key_says_the_list_is_not_set_up_and_asks_nobody() {
         settings,
         rick: RICK,
         folder: dir.path(),
+        rows: Vec::new(),
     });
     // No count on the control: nothing is on offer.
     choose(&mut harness, "Available");
@@ -462,6 +482,7 @@ fn a_pre_release_and_too_old_a_rick_say_why_nothing_is_offered() {
         settings: registry::rick_toml(&server, &signer, true),
         rick: "0.6.0-dev",
         folder: dir.path(),
+        rows: Vec::new(),
     });
     choose(&mut harness, "Available");
     harness
@@ -478,6 +499,7 @@ fn a_pre_release_and_too_old_a_rick_say_why_nothing_is_offered() {
         settings: registry::rick_toml(&server, &signer, true),
         rick: "0.5.0",
         folder: dir.path(),
+        rows: Vec::new(),
     });
     choose(&mut harness, "Available");
     harness.get_by_label(
@@ -500,6 +522,7 @@ fn offline_and_switched_off_say_so_in_one_line_with_check_now() {
         settings: registry::rick_toml(&server, &signer, false),
         rick: RICK,
         folder: dir.path(),
+        rows: Vec::new(),
     });
     choose(&mut harness, "Available");
     harness.get_by_label("Rick is set not to look for plugins online.");
@@ -520,6 +543,7 @@ fn offline_and_switched_off_say_so_in_one_line_with_check_now() {
         settings,
         rick: RICK,
         folder: dir.path(),
+        rows: Vec::new(),
     });
     choose(&mut harness, "Available");
     harness.get_by_label("The plugin list could not be fetched. Rick may be offline.");
@@ -541,6 +565,7 @@ fn the_search_narrows_the_available_list_and_opening_it_fetches() {
         settings: registry::rick_toml(&server, &signer, true),
         rick: RICK,
         folder: dir.path(),
+        rows: Vec::new(),
     });
     // The start fetched the two files; opening the view fetches again.
     assert_eq!(server.requests().len(), 2);
@@ -577,4 +602,214 @@ fn the_search_narrows_the_available_list_and_opening_it_fetches() {
     harness.get_by_role_and_label(Role::RadioButton, "Available 2");
     typed(&mut harness, "zzz");
     harness.get_by_label("No extension matches");
+}
+
+/// The plugin rows as the binary hands them to the application.
+fn rows(host: &Host) -> Vec<app::Plugin> {
+    host.plugins()
+        .iter()
+        .map(|p| app::Plugin {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            description: p.description.clone(),
+            version: p.version.clone(),
+            points: p.points,
+            previews: p.previews.clone(),
+            status: match &p.status {
+                PluginStatus::Loaded => app::PluginStatus::Loaded,
+                PluginStatus::Disabled => app::PluginStatus::Disabled,
+                PluginStatus::Refused(reason) => app::PluginStatus::Refused(reason.clone()),
+            },
+            path: p.dir.clone(),
+            built_in: p.source == Source::BesideBinary,
+            removed: false,
+        })
+        .collect()
+}
+
+/// A config directory as a Rick update leaves it: the probe plugin in
+/// the per-user plugins folder, installed from the registry and built for
+/// Rick 0.4.0. Returns the rows of a host that scanned it.
+fn a_plugin_of_the_rick_before(fake: &Arc<Fake>, package: &[u8]) -> Vec<app::Plugin> {
+    let per_user = fake.config_dir().join("plugins");
+    let scratch = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let file = scratch.path().join("probe.rkp");
+    fs::write(&file, package).unwrap_or_else(|e| panic!("{e}"));
+    let (plugin, _) = app::plugins::unpack(&file, &per_user, app::plugins::Origin::Registry, None)
+        .unwrap_or_else(|e| panic!("{e}"));
+    // The manifest of the release before.
+    let manifest = plugin.path.join(MANIFEST_FILE);
+    let text = fs::read_to_string(&manifest).unwrap_or_else(|e| panic!("{e}"));
+    let own = format!("rick = \"{}\"", plugins_native::HOST_RICK);
+    assert!(text.contains(&own), "{text}");
+    fs::write(&manifest, text.replace(&own, "rick = \"0.4.0\"")).unwrap_or_else(|e| panic!("{e}"));
+    let host = Host::load(&Options {
+        dirs: vec![(Source::PerUser, per_user)],
+        ..Options::default()
+    });
+    let rows = rows(&host);
+    assert_eq!(
+        rows[0].status,
+        app::PluginStatus::Refused("Built for Rick 0.4.0".to_owned()),
+        "the host refuses the build of another Rick"
+    );
+    rows
+}
+
+#[test]
+fn a_plugin_built_for_the_rick_before_is_updated_and_loads_after_a_restart() {
+    let (server, signer) = (Server::start(), Signer::new(1));
+    let package = probe_package();
+    server.put(PACKAGE, package.clone());
+    server.publish(
+        &signer,
+        &registry::index(&[probe(&server, &package), git()]),
+    );
+    let fake = fake();
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, _) = window(&Start {
+        fake: &fake,
+        settings: registry::rick_toml(&server, &signer, true),
+        rick: RICK,
+        folder: dir.path(),
+        rows: a_plugin_of_the_rick_before(&fake, &package),
+    });
+
+    // The header counts the update, the card reads the host's reason and
+    // offers Update, and the footer has Update all.
+    harness.get_by_label("1 installed  ·  1 enabled  ·  1 needs attention  ·  1 update");
+    assert_eq!(
+        count(&harness, "Needs attention"),
+        2,
+        "the row's dot and the card"
+    );
+    assert_eq!(
+        count(&harness, "Built for Rick 0.4.0"),
+        2,
+        "the card, and the Status row under it"
+    );
+    assert_eq!(count(&harness, "Update"), 1);
+    assert_eq!(
+        count(&harness, "Update all"),
+        2,
+        "the footer's, and the one of the start's notice behind the dialogue"
+    );
+    assert_eq!(count(&harness, "Restart now"), 0);
+    // It is in the folder, so it is not on offer: only Git is.
+    harness.get_by_role_and_label(Role::RadioButton, "Available 1");
+
+    click(&mut harness, "Update");
+    // An install over the old folder: the build of this Rick is there,
+    // the record says so, and the row waits for the next start.
+    let per_user = fake.config_dir().join("plugins");
+    let manifest = fs::read_to_string(per_user.join("probe").join(MANIFEST_FILE))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        manifest.contains(&format!("rick = \"{}\"", plugins_native::HOST_RICK)),
+        "{manifest}"
+    );
+    harness.get_by_label("1 installed  ·  1 enabled  ·  0 need attention");
+    assert_eq!(count(&harness, "Built for Rick 0.4.0"), 0);
+    assert_eq!(count(&harness, "Update"), 0);
+    assert_eq!(count(&harness, "Update all"), 0);
+    assert_eq!(count(&harness, "restart"), 2);
+    harness.get_by_label("Restart now");
+    // Nothing failed, and the start's notice went with the last update.
+    assert_eq!(harness.state().toasts(), []);
+    drop(harness);
+
+    // The next start loads it.
+    let host = Host::load(&Options {
+        dirs: vec![(Source::PerUser, per_user)],
+        ..Options::default()
+    });
+    assert_eq!(host.plugins()[0].status, PluginStatus::Loaded);
+    drop(host);
+}
+
+#[test]
+fn the_first_start_that_finds_updates_says_so_with_update_all() {
+    let (server, signer) = (Server::start(), Signer::new(1));
+    let package = probe_package();
+    server.put(PACKAGE, package.clone());
+    server.publish(&signer, &registry::index(&[probe(&server, &package)]));
+    let fake = fake();
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let rows = a_plugin_of_the_rick_before(&fake, &package);
+    let start = |rows: Vec<app::Plugin>| Start {
+        fake: &fake,
+        settings: registry::rick_toml(&server, &signer, true),
+        rick: RICK,
+        folder: dir.path(),
+        rows,
+    };
+
+    // The start reads the list, finds the update and says so.
+    let (harness, _) = shell(&start(rows.clone()));
+    assert_eq!(
+        harness.state().toasts(),
+        [(
+            Level::Info,
+            "1 plugin needs its build for Rick 0.6.0".to_owned()
+        )]
+    );
+    harness.get_by_label("Update all");
+    drop(harness);
+
+    // The next start of this Rick says nothing: it was said. Its button
+    // would have updated; the dialogue's footer still does.
+    let (mut harness, _) = shell(&start(rows.clone()));
+    assert_eq!(harness.state().toasts(), []);
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::Extensions, pane);
+    steps(&mut harness);
+    click(&mut harness, "Update all");
+    let per_user = fake.config_dir().join("plugins");
+    let manifest = fs::read_to_string(per_user.join("probe").join(MANIFEST_FILE))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        manifest.contains(&format!("rick = \"{}\"", plugins_native::HOST_RICK)),
+        "{manifest}"
+    );
+    assert_eq!(count(&harness, "Update all"), 0);
+}
+
+#[test]
+fn update_all_of_the_toast_installs_the_updates() {
+    let (server, signer) = (Server::start(), Signer::new(1));
+    let package = probe_package();
+    server.put(PACKAGE, package.clone());
+    server.publish(&signer, &registry::index(&[probe(&server, &package)]));
+    let fake = fake();
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, _) = shell(&Start {
+        fake: &fake,
+        settings: registry::rick_toml(&server, &signer, true),
+        rick: RICK,
+        folder: dir.path(),
+        rows: a_plugin_of_the_rick_before(&fake, &package),
+    });
+    click(&mut harness, "Update all");
+    // The notice went with its button; the plugin is this Rick's build.
+    assert_eq!(
+        harness
+            .state()
+            .toasts()
+            .iter()
+            .filter(|(_, text)| text.contains("needs its build"))
+            .count(),
+        0
+    );
+    let manifest = fs::read_to_string(
+        fake.config_dir()
+            .join("plugins")
+            .join("probe")
+            .join(MANIFEST_FILE),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        manifest.contains(&format!("rick = \"{}\"", plugins_native::HOST_RICK)),
+        "{manifest}"
+    );
+    assert_eq!(harness.state().app().updates(), []);
 }

@@ -178,6 +178,19 @@ extensions-newer-rick = Diese Liste braucht einen neueren Rick
 extensions-unreadable = Die Plugin-Liste konnte nicht gelesen werden
 extensions-none-available = Für Rick { $version } sind keine weiteren Plugins verfügbar
 extensions-registry-address = Die Plugin-Liste wird von { $address } gelesen.
+extensions-updates = { $count ->
+    [one] 1 Aktualisierung
+   *[other] { $count } Aktualisierungen
+}
+extensions-update = Aktualisieren
+extensions-updating = Wird aktualisiert…
+extensions-update-all = Alle aktualisieren
+extensions-update-available = Aktualisierung verfügbar
+extensions-update-version = Version { $version } ist verfügbar.
+extensions-updates-toast = { $count ->
+    [one] 1 Plugin braucht seinen Build für Rick { $version }
+   *[other] { $count } Plugins brauchen ihren Build für Rick { $version }
+}
 about-version = Version { $version }
 column-name = Name
 column-type = Typ

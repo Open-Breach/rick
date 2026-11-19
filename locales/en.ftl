@@ -415,6 +415,20 @@ extensions-newer-rick = This list needs a newer Rick
 extensions-unreadable = The plugin list could not be read
 extensions-none-available = No further plugins are available for Rick { $version }
 extensions-registry-address = The plugin list is read from { $address }.
+# Updates (specs/plugin-distribution.md §7, issue 251).
+extensions-updates = { $count ->
+    [one] 1 update
+   *[other] { $count } updates
+}
+extensions-update = Update
+extensions-updating = Updating…
+extensions-update-all = Update all
+extensions-update-available = Update available
+extensions-update-version = Version { $version } is available.
+extensions-updates-toast = { $count ->
+    [one] 1 plugin needs its build for Rick { $version }
+   *[other] { $count } plugins need their build for Rick { $version }
+}
 shell-phosphor-fill = phosphor-fill
 close = Close
 shell-restore = Restore

@@ -298,6 +298,10 @@ struct Toast {
     /// The window it is shown in — the one the user acted in — or the
     /// window in front when it is tied to none.
     window: Option<WindowId>,
+    /// What the notice offers to do about what it says: the button's
+    /// label and the command it sends. A notice with one stays until it
+    /// is dismissed or its button is pressed.
+    action: Option<(String, Command)>,
 }
 
 /// A text an action asked the host to show.
@@ -1830,6 +1834,20 @@ impl RickUi {
             text: text.into(),
             until,
             window,
+            action: None,
+        });
+    }
+
+    /// A notice that offers to do something about what it says: `label`
+    /// is its button and `command` what the button sends. It stays until
+    /// it is dismissed or the button is pressed.
+    fn toast_with(&mut self, text: impl Into<String>, label: impl Into<String>, command: Command) {
+        self.toasts.push(Toast {
+            level: Level::Info,
+            text: text.into(),
+            until: None,
+            window: None,
+            action: Some((label.into(), command)),
         });
     }
 
@@ -1854,6 +1872,15 @@ impl RickUi {
                 Event::Activate { window, token } => self.activate(window, token.as_deref()),
                 Event::Properties(info) => self.properties.open(*info),
                 Event::PluginInstalled { path } => self.extensions.installed(path),
+                Event::PluginUpdates { count } => {
+                    // *2 plugins need their build for Rick 0.6.0*.
+                    let version = self.app.plugin_registry().rick.clone();
+                    self.toast_with(
+                        t!("extensions-updates-toast", count = count, version = version),
+                        t!("extensions-update-all"),
+                        Command::UpdateAll,
+                    );
+                }
                 Event::PropertiesCounted {
                     pane,
                     path,
@@ -4874,15 +4901,26 @@ impl RickUi {
         }
     }
 
+    /// Drops the notices whose time is over, and the one that offers the
+    /// plugin updates once none is left to offer.
+    fn expire_toasts(&mut self) {
+        let now = Instant::now();
+        self.toasts
+            .retain(|t| t.until.is_none_or(|until| until > now));
+        let offers_updates = |toast: &Toast| matches!(&toast.action, Some((_, Command::UpdateAll)));
+        if self.toasts.iter().any(offers_updates) && self.app.updates().is_empty() {
+            self.toasts.retain(|toast| !offers_updates(toast));
+        }
+    }
+
     /// The notices of `window` at its top right, under the title row: the
     /// ones tied to it and, when it is the window in `front`, the ones
     /// tied to none or to a window that is gone. A notice carries its
     /// whole text, wrapped and never cut; an error has a close button and
-    /// stays until that is pressed.
+    /// stays until that is pressed, and so does a notice with a button of
+    /// its own, which stands under its text.
     fn show_toasts(&mut self, ctx: &egui::Context, window: WindowId, front: bool) {
-        let now = Instant::now();
-        self.toasts
-            .retain(|t| t.until.is_none_or(|until| until > now));
+        self.expire_toasts();
         let shown: Vec<usize> = self
             .toasts
             .iter()
@@ -4908,6 +4946,7 @@ impl RickUi {
             content.top() + crate::theme::metrics(ctx).titlebar_height + TOAST_GAP,
         );
         let mut dismissed = None;
+        let mut acted = None;
         egui::Area::new(egui::Id::new(("toasts", window.0)))
             .pivot(egui::Align2::RIGHT_TOP)
             .fixed_pos(corner)
@@ -4926,12 +4965,28 @@ impl RickUi {
                             ui.spacing_mut().item_spacing.x = 8.0;
                             ui.allocate_ui(egui::vec2(TOAST_WIDTH, 0.0), |ui| {
                                 ui.set_max_width(TOAST_WIDTH);
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(&toast.text).color(colour),
-                                    )
-                                    .wrap(),
-                                );
+                                ui.vertical(|ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(&toast.text).color(colour),
+                                        )
+                                        .wrap(),
+                                    );
+                                    // What the notice offers to do about
+                                    // it, under what it says.
+                                    if let Some((label, _)) = &toast.action {
+                                        ui.add_space(4.0);
+                                        let button = crate::widgets::card_button(
+                                            ui,
+                                            None,
+                                            label,
+                                            crate::widgets::ButtonKind::Secondary,
+                                        );
+                                        if button.clicked() {
+                                            acted = Some(index);
+                                        }
+                                    }
+                                });
                             });
                             if sticky {
                                 let (rect, _) = ui.allocate_exact_size(
@@ -4952,6 +5007,13 @@ impl RickUi {
                     });
                 }
             });
+        // The button does what the notice offered, and the notice goes.
+        if let Some(index) = acted {
+            if let Some((_, command)) = self.toasts.remove(index).action {
+                self.requests.push(Request::Command(command));
+            }
+            return;
+        }
         if let Some(index) = dismissed {
             self.toasts.remove(index);
         }

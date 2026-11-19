@@ -99,7 +99,7 @@ pub use ops::hash;
 pub use ops::{PermissionRequest, Recursion};
 pub use places::{PLACES_FILE, defaults as default_places, virtual_icon};
 pub use registry::{
-    Available, CACHE_DIR, Offering, PluginRegistry, RegistryCommand, RegistryProblem,
+    Available, CACHE_DIR, Offering, PluginRegistry, RegistryCommand, RegistryProblem, Update,
 };
 pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
 pub use settings::SETTINGS_FILE;
@@ -360,8 +360,14 @@ enum Msg {
     RegistryCached(Result<Option<plugins_registry::Cached>, plugins_registry::Error>),
     /// The registry job began to fetch the plugin list.
     RegistryChecking,
-    /// The registry job ended, with its fetch's answer when it made one.
-    RegistryDone(Option<Result<plugins_registry::Cached, plugins_registry::Error>>),
+    /// The registry job ended, with its fetch's answer when it made one;
+    /// the job of a start names the release of Rick whose updates were
+    /// announced last.
+    RegistryDone {
+        fetched: Option<Result<plugins_registry::Cached, plugins_registry::Error>>,
+        start: bool,
+        announced: Option<String>,
+    },
     /// A job started waiting for its volume, or stopped.
     Schedule,
     /// The mounted volumes were enumerated.
@@ -2081,6 +2087,7 @@ impl App {
             Command::InstallPlugin(package) => self.install_plugin(package),
             Command::RemovePlugin(path) => self.remove_plugin(path),
             Command::InstallAvailable(id) => self.install_available(&id),
+            Command::UpdateAll => self.update_all(),
             Command::PreviewWith { pane, previewer } => {
                 if let Some(job) = self.preview.get(&pane) {
                     self.preview_with.insert(pane, (job.entry, previewer));
@@ -4780,7 +4787,11 @@ impl App {
             Msg::PluginRecord(record) => self.installed = record,
             Msg::RegistryCached(cached) => self.registry_cached(cached),
             Msg::RegistryChecking => self.registry_checking(),
-            Msg::RegistryDone(fetched) => self.registry_done(fetched),
+            Msg::RegistryDone {
+                fetched,
+                start,
+                announced,
+            } => self.registry_done(fetched, start, announced.as_deref(), events),
             Msg::PluginInstalled(Err(text))
             | Msg::PluginRemoved {
                 result: Err(text), ..

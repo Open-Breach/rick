@@ -33,7 +33,7 @@ use plugins_registry::{
 use types::{JobId, Progress};
 
 use crate::plugins::{self, Origin};
-use crate::{App, Msg};
+use crate::{App, Event, Msg};
 
 /// The folder of the config directory that is the cache of a Rick started
 /// on a config directory of its own (`--config-dir`), and of every
@@ -43,6 +43,23 @@ pub const CACHE_DIR: &str = "cache";
 /// The folder of the cache a package is downloaded to before it is
 /// unpacked.
 const DOWNLOADS_DIR: &str = "downloads";
+
+/// The file beside the cached plugin list that holds the version of the
+/// Rick whose updates were announced: the toast of the first start that
+/// finds any is shown once for a release of Rick, not at every start.
+const ANNOUNCED_FILE: &str = "updates-announced";
+
+/// Whether `offered` is a higher version than `installed`, as versions
+/// where both are, and never when either is none.
+fn is_newer(offered: &str, installed: &str) -> bool {
+    match (
+        semver::Version::parse(offered),
+        semver::Version::parse(installed),
+    ) {
+        (Ok(offered), Ok(installed)) => offered > installed,
+        _ => false,
+    }
+}
 
 /// What an install job fails with when the package did not arrive whole:
 /// the user's words for it.
@@ -153,6 +170,26 @@ pub struct Available {
     pub size: u64,
     /// Its install is running.
     pub installing: bool,
+}
+
+/// A plugin of the per-user plugins folder that the registry has the
+/// build for (specs/plugin-distribution.md §7, *Updates*): the record
+/// marks it as the registry's, the list has a build that fits this Rick,
+/// and the host refused the one on the disk — built for the Rick before —
+/// or the list's build is of a higher plugin version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Update {
+    /// The extension id.
+    pub id: String,
+    /// The plugin's folder, by which its row is known.
+    pub path: PathBuf,
+    /// The version of the build that fits.
+    pub version: String,
+    /// The plugin is refused as it is: the update is what makes it load.
+    /// Otherwise it is loaded, and the update is a newer version of it.
+    pub refused: bool,
+    /// Its update is running.
+    pub updating: bool,
 }
 
 /// What the *Available* view has to show (specs/plugin-distribution.md §3
@@ -274,6 +311,18 @@ impl App {
         let rick = self.plugin_registry.view.rick.clone();
         let tx = self.mailbox.clone();
         let handle = self.jobs.spawn(move |_job| async move {
+            // At a start: the release of Rick whose updates were said.
+            let announced = if only_when_due {
+                let file = cache.dir().join(ANNOUNCED_FILE);
+                runtime::handle()
+                    .spawn_blocking(move || std::fs::read_to_string(file).ok())
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|text| text.trim().to_owned())
+            } else {
+                None
+            };
             // Fresh is an index that can be used and is not a day old: a
             // cached one that does not verify is no reason to wait.
             let fresh = if read {
@@ -301,7 +350,11 @@ impl App {
             } else {
                 None
             };
-            tx.send(Msg::RegistryDone(fetched));
+            tx.send(Msg::RegistryDone {
+                fetched,
+                start: only_when_due,
+                announced,
+            });
             Ok(())
         });
         self.internal.insert(handle.id);
@@ -328,10 +381,15 @@ impl App {
         self.plugin_registry.view.checking = true;
     }
 
-    /// A job ended, with the answer of its fetch when it made one.
+    /// A job ended, with the answer of its fetch when it made one. The
+    /// job of a `start` that finds updates says so, once for a release
+    /// of Rick: `announced` is the release they were last said for.
     pub(crate) fn registry_done(
         &mut self,
         fetched: Option<Result<Cached, plugins_registry::Error>>,
+        start: bool,
+        announced: Option<&str>,
+        events: &mut Vec<Event>,
     ) {
         self.plugin_registry.job = None;
         self.plugin_registry.view.checking = false;
@@ -342,6 +400,68 @@ impl App {
                 self.plugin_registry.view.problem = Some(RegistryProblem::from(&error));
             }
             None => {}
+        }
+        if !start {
+            return;
+        }
+        let count = self.updates().len();
+        let rick = self.plugin_registry.view.rick.clone();
+        if count == 0 || announced == Some(rick.as_str()) {
+            return;
+        }
+        events.push(Event::PluginUpdates { count });
+        let folder = Cache::new(&self.plugin_registry.cache_dir).dir().to_owned();
+        runtime::handle().spawn_blocking(move || {
+            let written = std::fs::create_dir_all(&folder)
+                .and_then(|()| std::fs::write(folder.join(ANNOUNCED_FILE), rick));
+            if let Err(error) = written {
+                tracing::warn!(%error, "the announced updates are not remembered");
+            }
+        });
+    }
+
+    /// The plugins of the per-user plugins folder that have an update:
+    /// the record marks them as the registry's, the plugin list has a
+    /// build that fits this Rick, and the host refused the one that is
+    /// there or the list's build is of a higher version. Empty without a
+    /// plugin list, and for a plugin updated in this session.
+    #[must_use]
+    pub fn updates(&self) -> Vec<Update> {
+        let run = &self.plugin_registry;
+        let Some(index) = &run.view.index else {
+            return Vec::new();
+        };
+        self.plugins
+            .iter()
+            .filter(|row| !row.built_in && !row.removed)
+            .filter(|row| {
+                self.installed
+                    .get(&row.path)
+                    .is_some_and(|noted| noted.source == Origin::Registry)
+            })
+            .filter_map(|row| {
+                let build = index
+                    .plugin(&row.id)?
+                    .fitting(&run.view.platform, &run.view.rick)?;
+                let refused = matches!(row.status, crate::PluginStatus::Refused(_));
+                let newer = row.status != crate::PluginStatus::Installed
+                    && is_newer(&build.version, &row.version);
+                (refused || newer).then(|| Update {
+                    id: row.id.clone(),
+                    path: row.path.clone(),
+                    version: build.version.clone(),
+                    refused,
+                    updating: run.installing.contains_key(&row.id),
+                })
+            })
+            .collect()
+    }
+
+    /// **Update all**: every update is installed, each as a job of its
+    /// own, over the folder that is there.
+    pub(crate) fn update_all(&mut self) {
+        for update in self.updates() {
+            self.install_available(&update.id);
         }
     }
 
