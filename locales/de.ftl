@@ -45,6 +45,10 @@ shortcuts-reset = Auf Standard zurücksetzen: { $keys }
 shortcuts-reset-of = { $action } auf Standard zurücksetzen: { $keys }
 shortcuts-reset-all = Alle auf Standard zurücksetzen
 about-rick = Über Rick
+update-entry = Aktualisierung verfügbar
+update-available = Rick { $version } ist verfügbar
+update-available-packaged = Rick { $version } ist verfügbar. Aktualisiere es über deinen Paketmanager.
+update-download = Herunterladen
 
 # Das Burger-Menü und die Layouts
 menu-application-menu = Menü

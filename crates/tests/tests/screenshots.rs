@@ -4223,6 +4223,98 @@ fn screenshots_of_a_plugin_update() {
     }
 }
 
+/// The update notice for Rick itself (specs/plugin-distribution.md §6,
+/// specs/gui-title-row.md *Menu*, specs/about-dialog.md): the toast with
+/// **Download** and the attention dot on the menu button, the application
+/// menu with *Update available*, and the About dialog with its line, for
+/// a Rick from an archive and for one a package manager installed, in
+/// Light and Dark.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_update_notice() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+    use plugins_registry::fixtures::{Server, Signer};
+    use tests::registry;
+    let (_keep, root) = sample_tree();
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(
+        &signer,
+        &registry::index_with_latest(
+            &[],
+            "0.7.0",
+            "https://github.com/Open-Breach/rick/releases/tag/v0.7.0",
+        ),
+    );
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let modes = [(Theme::Light, "light"), (Theme::Dark, "dark")];
+    for (packaging, kind) in [
+        (None, "archive"),
+        (Some(app::plugins::Packaging::Deb), "packaged"),
+    ] {
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let host = Arc::new(EguiHost::new());
+        let config = fake.config_dir();
+        fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(
+            config.join(app::SETTINGS_FILE),
+            registry::rick_toml(&server, &signer, true),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let mut app = app::App::new(app::Config {
+            platform: fake.clone(),
+            ui: host.clone(),
+            extensions: Vec::new(),
+            config_dir: Some(config),
+            start: Some(local(&root)),
+        });
+        app.set_rick_version(registry::RICK);
+        app.set_packaging(packaging);
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1280.0, 840.0))
+            .with_pixels_per_point(2.0)
+            .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+        settle(&mut harness);
+        registry::background_check(harness.state_mut().app_mut());
+        settle(&mut harness);
+        // The toast, and the dot on the menu button.
+        for (theme, mode) in modes {
+            set(&mut harness, theme);
+            shoot(&mut harness, &format!("update-notice-{kind}-{mode}"));
+        }
+        // The application menu, with the entry above About Rick.
+        harness.get_by_role_and_label(Role::Button, "Menu").click();
+        for _ in 0..4 {
+            harness.step();
+        }
+        for (theme, mode) in modes {
+            set(&mut harness, theme);
+            shoot(&mut harness, &format!("update-notice-menu-{kind}-{mode}"));
+        }
+        harness.key_press(egui::Key::Escape);
+        for _ in 0..4 {
+            harness.step();
+        }
+        // The About dialog, with the line under the build line.
+        harness.state_mut().open_about();
+        for _ in 0..4 {
+            harness.step();
+        }
+        for (theme, mode) in modes {
+            set(&mut harness, theme);
+            shoot(&mut harness, &format!("update-notice-about-{kind}-{mode}"));
+        }
+    }
+}
+
 /// SPEC.md *Keyboard shortcuts dialogue* (issue 139, item 8): the
 /// dialogue on *File operations* with a changed row and a cell that
 /// records, on *Git* with a chord that Copy has too — the amber chip —

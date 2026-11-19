@@ -173,6 +173,11 @@ pub enum Request {
     DriveProperties(std::path::PathBuf),
     /// Show the About window.
     About,
+    /// The update notice's own action, of its toast, of *Update
+    /// available* in the application menu and of the About dialog: open
+    /// the newer release's page in the browser, or, for a Rick a package
+    /// manager installed, say where it is updated.
+    RickUpdate,
     /// Open the Settings window on a plugin's page, by the plugin's id.
     PluginSettings(String),
     /// *Restart now* of the Extensions dialogue: close Rick and start it
@@ -299,9 +304,9 @@ struct Toast {
     /// window in front when it is tied to none.
     window: Option<WindowId>,
     /// What the notice offers to do about what it says: the button's
-    /// label and the command it sends. A notice with one stays until it
-    /// is dismissed or its button is pressed.
-    action: Option<(String, Command)>,
+    /// label and what it asks for. A notice with one stays until it is
+    /// dismissed or its button is pressed.
+    action: Option<(String, Request)>,
 }
 
 /// A text an action asked the host to show.
@@ -1841,14 +1846,50 @@ impl RickUi {
     /// A notice that offers to do something about what it says: `label`
     /// is its button and `command` what the button sends. It stays until
     /// it is dismissed or the button is pressed.
-    fn toast_with(&mut self, text: impl Into<String>, label: impl Into<String>, command: Command) {
+    fn toast_with(&mut self, text: impl Into<String>, label: impl Into<String>, request: Request) {
         self.toasts.push(Toast {
             level: Level::Info,
             text: text.into(),
             until: None,
             window: None,
-            action: Some((label.into(), command)),
+            action: Some((label.into(), request)),
         });
+    }
+
+    /// Says that a newer Rick is available (specs/gui-title-row.md
+    /// *Menu*, *The update notice*): *Rick 0.7.0 is available* with
+    /// **Download**, which opens the release's page. A Rick a package
+    /// manager installed says to update it there and has no button, and
+    /// neither has a release the list names no page for. A notice that
+    /// is still shown is not shown twice.
+    fn say_rick_update(&mut self) {
+        let Some(update) = self.app.rick_update() else {
+            return;
+        };
+        let version = update.version;
+        let text = if update.packaged {
+            t!("update-available-packaged", version = version)
+        } else {
+            t!("update-available", version = version)
+        };
+        if self.toasts.iter().any(|toast| toast.text == text) {
+            return;
+        }
+        if update.page.is_some() {
+            self.toast_with(text, t!("update-download"), Request::RickUpdate);
+        } else {
+            self.toast(Level::Info, text);
+        }
+    }
+
+    /// The update notice's action: the release's page in the browser.
+    /// Where there is none to open — a packaged Rick, a release without
+    /// an address — the notice is said again.
+    fn open_rick_update(&mut self) {
+        match self.app.rick_update().and_then(|update| update.page) {
+            Some(page) => self.ctx.open_url(egui::OpenUrl::new_tab(page)),
+            None => self.say_rick_update(),
+        }
     }
 
     fn absorb(&mut self, events: Vec<Event>) {
@@ -1878,9 +1919,10 @@ impl RickUi {
                     self.toast_with(
                         t!("extensions-updates-toast", count = count, version = version),
                         t!("extensions-update-all"),
-                        Command::UpdateAll,
+                        Request::Command(Command::UpdateAll),
                     );
                 }
+                Event::RickUpdate { .. } => self.say_rick_update(),
                 Event::PropertiesCounted {
                     pane,
                     path,
@@ -2292,6 +2334,7 @@ impl RickUi {
                         self.drive_properties.open(mount_point);
                     }
                     Request::About => self.about.open(),
+                    Request::RickUpdate => self.open_rick_update(),
                     Request::PluginSettings(id) => self.settings.open_plugin(self.root, &id),
                     Request::Restart => self.restart(),
                     Request::StartDrag {
@@ -4907,9 +4950,20 @@ impl RickUi {
         let now = Instant::now();
         self.toasts
             .retain(|t| t.until.is_none_or(|until| until > now));
-        let offers_updates = |toast: &Toast| matches!(&toast.action, Some((_, Command::UpdateAll)));
+        let offers_updates = |toast: &Toast| {
+            matches!(
+                &toast.action,
+                Some((_, Request::Command(Command::UpdateAll)))
+            )
+        };
         if self.toasts.iter().any(offers_updates) && self.app.updates().is_empty() {
             self.toasts.retain(|toast| !offers_updates(toast));
+        }
+        // And the one that offers a newer Rick, when there is none any
+        // more: the switch was turned off.
+        let offers_rick = |toast: &Toast| matches!(&toast.action, Some((_, Request::RickUpdate)));
+        if self.toasts.iter().any(offers_rick) && self.app.rick_update().is_none() {
+            self.toasts.retain(|toast| !offers_rick(toast));
         }
     }
 
@@ -5009,8 +5063,8 @@ impl RickUi {
             });
         // The button does what the notice offered, and the notice goes.
         if let Some(index) = acted {
-            if let Some((_, command)) = self.toasts.remove(index).action {
-                self.requests.push(Request::Command(command));
+            if let Some((_, request)) = self.toasts.remove(index).action {
+                self.requests.push(request);
             }
             return;
         }
