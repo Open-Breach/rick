@@ -579,6 +579,87 @@ fn disabling_a_plugin_writes_rick_toml_and_the_next_start_lists_it_disabled() {
     assert_eq!(status_of(&host, "probe"), &PluginStatus::Loaded);
 }
 
+/// Issue 252, item 1: a plugin that is installed and disabled is suggested
+/// from its own manifest, as the host read it, with no registry at all
+/// (specs/plugin-distribution.md §8). Git by the entry that marks its
+/// folders, the 3D previewer by a file type it claims and S3 by the kind
+/// of connection it adds; none of the three libraries is loaded for it.
+#[test]
+fn a_disabled_plugin_is_suggested_from_the_manifest_the_host_read() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let plugins = dir.path().join("plugins");
+    for stem in ["ext_git", "ext_preview_3d", "ext_vfs_s3", "plugin_probe"] {
+        install(&plugins, stem, |_| {});
+    }
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let config_dir = fake.config_dir();
+    fs::create_dir_all(&config_dir).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        config_dir.join(app::SETTINGS_FILE),
+        "[plugins]\ndisabled = [\"git\", \"preview-3d\", \"vfs-s3\"]\n",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let settings =
+        app::settings::load(&config_dir.join(app::SETTINGS_FILE)).unwrap_or_else(|e| panic!("{e}"));
+    let host = Host::load(&Options {
+        dirs: vec![(Source::BesideBinary, plugins)],
+        disabled: settings.plugins.disabled,
+        ..Options::default()
+    });
+    for id in ["git", "preview-3d", "vfs-s3"] {
+        assert_eq!(status_of(&host, id), &PluginStatus::Disabled, "{id}");
+    }
+    assert_eq!(status_of(&host, "probe"), &PluginStatus::Loaded);
+    assert_eq!(host.extensions().len(), 1, "only the probe is loaded");
+
+    let mut events = Vec::new();
+    let mut app = App::new(Config {
+        platform: fake,
+        ui: Arc::new(EguiHost::new()),
+        extensions: host.extensions(),
+        config_dir: Some(config_dir),
+        start: Some(local(dir.path())),
+    });
+    app.set_plugins(rows(&host));
+    settle(&mut app, &mut events);
+    assert!(!app.plugin_registry().set_up, "no registry in a test");
+
+    let enable = |suggestion: Option<app::Suggestion>| {
+        suggestion.map(|s| {
+            assert_eq!(s.remedy, app::Remedy::Enable, "{}", s.id);
+            // The manifest's own words; the 3D previewer's says nothing.
+            assert!(!s.name.is_empty(), "{s:?}");
+            assert_eq!(s.description.is_empty(), s.id == "preview-3d", "{s:?}");
+            s.id
+        })
+    };
+    assert_eq!(
+        enable(app.suggestion_for_folder(["src", ".git"])).as_deref(),
+        Some("git")
+    );
+    assert_eq!(
+        enable(app.suggestion_for_file("gear.stl")).as_deref(),
+        Some("preview-3d")
+    );
+    let cloud = app.suggested_connections(ext::ConnectionSection::Cloud);
+    assert_eq!(
+        cloud
+            .iter()
+            .map(|kind| (kind.title.as_str(), kind.plugin.id.as_str()))
+            .collect::<Vec<_>>(),
+        [("S3", "vfs-s3")]
+    );
+    assert_eq!(
+        enable(cloud.into_iter().next().map(|kind| kind.plugin)).as_deref(),
+        Some("vfs-s3")
+    );
+    assert_eq!(
+        app.suggested_connections(ext::ConnectionSection::Network),
+        []
+    );
+    drop(host);
+}
+
 #[test]
 fn a_job_spawned_inside_the_plugin_shows_in_the_job_table_and_cancels_from_it() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -753,8 +834,17 @@ fn rows(host: &Host) -> Vec<app::Plugin> {
             version: p.version.clone(),
             points: p.points,
             previews: p.previews.clone(),
-            markers: Vec::new(),
-            connections: Vec::new(),
+            markers: p.markers.clone(),
+            connections: p
+                .connections
+                .iter()
+                .filter_map(|kind| {
+                    Some(app::ConnectionKind {
+                        section: ext::ConnectionSection::named(&kind.section)?,
+                        title: kind.title.clone(),
+                    })
+                })
+                .collect(),
             status: match &p.status {
                 PluginStatus::Loaded => app::PluginStatus::Loaded,
                 PluginStatus::Disabled => app::PluginStatus::Disabled,

@@ -641,8 +641,17 @@ fn rows(host: &Host) -> Vec<app::Plugin> {
             version: p.version.clone(),
             points: p.points,
             previews: p.previews.clone(),
-            markers: Vec::new(),
-            connections: Vec::new(),
+            markers: p.markers.clone(),
+            connections: p
+                .connections
+                .iter()
+                .filter_map(|kind| {
+                    Some(app::ConnectionKind {
+                        section: ext::ConnectionSection::named(&kind.section)?,
+                        title: kind.title.clone(),
+                    })
+                })
+                .collect(),
             status: match &p.status {
                 PluginStatus::Loaded => app::PluginStatus::Loaded,
                 PluginStatus::Disabled => app::PluginStatus::Disabled,
