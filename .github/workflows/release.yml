@@ -18,8 +18,11 @@ name: release
 # pinned sources on Linux and macOS, the pinned installer's 7z.dll on
 # Windows, see .github/scripts/sevenzip.sh) — plus LICENSE, README,
 # CHANGELOG and the third-party licences, as THIRD-PARTY-LICENSES.md at the
-# root and as third-party.json beside the binary, the component list the
-# About dialog shows (specs/about-dialog.md; issue 101), and on Linux the
+# root (the crates of Cargo.lock, then the components shipped outside Cargo
+# from about/bundled.toml) and as third-party.json beside the binary, the
+# component list the About dialog shows (specs/about-dialog.md; issue 101),
+# licenses/ with the texts pdfium and the standard library bring with them
+# (`cargo xtask bundle` copies them), and on Linux the
 # desktop entry and the icons under share/ in
 # the XDG layout (specs/app-icons.md); on macOS the bundle goes into
 # Rick.app (Contents/MacOS/ with the plugins beside the binary as
@@ -106,6 +109,11 @@ jobs:
       # targets is not in it, or when it names a crate Cargo.lock does not
       # have (specs/about-dialog.md, Generation; QUESTIONS.md 261).
       - run: cargo about generate --features ext-preview-media/gstreamer about.hbs -o THIRD-PARTY-LICENSES.md
+      # cargo-about knows the crates. What ships outside Cargo — pdfium,
+      # 7-Zip, GStreamer, the standard library, the fonts and the icon font
+      # — follows from about/bundled.toml, so that the file names everything
+      # a release carries and not only the About dialog does.
+      - run: python3 .github/scripts/bundled-licenses.py about/bundled.toml >> THIRD-PARTY-LICENSES.md
       - run: cargo about generate --features ext-preview-media/gstreamer about-json.hbs -o third-party.json
       - run: python3 .github/scripts/check-third-party.py third-party.json --features ext-preview-media/gstreamer
       - uses: actions/upload-artifact@v4
@@ -463,6 +471,9 @@ jobs:
             sed -e "s/@SHORT_VERSION@/${VERSION%%-*}/g" -e "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Info.plist"
             plutil -lint "$app/Info.plist"
             bin="$app/MacOS"
+            # licenses/, the texts pdfium and the standard library bring,
+            # sits with the other texts beside the bundle.
+            mv "$app/MacOS/licenses" "dist/$NAME/licenses"
           else
             cp -R target/release/bundle/. "dist/$NAME/"
             bin="dist/$NAME"
@@ -611,6 +622,16 @@ jobs:
           for file in LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md 7-Zip-License.txt; do
             test -f "$file" || { echo "missing $file"; exit 1; }
           done
+          # The licence texts of what ships outside Cargo: the components
+          # of about/bundled.toml in the file, and in licenses/ the texts
+          # the pdfium build and the toolchain brought, pdfium's own with
+          # those of the libraries built into it.
+          grep -q '^## Bundled components$' THIRD-PARTY-LICENSES.md || { echo "THIRD-PARTY-LICENSES.md has no bundled components"; exit 1; }
+          grep -q '^### pdfium ' THIRD-PARTY-LICENSES.md || { echo "THIRD-PARTY-LICENSES.md does not name pdfium"; exit 1; }
+          for file in licenses/pdfium/LICENSE licenses/rust/COPYRIGHT-library.html; do
+            test -s "$file" || { echo "missing $file"; exit 1; }
+          done
+          test "$(ls licenses/pdfium | wc -l)" -gt 5 || { echo "licenses/pdfium holds no texts of the libraries built into pdfium"; ls licenses/pdfium; exit 1; }
           # macOS: the bundle (specs/app-icons.md) — a valid Info.plist
           # naming the binary and the icon, the icon set, and the binary
           # with everything beside it in Contents/MacOS, where the checks

@@ -25,7 +25,8 @@ Release archives are built for Linux (x64 and arm64), macOS (Apple silicon) and 
 - a `plugins/` folder with one folder per plugin of the **default set**: the trash and archive providers (the 7-Zip library for disk images beside the archive plugin, with its licence), the archive, markup, hex and icon previewers, the subdirectory search and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo on Linux), the compress, compare, console and bulk-rename actions and the tarball installer, and on Linux the media previewer, which uses the system GStreamer;
 - on Windows, the Visual C++ runtime beside `rick.exe`;
 - on Linux, the desktop entry and the icons in the XDG layout under `share/`; on macOS all of it inside `Rick.app`;
-- the license, the README, the changelog and the third-party licenses.
+- the license, the README, the changelog and the third-party licenses: `THIRD-PARTY-LICENSES.md` lists the crates and, after them, what ships outside Cargo (pdfium, 7-Zip, GStreamer, the Rust standard library, the fonts and the icon font);
+- a `licenses/` folder with the texts two of those bring with them: `licenses/pdfium/`, pdfium's licence and those of the libraries built into it, and `licenses/rust/COPYRIGHT-library.html`, the notices of the Rust standard library and of the crates it is built from.
 
 `SHA256SUMS.txt` on the release page has the checksums of the archives, the packages and the lists below. The Linux builds need glibc 2.39 or later (Ubuntu 24.04). Intel Macs are not covered yet.
 
