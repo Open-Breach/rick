@@ -42,6 +42,8 @@ deny = [
     # The plugin host sits beside `app`: the binary loads plugins through it
     # and hands them to the app as extensions.
     { crate = "plugins-native", wrappers = ["rick", "tests"] },
+    # The build tasks; their library is the packaging the tests run too.
+    { crate = "xtask", wrappers = ["tests"] },
     { crate = "ui-egui", wrappers = ["rick", "tests"] },
     # Extensions see `ext` and `types` only; only the binary and the tests load them.
     { crate = "ext-preview-text", wrappers = ["rick", "tests"] },
