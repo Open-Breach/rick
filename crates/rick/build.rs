@@ -63,15 +63,19 @@ fn main() {
     // and macOS look there through a run path; Windows searches the
     // binary's directory on its own. This is build configuration, not a
     // `cfg(target_os)` in code.
-    // On macOS the bundle may also carry the GStreamer runtime under
-    // `gstreamer/lib/` (QUESTIONS.md 106); its libraries name each other
-    // through `@rpath`, and the elements GStreamer loads at run time
-    // resolve those names through the executable's run paths.
+    // On macOS a bundle carries the GStreamer runtime in the media
+    // plugin's folder, `plugins/preview-media/gstreamer/lib/`
+    // (specs/plugin-distribution.md §4). The plugin and the runtime's own
+    // libraries find it through run paths of their own; the executable's
+    // is for a binary built with the previewer compiled in (`--features
+    // gstreamer`), which links the libraries itself.
     match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
         Ok("linux") => println!("cargo:rustc-link-arg-bins=-Wl,-rpath,$ORIGIN"),
         Ok("macos") => {
             println!("cargo:rustc-link-arg-bins=-Wl,-rpath,@executable_path");
-            println!("cargo:rustc-link-arg-bins=-Wl,-rpath,@executable_path/gstreamer/lib");
+            println!(
+                "cargo:rustc-link-arg-bins=-Wl,-rpath,@executable_path/plugins/preview-media/gstreamer/lib"
+            );
         }
         // The icon and version resource (specs/app-icons.md): Explorer and
         // the Properties dialog show the Portal burst icon, "Rick" and the
