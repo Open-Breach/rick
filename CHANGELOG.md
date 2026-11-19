@@ -95,6 +95,13 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   install rick-plugin-git`, with a copy button, and Rick downloads none.
   It knows by a file named `package` beside its binary, which the two
   packages install (#269).
+- **Linux packages.** A release makes a deb for each supported Debian
+  and Ubuntu release and an rpm for each supported Fedora release, for
+  x86-64 and arm64, with the plugins every install has, and they go into
+  the apt and dnf repositories on get.openbreach.dev. Rick is installed
+  to `/usr/lib/rick/` with `rick` on the path. The packages and the Linux
+  archive are built by Trebuchet's workflow, each inside the container of
+  its release; the archive is built on the oldest of them (#282).
 - ***Look for plugins and updates online*** on the Behaviour page of the
   settings, on by default; `[registry] check` in `rick.toml`. On, Rick
   fetches the plugin list when the *Available* list is opened and, in the
