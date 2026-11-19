@@ -220,8 +220,11 @@ fn the_background_check_comes_by_itself_a_while_after_the_first_frame() {
         .with_pixels_per_point(1.0)
         .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
     settle(&mut harness);
+    // The requests first: what they hold happened before the clock is
+    // read.
+    let asked = server.requests();
     if started.elapsed() < after_start {
-        assert_eq!(server.requests(), [], "the first frames ask nobody");
+        assert_eq!(asked, [], "the first frames ask nobody");
     }
 
     // Nothing is done but drawing frames.

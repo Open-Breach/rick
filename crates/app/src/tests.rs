@@ -4898,15 +4898,27 @@ mod registry {
         }
     }
 
-    /// Runs the loop for `long`, in which `server` is asked nothing new.
-    fn left_alone(h: &mut Harness, server: &Server, long: Duration) {
+    /// Runs the loop until `until`, in which `server` is asked nothing
+    /// new. What is seen after `until` proves nothing and is not held
+    /// against the application: a machine that is slow enough to be past
+    /// it already checks nothing here.
+    fn left_alone(h: &mut Harness, server: &Server, until: Instant) {
         let asked = server.requests().len();
-        let until = Instant::now() + long;
-        while Instant::now() < until {
+        loop {
             h.settle();
-            assert_eq!(server.requests().len(), asked, "asked in the meantime");
+            // The count first: what it holds happened before the clock
+            // is read.
+            let seen = server.requests().len();
+            if Instant::now() >= until {
+                break;
+            }
+            assert_eq!(seen, asked, "asked in the meantime");
         }
     }
+
+    /// What the clock of a file and the clock of a test may differ by:
+    /// a file's time is the system's coarse one, a tick or so behind.
+    const SLACK: Duration = Duration::from_millis(100);
 
     #[test]
     fn the_start_asks_nobody_and_the_background_check_comes_a_while_after_it() {
@@ -4925,8 +4937,9 @@ mod registry {
         let started = Instant::now();
         h.registry(RegistryCommand::Start);
         assert_eq!(h.git(), None);
+        let asked = server.requests();
         if started.elapsed() < after_start {
-            assert_eq!(server.requests(), [], "the start asks nobody");
+            assert_eq!(asked, [], "the start asks nobody");
         }
 
         // The check comes by itself, and not before its time.
@@ -4940,7 +4953,7 @@ mod registry {
         assert_eq!(h.git().as_deref(), Some("0.6.0"));
         assert_eq!(h.app.plugin_registry().problem, None);
         // And then the list is good for a day.
-        left_alone(&mut h, &server, 3 * after_start);
+        left_alone(&mut h, &server, Instant::now() + 3 * after_start);
     }
 
     #[test]
@@ -4961,11 +4974,9 @@ mod registry {
         server.publish(&signer, &index(1, "0.6.1"));
         let second = until_asked(&mut h, &server, 4);
         // The list arrived after the start, so a day after the start is
-        // the earliest; the clocks of the file and of the test may differ
-        // by a moment.
-        let slack = Duration::from_millis(50);
+        // the earliest.
         assert!(
-            second.duration_since(started) + slack >= day,
+            second.duration_since(started) + SLACK >= day,
             "fetched again after {:?}",
             second.duration_since(started)
         );
@@ -4977,7 +4988,7 @@ mod registry {
         server.publish(&signer, &index(1, "0.6.2"));
         let third = until_asked(&mut h, &server, 6);
         assert!(
-            third.duration_since(started) + slack >= 2 * day,
+            third.duration_since(started) + 2 * SLACK >= 2 * day,
             "fetched a third time after {:?}",
             third.duration_since(started)
         );
@@ -4990,7 +5001,7 @@ mod registry {
         let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
         server.publish(&signer, &index(1, "0.6.0"));
         let settings = table(&server, &signer, true);
-        let (after_start, day) = (Duration::from_millis(100), Duration::from_millis(2000));
+        let (after_start, day) = (Duration::from_millis(100), Duration::from_millis(3000));
 
         // A Rick that fetched the list, and was closed.
         let fetched = Instant::now();
@@ -5006,11 +5017,11 @@ mod registry {
         h.app.set_registry_schedule(after_start, day);
         h.registry(RegistryCommand::Start);
         assert_eq!(h.git().as_deref(), Some("0.6.0"));
-        left_alone(&mut h, &server, 4 * after_start);
+        // Well past its own first look, and well before the list's day.
+        left_alone(&mut h, &server, fetched + day / 2);
         let again = until_asked(&mut h, &server, 4);
-        let slack = Duration::from_millis(50);
         assert!(
-            again.duration_since(fetched) + slack >= day,
+            again.duration_since(fetched) + SLACK >= day,
             "fetched again after {:?}",
             again.duration_since(fetched)
         );
@@ -5021,7 +5032,7 @@ mod registry {
         assert_eq!(server.requests().len(), 6);
         let later = until_asked(&mut h, &server, 8);
         assert!(
-            later.duration_since(asked) + slack >= day,
+            later.duration_since(asked) + SLACK >= day,
             "fetched again after {:?}",
             later.duration_since(asked)
         );
@@ -5034,8 +5045,9 @@ mod registry {
         let mut h = start(&fake, &table(&server, &signer, true));
         let (after_start, day) = (Duration::from_millis(100), Duration::from_millis(1500));
         h.app.set_registry_schedule(after_start, day);
+        let started = Instant::now();
         h.registry(RegistryCommand::Start);
-        let first = until_asked(&mut h, &server, 1);
+        until_asked(&mut h, &server, 1);
         h.settle();
         assert_eq!(
             h.app.plugin_registry().problem,
@@ -5043,14 +5055,15 @@ mod registry {
         );
 
         // No second try for a day, however soon the list would be there.
+        // The first try was not before its time, so a day after that is
+        // the earliest for the second.
         server.publish(&signer, &index(1, "0.6.0"));
-        left_alone(&mut h, &server, day / 2);
+        left_alone(&mut h, &server, started + day);
         let second = until_asked(&mut h, &server, 3);
-        let slack = Duration::from_millis(50);
         assert!(
-            second.duration_since(first) + slack >= day,
+            second.duration_since(started) >= after_start + day,
             "tried again after {:?}",
-            second.duration_since(first)
+            second.duration_since(started)
         );
         h.settle();
         assert_eq!(h.git().as_deref(), Some("0.6.0"));
@@ -5066,7 +5079,7 @@ mod registry {
         h.app.set_registry_schedule(after_start, day);
         h.registry(RegistryCommand::Start);
         // A day and more: not at its start, and not when it comes round.
-        left_alone(&mut h, &server, 3 * day);
+        left_alone(&mut h, &server, Instant::now() + 3 * day);
         assert_eq!(server.requests(), []);
         // Check now still asks, whatever the switch says.
         h.registry(RegistryCommand::CheckNow);
