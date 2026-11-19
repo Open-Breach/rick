@@ -2635,11 +2635,11 @@ name = "ext-vfs-s3"
 version = "0.5.0"
 dependencies = [
  "bytes",
- "chrono",
  "ext",
  "futures",
  "hex",
  "hmac 0.12.1",
+ "jiff",
  "percent-encoding",
  "platform",
  "reqwest",
