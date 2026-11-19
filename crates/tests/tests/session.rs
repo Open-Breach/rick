@@ -160,6 +160,29 @@ impl Driver {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
+
+    /// Waits until the session file holds the session the model has: what
+    /// a crash at this moment leaves for the next start. A count of writes
+    /// does not say that: the writer counts a write when it has finished,
+    /// so one of an older snapshot can still be under way when the counting
+    /// starts, and be the next one counted (issue 263).
+    fn wait_for_the_session_on_disk(&mut self) {
+        let path = self.app.session_path().to_path_buf();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            self.settle();
+            let on_disk = fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| toml::from_str::<model::Session>(&text).ok());
+            if on_disk.as_ref() == Some(&self.app.session()) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the session file does not hold the model's session: {on_disk:?}"
+            );
+        }
+    }
 }
 
 /// A tree with two folders and a few files.
@@ -362,8 +385,7 @@ fn a_crash_keeps_the_last_written_session() {
             to: local(&root.join("b")),
         });
         d.step(Command::NewTab(local(&root.join("a"))));
-        let before = d.app.session_writes();
-        d.wait_for_writes(before + 1);
+        d.wait_for_the_session_on_disk();
         // No exit hook: the process is gone.
         drop(d);
     }
