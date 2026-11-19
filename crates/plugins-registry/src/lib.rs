@@ -22,6 +22,10 @@
 //! - [`download`] fetches a package to a file and holds it against the
 //!   size and the SHA-256 the index names; a package that is another one
 //!   is deleted.
+//! - Every one of these requests is `https://`, or plain `http://` to
+//!   this machine: [`is_package_address`] is the rule, and an address
+//!   that fails it — the first or one a redirect names — is never
+//!   connected to. No plain-HTTP request leaves the machine.
 //!
 //! Nothing here decides *when* to ask or whether the user allows it: that
 //! is the application's, with the switch of the settings.
@@ -84,6 +88,17 @@ pub enum Error {
     /// an index has.
     #[error("the plugin list could not be fetched: {0}")]
     Fetch(String),
+    /// An address that is not asked, and was not: anything but
+    /// `https://`, and plain `http://` to another machine than this one.
+    /// No request was made to it.
+    #[error("{url} was not requested: it is not an https:// address")]
+    Refused {
+        /// The address.
+        url: String,
+        /// Whether it is one a request was sent on to, rather than the
+        /// one it started from.
+        redirected: bool,
+    },
     /// The signature is missing, is no minisign signature, or is not the
     /// key's signature of these bytes.
     #[error("the plugin list could not be verified")]

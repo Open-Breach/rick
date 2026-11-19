@@ -677,23 +677,232 @@ fn a_package_address_is_https_or_this_machine() {
         "https://example.org/plugin.rkp",
         "  https://get.openbreach.dev/plugins/rick/0.6.0/git-0.6.0-linux-x64.rkp ",
         "https://example.org:8443/download?file=plugin",
+        "https://192.168.1.10/plugin.rkp",
+        // Plain HTTP to this machine: the loopback addresses, however
+        // they are spelt, and the one name.
         "http://127.0.0.1:8123/plugin.rkp",
-        "http://localhost/plugin.rkp",
+        "http://127.8.9.10/plugin.rkp",
+        "http://127.1:8123/plugin.rkp",
+        "http://0x7f.0.0.1/plugin.rkp",
+        "http://2130706433/plugin.rkp",
         "http://[::1]:9000/plugin.rkp",
+        "http://[0:0:0:0:0:0:0:1]/plugin.rkp",
+        "http://localhost/plugin.rkp",
+        "HTTP://LOCALHOST:8123/plugin.rkp",
     ] {
         assert!(is_package_address(good), "{good}");
     }
     for bad in [
         "",
         "plugin.rkp",
-        "http://example.org/plugin.rkp",
-        "http://192.168.1.10/plugin.rkp",
         "ftp://example.org/plugin.rkp",
         "file:///tmp/plugin.rkp",
         "https://",
+        // Plain HTTP to another machine, near or far.
+        "http://example.org/plugin.rkp",
+        "http://192.168.1.10/plugin.rkp",
+        "http://10.0.0.1/plugin.rkp",
+        "http://169.254.1.1/plugin.rkp",
+        "http://[fe80::1]/plugin.rkp",
+        "http://128.0.0.1/plugin.rkp",
+        // Every address, which is not the loopback one.
+        "http://0.0.0.0/plugin.rkp",
+        "http://[::]/plugin.rkp",
+        // An IPv4 address inside an IPv6 one is not taken apart.
+        "http://[::ffff:127.0.0.1]/plugin.rkp",
+        // No name but `localhost`, whatever it resolves to or looks like.
+        "http://localhost./plugin.rkp",
+        "http://sub.localhost/plugin.rkp",
+        "http://localhost.example.org/plugin.rkp",
+        "http://127.0.0.1.example.org/plugin.rkp",
+        "http://localtest.me/plugin.rkp",
+        // The host is what follows the last `@`, not what stands before.
+        "http://127.0.0.1@example.org/plugin.rkp",
+        "http://localhost:80@example.org/plugin.rkp",
+        "http://example.org#@127.0.0.1/plugin.rkp",
     ] {
         assert!(!is_package_address(bad), "{bad}");
     }
+}
+
+/// A name for another machine, which no resolver is asked for: the
+/// clients of [`elsewhere`] take it for the test's own server.
+const ELSEWHERE: &str = "plugins.example";
+
+/// Clients for which [`ELSEWHERE`] is `server`: a request to that name,
+/// should one be made, arrives there and is counted. With the address of
+/// `path` under that name.
+fn elsewhere(server: &Server, path: &str) -> (crate::fetch::Clients, String) {
+    let clients = crate::fetch::Clients::resolving("0.6.0", ELSEWHERE, server.address())
+        .unwrap_or_else(|e| panic!("{e}"));
+    let port = server.address().port();
+    (clients, format!("http://{ELSEWHERE}:{port}/{path}"))
+}
+
+#[test]
+fn plain_http_to_another_machine_is_refused_before_any_connection() {
+    runtime::block_on(async {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let server = Server::start();
+        server.put("plugins/git.rkp", vec![7u8; 1000]);
+        let (clients, remote) = elsewhere(&server, "plugins/git.rkp");
+        let to = dir.path().join("git.rkp");
+
+        // The name does lead somewhere: asked past the rule, the package
+        // is there, over one connection.
+        let past = clients.local.get(&remote).send().await;
+        assert_eq!(past.map(|answer| answer.status().as_u16()).ok(), Some(200));
+        assert_eq!(server.connections(), 1);
+        assert_eq!(server.requests().len(), 1);
+
+        // Through the door it is not asked: refused as the address it
+        // is, with no file.
+        let refused =
+            crate::download::download_with(&clients, &remote, &to, None, &mut |_| {}).await;
+        assert!(
+            matches!(
+                &refused,
+                Err(Error::Refused { url, redirected: false }) if *url == remote
+            ),
+            "{refused:?}"
+        );
+        assert!(!to.exists());
+
+        // Neither is the index, nor its signature.
+        let source = Source {
+            url: remote.clone(),
+            key: Source::named(None, Some(&Signer::new(1).public_key())).key,
+            custom: true,
+        };
+        assert!(source.key.is_some());
+        let refused = clients.get(&source.url).await;
+        assert!(matches!(refused, Err(Error::Refused { .. })), "{refused:?}");
+        let refused = fetch(&source, "0.6.0").await;
+        assert!(matches!(refused, Err(Error::Refused { .. })), "{refused:?}");
+
+        // A connection opened later is counted after every one before
+        // it: there was none in between, and no request.
+        let after = clients.local.get(server.url("after")).send().await;
+        assert_eq!(after.map(|answer| answer.status().as_u16()).ok(), Some(404));
+        assert_eq!(server.connections(), 2, "the two the test opened itself");
+        let paths: Vec<String> = server.requests().into_iter().map(|r| r.path).collect();
+        assert_eq!(paths, ["plugins/git.rkp", "after"]);
+    });
+}
+
+#[test]
+fn a_redirect_to_plain_http_on_another_machine_is_refused() {
+    runtime::block_on(async {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let server = Server::start();
+        let package = vec![7u8; 1000];
+        server.put("plugins/git.rkp", package.clone());
+        let (clients, remote) = elsewhere(&server, "plugins/git.rkp");
+        // Straight to the other machine, and by way of this one.
+        server.redirect("moved.rkp", &remote);
+        server.redirect("moved-twice.rkp", "/moved.rkp");
+        let to = dir.path().join("git.rkp");
+
+        for (start, asked) in [
+            ("moved.rkp", vec!["moved.rkp"]),
+            ("moved-twice.rkp", vec!["moved-twice.rkp", "moved.rkp"]),
+        ] {
+            let before = server.requests().len();
+            let refused = crate::download::download_with(
+                &clients,
+                &server.url(start),
+                &to,
+                None,
+                &mut |_| {},
+            )
+            .await;
+            assert!(
+                matches!(
+                    &refused,
+                    Err(Error::Refused { url, redirected: true }) if *url == remote
+                ),
+                "{start}: {refused:?}"
+            );
+            assert!(!to.exists(), "{start}: no file");
+            // Only this machine was asked, and the package never.
+            let paths: Vec<String> = server.requests()[before..]
+                .iter()
+                .map(|r| r.path.clone())
+                .collect();
+            assert_eq!(paths, asked, "{start}");
+        }
+        // As many connections as requests: none was opened and left.
+        let after = clients.local.get(server.url("after")).send().await;
+        assert!(after.is_ok());
+        assert_eq!(server.connections(), 4);
+        assert_eq!(server.requests().len(), 4);
+
+        // The same redirect, asked past the rule, does arrive: it is the
+        // rule that stopped it, not the server.
+        let past = clients.local.get(&remote).send().await;
+        assert_eq!(past.map(|answer| answer.status().as_u16()).ok(), Some(200));
+    });
+}
+
+#[test]
+fn a_redirect_within_the_rule_is_followed() {
+    runtime::block_on(async {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let server = Server::start();
+        let package = vec![7u8; 1000];
+        server.put("plugins/git.rkp", package.clone());
+        let port = server.address().port();
+        // By a path, by the whole address, and by the name of this
+        // machine, which is the loopback address without a lookup.
+        server.redirect("by-path.rkp", "/plugins/git.rkp");
+        server.redirect("by-address.rkp", &server.url("plugins/git.rkp"));
+        server.redirect(
+            "by-name.rkp",
+            &format!("http://localhost:{port}/plugins/git.rkp"),
+        );
+        server.redirect("in-a-row.rkp", "by-address.rkp");
+        let to = dir.path().join("git.rkp");
+        for start in [
+            "by-path.rkp",
+            "by-address.rkp",
+            "by-name.rkp",
+            "in-a-row.rkp",
+        ] {
+            let arrived = download(&server.url(start), &to, "0.6.0", None, &mut |_| {})
+                .await
+                .unwrap_or_else(|e| panic!("{start}: {e}"));
+            assert_eq!(arrived.size, 1000, "{start}");
+            assert_eq!(std::fs::read(&to).ok(), Some(package.clone()), "{start}");
+        }
+        for request in server.requests() {
+            assert_eq!(request.header("user-agent"), Some("rick/0.6.0"));
+            assert_eq!(request.header("referer"), None, "{}", request.path);
+        }
+
+        // A redirect that leads back to itself ends, as a failed fetch.
+        server.redirect("round.rkp", "/round.rkp");
+        let before = server.requests().len();
+        let to = dir.path().join("none.rkp");
+        let failed = download(&server.url("round.rkp"), &to, "0.6.0", None, &mut |_| {}).await;
+        assert!(matches!(failed, Err(Error::Fetch(_))), "{failed:?}");
+        assert_eq!(server.requests().len() - before, 11);
+        assert!(!to.exists());
+
+        // One to what is no address at all is refused like any other.
+        server.redirect("odd.rkp", "ftp://example.org/git.rkp");
+        let refused = download(&server.url("odd.rkp"), &to, "0.6.0", None, &mut |_| {}).await;
+        assert!(
+            matches!(
+                refused,
+                Err(Error::Refused {
+                    redirected: true,
+                    ..
+                })
+            ),
+            "{refused:?}"
+        );
+        assert!(!to.exists());
+    });
 }
 
 #[test]

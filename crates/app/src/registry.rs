@@ -79,13 +79,22 @@ fn is_newer(offered: &str, installed: &str) -> bool {
     }
 }
 
-/// What an install job fails with when the package did not arrive whole:
-/// the user's words for it.
+/// What an install job fails with when the package did not arrive whole,
+/// or was not asked for because its address, or one the download was
+/// sent on to, is plain HTTP to another machine: the user's words for it.
 fn failure(error: &plugins_registry::Error) -> types::Error {
     use plugins_registry::Error;
     plugins::failure(match error {
         Error::Mismatch => t!("plugins-download-mismatch"),
         Error::Fetch(reason) => t!("plugins-download-failed", reason = reason.as_str()),
+        Error::Refused {
+            url,
+            redirected: false,
+        } => t!("plugins-address-refused", url = url.as_str()),
+        Error::Refused {
+            url,
+            redirected: true,
+        } => t!("plugins-redirect-refused", url = url.as_str()),
         other => other.to_string(),
     })
 }
@@ -127,7 +136,8 @@ impl From<&plugins_registry::Error> for RegistryProblem {
         match error {
             Error::Unverified => Self::Unverified,
             Error::NewerSchema(_) => Self::NewerRick,
-            Error::Fetch(_) => Self::Offline,
+            // An index at an address that is not asked did not arrive.
+            Error::Fetch(_) | Error::Refused { .. } => Self::Offline,
             Error::NotSetUp
             | Error::Unreadable(_)
             | Error::Mismatch
@@ -661,8 +671,10 @@ impl App {
     /// `url` into the cache and then handles it exactly as *Install from
     /// file…* handles a file — nothing is checked, a plugin of the same
     /// folder name is replaced — and notes it in the record with the
-    /// address it came from. An address that is not `https://` is no job
-    /// but an error notice.
+    /// address it came from. An address that is not `https://`, or plain
+    /// `http://` to this machine, is no job and no request but an error
+    /// notice that says `https://` is needed; a download that is sent on
+    /// to such an address fails with the same words.
     pub(crate) fn install_from_address(&mut self, url: &str, events: &mut Vec<Event>) {
         let url = url.trim().to_owned();
         if !plugins::is_package_address(&url) {
