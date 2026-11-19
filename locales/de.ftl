@@ -167,6 +167,7 @@ plugins-download-mismatch = Der Download stimmt nicht mit der Plugin-Liste über
 plugins-download-failed = Das Plugin konnte nicht heruntergeladen werden: { $reason }
 plugins-address-refused = { $url } wurde nicht abgerufen: Ein Plugin-Paket braucht eine https://-Adresse
 plugins-redirect-refused = Der Download wurde an { $url } weitergeleitet, was nicht abgerufen wurde: Ein Plugin-Paket braucht eine https://-Adresse
+plugins-redirect-inward = Der Download wurde an { $url } weitergeleitet, was nicht abgerufen wurde: Ein anderer Rechner darf einen Download nicht an diesen weiterleiten
 extensions-tab-installed = Installiert
 extensions-tab-available = Verfügbar
 extensions-tab-available-count = Verfügbar { $count }

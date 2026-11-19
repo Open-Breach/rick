@@ -25,7 +25,8 @@
 //! - Every one of these requests is `https://`, or plain `http://` to
 //!   this machine: [`is_package_address`] is the rule, and an address
 //!   that fails it — the first or one a redirect names — is never
-//!   connected to. No plain-HTTP request leaves the machine.
+//!   connected to. No plain-HTTP request leaves the machine, and no
+//!   other machine sends a request on to this one.
 //!
 //! Nothing here decides *when* to ask or whether the user allows it: that
 //! is the application's, with the switch of the settings.
@@ -98,6 +99,14 @@ pub enum Error {
         /// Whether it is one a request was sent on to, rather than the
         /// one it started from.
         redirected: bool,
+    },
+    /// An address of this machine that another machine sent a request on
+    /// to. Such a redirect is not followed, whatever the scheme, and no
+    /// request was made to the address.
+    #[error("{url} was not requested: another machine sent the request on to this one")]
+    Inward {
+        /// The address on this machine.
+        url: String,
     },
     /// The signature is missing, is no minisign signature, or is not the
     /// key's signature of these bytes.

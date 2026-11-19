@@ -30,8 +30,9 @@ plain `http://` to this machine — a loopback address written as one, or
 the name `localhost`, which the crate takes for the loopback address
 without a lookup — so that no plain-HTTP request leaves the machine. Each
 address a redirect names is held against it again before it is asked,
-plain HTTP never goes through a proxy, and an address that is refused
-gets no request. When to ask, and whether the user allows it, is `app`'s. The `fixtures` feature adds what a test
+a redirect from another machine to this one is refused whatever its
+scheme, plain HTTP never goes through a proxy, and an address that is
+refused gets no request. When to ask, and whether the user allows it, is `app`'s. The `fixtures` feature adds what a test
 needs to stand in for the registry — a key pair made on the spot that
 signs as minisign does (`ring` and `blake2`), and a server on this machine
 that counts what it is asked and can send a request on — and is the only
