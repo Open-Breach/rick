@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
-use app::{App, Command, Event};
+use app::{App, Command, Event, RegistryCommand};
 use egui::{ViewportBuilder, ViewportCommand, ViewportId};
 use egui_dock::{DockArea, TabViewer};
 use ext::{ActionCtx, ActionId, Invocation, Level};
@@ -5687,7 +5687,13 @@ impl eframe::App for RickUi {
         self.embedded = ctx.embed_viewports();
         self.sync_window_ref(frame, &ctx);
         // The integration check: asked for once the first frame is drawn.
-        self.integration.frame(&mut self.requests);
+        // The plugin list with it: what is cached is read then, and
+        // fetched when the settings allow it and it is a day old
+        // (specs/plugin-distribution.md §6).
+        if self.integration.frame(&mut self.requests) {
+            self.requests
+                .push(Request::Command(Command::Registry(RegistryCommand::Start)));
+        }
         self.draw_window(ui, root);
         // The Settings window: its own viewport, or an area over the root
         // window where the backend embeds viewports.

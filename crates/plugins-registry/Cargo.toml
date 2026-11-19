@@ -1,0 +1,39 @@
+[package]
+name = "plugins-registry"
+version.workspace = true
+description = "Rick's client of the plugin registry: the signed index of the plugins a release publishes, its cache and the rule of which build fits this Rick."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# `fixtures` adds what a test needs to stand in for the registry (the
+# `fixtures` module): a key pair made on the spot that signs as minisign
+# does, and a server on this machine that counts what it is asked. The
+# crate's own tests and the acceptance tests in `tests` use it; nothing
+# Rick does at run time reaches it.
+[features]
+default = []
+fixtures = ["dep:base64", "dep:blake2", "dep:ring", "dep:runtime", "dep:tokio"]
+
+[dependencies]
+minisign-verify = { workspace = true }
+# The two GETs: over rustls with ring, as the cloud plugins have it.
+reqwest = { workspace = true }
+rustls = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+base64 = { workspace = true, optional = true }
+blake2 = { workspace = true, optional = true }
+ring = { workspace = true, optional = true }
+runtime = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["net", "io-util"], optional = true }
+
+[dev-dependencies]
+plugins-registry = { path = ".", features = ["fixtures"] }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

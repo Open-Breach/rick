@@ -81,7 +81,18 @@ rows after it waiting for that job and then acting on the installed copy,
 and the apply's end names the copy for the UI to relaunch from; without the
 plugin the row is *Unsupported* and the others work against the folder
 Rick runs from. The
-*Shell integration* switch unties the console and the tab. It depends on `types`,
-`runtime`, `platform`, `ext`, `vfs`, `vfs-local`, `vfs-rick`, `model` and
-`ops` (the built-in operations it loads); only `ui-egui`, `rick` and
-`tests` may depend on it.
+*Shell integration* switch unties the console and the tab. It decides when
+the plugin registry is asked (`registry`, specs/plugin-distribution.md §6):
+`RegistryCommand::Start`, once the first frame is drawn, reads the cached
+plugin list and fetches it when it is a day old, `Opened` fetches when the
+*Available* view is opened, both only while `[registry] check` is on, and
+`CheckNow` fetches whatever the switch says; each is a job off the loop's
+thread through the `plugins-registry` crate, and `App::plugin_registry` is
+what came of it: whether a key is there at all, the last index that
+verified, when it was fetched, and why the last attempt gave none. A Rick
+without a key or with a pre-release version asks nothing. The cache is
+`cache/` in the config directory unless the binary names the platform's
+(`App::set_cache_dir`). It depends on `types`,
+`runtime`, `platform`, `ext`, `vfs`, `vfs-local`, `vfs-rick`, `model`,
+`ops` (the built-in operations it loads) and `plugins-registry`; only
+`ui-egui`, `rick` and `tests` may depend on it.

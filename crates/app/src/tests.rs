@@ -4753,3 +4753,343 @@ mod timeline {
         assert!(!h.app.model().timeline_visible(pane));
     }
 }
+
+/// The plugin registry (specs/plugin-distribution.md §6), against a
+/// registry of the test's own: a server on this machine and a key made
+/// here, named by `[registry] url` and `public_key`.
+mod registry {
+    use std::time::SystemTime;
+
+    use plugins_registry::fixtures::{INDEX_PATH, Server, Signer};
+    use serde_json::json;
+
+    use super::*;
+    use crate::{CACHE_DIR, RegistryCommand, RegistryProblem};
+
+    /// The Rick the tests ask as.
+    const RICK: &str = "0.6.0";
+
+    /// An index with Git for [`RICK`] on this platform, in version
+    /// `version`.
+    fn index(schema: u32, version: &str) -> serde_json::Value {
+        json!({
+            "schema": schema,
+            "generated": "2026-11-19T02:00:00Z",
+            "apps": { "rick": { "plugins": [{
+                "id": "git",
+                "name": "Git",
+                "description": "Status badges and the Git actions of the context menu.",
+                "publisher": "Open-Breach",
+                "meta": { "points": ["decorator", "action"], "triggers": { "markers": [".git"] } },
+                "builds": [{
+                    "version": version,
+                    "app_version": RICK,
+                    "api_version": API_VERSION,
+                    "platform": plugins_registry::platform(),
+                    "url": "https://example.invalid/git.rkp",
+                    "size": 1024,
+                    "sha256": "aa".repeat(32),
+                }],
+            }] } },
+        })
+    }
+
+    /// The `[registry]` table that names `server` and `signer`, with the
+    /// switch as `check` has it.
+    fn table(server: &Server, signer: &Signer, check: bool) -> String {
+        format!(
+            "[registry]\ncheck = {check}\nurl = \"{}\"\npublic_key = \"{}\"\n",
+            server.index_url(),
+            signer.public_key()
+        )
+    }
+
+    /// A Rick of version [`RICK`] started on `fake`'s config directory,
+    /// whose `rick.toml` is `settings`.
+    fn start(fake: &Arc<Fake>, settings: &str) -> Harness {
+        let config = fake.config_dir();
+        fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(config.join(SETTINGS_FILE), settings).unwrap_or_else(|e| panic!("{e}"));
+        let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let ui = Arc::new(Scripted::default());
+        let mut app = App::new(Config {
+            platform: fake.clone(),
+            ui: ui.clone(),
+            extensions: Vec::new(),
+            config_dir: Some(config),
+            start: Some(local(root.path())),
+        });
+        app.set_rick_version(RICK);
+        let mut harness = Harness {
+            root,
+            fake: fake.clone(),
+            ui,
+            app,
+            events: Vec::new(),
+        };
+        harness.settle();
+        harness
+    }
+
+    fn fake() -> Arc<Fake> {
+        Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")))
+    }
+
+    impl Harness {
+        /// Sends the registry `command` and waits for what comes of it.
+        fn registry(&mut self, command: RegistryCommand) {
+            self.send(Command::Registry(command));
+            self.settle();
+        }
+
+        /// The version of Git in the index the application holds.
+        fn git(&self) -> Option<String> {
+            let index = self.app.plugin_registry().index.as_ref()?;
+            Some(index.plugin("git")?.builds.first()?.version.clone())
+        }
+    }
+
+    #[test]
+    fn the_start_fetches_the_list_and_the_next_start_reads_it_from_the_cache() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(&signer, &index(1, "0.6.0"));
+        let settings = table(&server, &signer, true);
+
+        let mut h = start(&fake, &settings);
+        let registry = h.app.plugin_registry().clone();
+        assert!(registry.set_up && !registry.checking);
+        assert_eq!(registry.rick, RICK);
+        assert_eq!(registry.custom, Some(server.index_url()));
+        assert_eq!(
+            registry.index, None,
+            "nothing is read before the first frame"
+        );
+        assert_eq!(server.requests(), [], "and nothing is asked");
+
+        h.registry(RegistryCommand::Start);
+        let requests = server.requests();
+        let paths: Vec<&str> = requests.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(paths, [INDEX_PATH, "registry/index.json.minisig"]);
+        assert_eq!(requests[0].header("user-agent"), Some("rick/0.6.0"));
+        let registry = h.app.plugin_registry();
+        assert_eq!(h.git().as_deref(), Some("0.6.0"));
+        assert!(registry.fetched.is_some() && !registry.checking);
+        assert_eq!(registry.problem, None);
+        // The cache is in the config directory of a Rick that was given
+        // one of its own.
+        let cached = fake
+            .config_dir()
+            .join(CACHE_DIR)
+            .join(plugins_registry::CACHE_DIR);
+        assert!(cached.join(plugins_registry::INDEX_FILE).is_file());
+        assert!(cached.join(plugins_registry::SIGNATURE_FILE).is_file());
+
+        // The next start, the same day: the list is there and nobody is
+        // asked.
+        let mut again = start(&fake, &settings);
+        again.registry(RegistryCommand::Start);
+        assert_eq!(again.git().as_deref(), Some("0.6.0"));
+        assert_eq!(again.app.plugin_registry().fetched, registry.fetched);
+        assert_eq!(server.requests().len(), 2, "at most once a day");
+
+        // A day later the start asks again.
+        let file = fs::File::options()
+            .write(true)
+            .open(cached.join(plugins_registry::INDEX_FILE))
+            .unwrap_or_else(|e| panic!("{e}"));
+        file.set_modified(SystemTime::now() - Duration::from_hours(25))
+            .unwrap_or_else(|e| panic!("{e}"));
+        drop(file);
+        server.publish(&signer, &index(1, "0.6.1"));
+        let mut later = start(&fake, &settings);
+        later.registry(RegistryCommand::Start);
+        assert_eq!(later.git().as_deref(), Some("0.6.1"));
+        assert_eq!(server.requests().len(), 4);
+    }
+
+    #[test]
+    fn with_the_switch_off_nothing_is_fetched_by_itself() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(&signer, &index(1, "0.6.0"));
+        let mut h = start(&fake, &table(&server, &signer, false));
+
+        // The start, the view opened, a selection: not one request.
+        h.registry(RegistryCommand::Start);
+        h.registry(RegistryCommand::Opened);
+        let pane = h.app.model().focused;
+        h.send(Command::Select {
+            pane,
+            change: SelectionChange::All,
+        });
+        h.settle();
+        let registry = h.app.plugin_registry();
+        assert!(registry.set_up && !registry.checking);
+        assert_eq!((&registry.index, registry.problem), (&None, None));
+        assert_eq!(server.requests(), [], "nothing is fetched by itself");
+
+        // *Check now* is the user asking.
+        h.registry(RegistryCommand::CheckNow);
+        assert_eq!(server.requests().len(), 2);
+        assert_eq!(h.git().as_deref(), Some("0.6.0"));
+
+        // What was cached is shown by the next start, which asks nobody.
+        let mut again = start(&fake, &table(&server, &signer, false));
+        again.registry(RegistryCommand::Start);
+        assert_eq!(again.git().as_deref(), Some("0.6.0"));
+        assert_eq!(server.requests().len(), 2);
+    }
+
+    #[test]
+    fn opening_the_view_fetches_while_the_switch_is_on() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(&signer, &index(1, "0.6.0"));
+        let mut h = start(&fake, &table(&server, &signer, true));
+        h.registry(RegistryCommand::Start);
+        assert_eq!(server.requests().len(), 2);
+        server.publish(&signer, &index(1, "0.6.1"));
+        h.registry(RegistryCommand::Opened);
+        assert_eq!(server.requests().len(), 4);
+        assert_eq!(h.git().as_deref(), Some("0.6.1"));
+    }
+
+    #[test]
+    fn an_index_that_does_not_verify_is_not_used_and_the_last_good_one_is() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(&signer, &index(1, "0.6.0"));
+        let settings = table(&server, &signer, true);
+        let mut h = start(&fake, &settings);
+        h.registry(RegistryCommand::Start);
+        let fetched = h.app.plugin_registry().fetched;
+
+        // The registry now serves an index somebody else signed.
+        server.publish(&Signer::new(2), &index(1, "6.6.6"));
+        h.registry(RegistryCommand::CheckNow);
+        let registry = h.app.plugin_registry();
+        assert_eq!(registry.problem, Some(RegistryProblem::Unverified));
+        assert_eq!(h.git().as_deref(), Some("0.6.0"), "the last good one");
+        assert_eq!(registry.fetched, fetched);
+        assert!(!registry.checking);
+
+        // It was never cached: the next start has the good one, and a
+        // fetch of a good index takes the problem away.
+        let mut again = start(&fake, &settings);
+        again.registry(RegistryCommand::Start);
+        assert_eq!(again.git().as_deref(), Some("0.6.0"));
+        assert_eq!(again.app.plugin_registry().problem, None);
+        again.registry(RegistryCommand::CheckNow);
+        assert_eq!(
+            again.app.plugin_registry().problem,
+            Some(RegistryProblem::Unverified)
+        );
+        server.publish(&signer, &index(1, "0.6.1"));
+        again.registry(RegistryCommand::CheckNow);
+        assert_eq!(again.app.plugin_registry().problem, None);
+        assert_eq!(again.git().as_deref(), Some("0.6.1"));
+    }
+
+    #[test]
+    fn a_cached_index_that_does_not_verify_is_fetched_again_at_the_start() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(&signer, &index(1, "0.6.0"));
+        let settings = table(&server, &signer, true);
+        let mut h = start(&fake, &settings);
+        h.registry(RegistryCommand::Start);
+        assert_eq!(server.requests().len(), 2);
+
+        // Somebody changes the cached file. It is fresh, and no reason to
+        // wait a day: the start drops it and asks.
+        let cached = fake
+            .config_dir()
+            .join(CACHE_DIR)
+            .join(plugins_registry::CACHE_DIR)
+            .join(plugins_registry::INDEX_FILE);
+        fs::write(&cached, index(1, "6.6.6").to_string()).unwrap_or_else(|e| panic!("{e}"));
+        let mut again = start(&fake, &settings);
+        again.registry(RegistryCommand::Start);
+        assert_eq!(server.requests().len(), 4);
+        assert_eq!(again.git().as_deref(), Some("0.6.0"));
+        assert_eq!(again.app.plugin_registry().problem, None);
+
+        // With the switch off it is dropped all the same, and said.
+        fs::write(&cached, index(1, "6.6.6").to_string()).unwrap_or_else(|e| panic!("{e}"));
+        let mut off = start(&fake, &table(&server, &signer, false));
+        off.registry(RegistryCommand::Start);
+        assert_eq!(server.requests().len(), 4);
+        assert_eq!(off.git(), None);
+        assert_eq!(
+            off.app.plugin_registry().problem,
+            Some(RegistryProblem::Unverified)
+        );
+    }
+
+    #[test]
+    fn a_newer_schema_and_a_lost_network_say_so_and_change_nothing() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(&signer, &index(1, "0.6.0"));
+        let mut h = start(&fake, &table(&server, &signer, true));
+        h.registry(RegistryCommand::Start);
+
+        server.publish(&signer, &index(2, "0.9.0"));
+        h.registry(RegistryCommand::CheckNow);
+        assert_eq!(
+            h.app.plugin_registry().problem,
+            Some(RegistryProblem::NewerRick)
+        );
+        assert_eq!(h.git().as_deref(), Some("0.6.0"));
+
+        runtime::block_on(server.stop());
+        h.registry(RegistryCommand::CheckNow);
+        assert_eq!(
+            h.app.plugin_registry().problem,
+            Some(RegistryProblem::Offline)
+        );
+        assert_eq!(h.git().as_deref(), Some("0.6.0"));
+        assert!(!h.app.plugin_registry().checking);
+    }
+
+    #[test]
+    fn without_a_key_and_as_a_pre_release_nothing_is_asked() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(&signer, &index(1, "0.6.0"));
+        let occasions = [
+            RegistryCommand::Start,
+            RegistryCommand::Opened,
+            RegistryCommand::CheckNow,
+        ];
+
+        // A key that is none: the registry is off.
+        let unkeyed = format!(
+            "[registry]\nurl = \"{}\"\npublic_key = \"not a key\"\n",
+            server.index_url()
+        );
+        let mut h = start(&fake, &unkeyed);
+        assert!(!h.app.plugin_registry().set_up);
+        for occasion in occasions {
+            h.registry(occasion);
+        }
+        assert_eq!(h.app.plugin_registry().index, None);
+
+        // This build's own key: while the committed file is empty, the
+        // registry is off however the address is set.
+        let built_with_a_key = plugins_registry::Source::new(None, None).key.is_some();
+        if !built_with_a_key {
+            let addressed = format!("[registry]\nurl = \"{}\"\n", server.index_url());
+            let mut h = start(&self::fake(), &addressed);
+            assert!(!h.app.plugin_registry().set_up);
+            for occasion in occasions {
+                h.registry(occasion);
+            }
+        }
+
+        // A pre-release fits nothing the registry has, and does not ask.
+        let mut dev = start(&self::fake(), &table(&server, &signer, true));
+        dev.app.set_rick_version("0.6.0-dev");
+        for occasion in occasions {
+            dev.registry(occasion);
+        }
+        assert!(dev.app.plugin_registry().set_up);
+        assert_eq!(dev.app.plugin_registry().index, None);
+
+        assert_eq!(server.requests(), [], "not one request");
+    }
+}
