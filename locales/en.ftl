@@ -400,7 +400,8 @@ extensions-command = command
 # An install from the plugin registry that failed (issue 251).
 plugins-download-mismatch = The download did not match the plugin list
 plugins-download-failed = The plugin could not be downloaded: { $reason }
-plugins-address-refused = { $url } is not an https:// address
+plugins-address-refused = { $url } was not requested: a plugin package needs an https:// address
+plugins-redirect-refused = The download was sent on to { $url }, which was not requested: a plugin package needs an https:// address
 # The plugin registry in the Extensions dialogue
 # (specs/plugin-distribution.md §6 and §7, issue 251).
 extensions-tab-installed = Installed

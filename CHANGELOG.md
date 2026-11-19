@@ -84,7 +84,11 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   updated (#268).
 - ***Install from URL…*** beside *Install from file…*: the plugin package
   at an `https://` address is downloaded and then handled exactly as a
-  file is. Nothing is checked (#269).
+  file is. Nothing is checked. Plain `http://` is taken only from this
+  machine, a loopback address or `localhost`, and the same holds for
+  every address a download is redirected to: no plain-HTTP request for a
+  plugin leaves the machine, and an address that is refused is not asked
+  at all (#269, #274).
 - **A Rick installed from a deb or an rpm** takes its separate plugins
   from its package manager: in place of **Install**, an available plugin
   shows the command, `sudo apt install rick-plugin-git` or `sudo dnf

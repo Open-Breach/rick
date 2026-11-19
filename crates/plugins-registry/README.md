@@ -24,12 +24,18 @@ fetches a package to a file, hashing it as it is written, and holds it
 against the size and the SHA-256 the index names: it stops as soon as more
 bytes arrive than were named, and a package that is another one is
 deleted. Without an expectation it checks nothing, which is *Install from
-URL…*: `is_package_address` is the rule for such an address, `https://`
-with a host or plain `http://` on this machine. When to ask, and whether
-the user allows it, is `app`'s. The `fixtures` feature adds what a test
+URL…*. `is_package_address` is the rule of which addresses are asked, and
+it holds for every request of the crate: `https://` with any host, or
+plain `http://` to this machine — a loopback address written as one, or
+the name `localhost`, which the crate takes for the loopback address
+without a lookup — so that no plain-HTTP request leaves the machine. Each
+address a redirect names is held against it again before it is asked,
+plain HTTP never goes through a proxy, and an address that is refused
+gets no request. When to ask, and whether the user allows it, is `app`'s. The `fixtures` feature adds what a test
 needs to stand in for the registry — a key pair made on the spot that
 signs as minisign does (`ring` and `blake2`), and a server on this machine
-that counts what it is asked — and is the only use the crate has for
+that counts what it is asked and can send a request on — and is the only
+use the crate has for
 `runtime`; no test asks the real registry. It depends on `reqwest` over
 `rustls` with ring, as the cloud plugins do, `minisign-verify`, `semver`,
 `sha2`, `serde` and `serde_json`; `app` and `tests` may depend on it.

@@ -5821,16 +5821,21 @@ mod install {
         let mut h = start(&server, &signer);
         h.take_events();
 
-        // Not https, and not this machine: no job, a notice.
+        // Not https, and not this machine: no job and no request, a
+        // notice that says what is needed.
+        let asked_before = server.requests().len();
         for refused in [
             "http://example.org/hello.rkp",
+            "http://192.168.1.10/hello.rkp",
+            "http://localhost.example.org/hello.rkp",
             "hello.rkp",
             "ftp://example.org/h.rkp",
         ] {
             h.send(Command::InstallPluginFrom(refused.to_owned()));
             h.settle();
             let events = h.take_events();
-            let notice = format!("{refused} is not an https:// address");
+            let notice =
+                format!("{refused} was not requested: a plugin package needs an https:// address");
             assert!(
                 events.iter().any(|e| matches!(
                     e,
@@ -5840,6 +5845,7 @@ mod install {
             );
         }
         assert_eq!(jobs(&h.app), []);
+        assert_eq!(server.requests().len(), asked_before);
 
         // Nothing at the address.
         h.send(Command::InstallPluginFrom(server.url("downloads/none.rkp")));
@@ -5853,6 +5859,27 @@ mod install {
             said.starts_with("The plugin could not be downloaded: "),
             "{said}"
         );
+
+        // An address of this machine that sends the download on to plain
+        // HTTP elsewhere: the job fails with the same words, and the
+        // other machine is not asked.
+        server.redirect("downloads/moved.rkp", "http://plugins.example/hello.rkp");
+        h.send(Command::InstallPluginFrom(
+            server.url("downloads/moved.rkp"),
+        ));
+        h.settle();
+        let ended = jobs(&h.app);
+        let Some((name, JobState::Failed(said))) = ended.last() else {
+            panic!("the job failed: {ended:?}");
+        };
+        assert_eq!(name, "Install moved.rkp");
+        assert_eq!(
+            said,
+            "The download was sent on to http://plugins.example/hello.rkp, which was not \
+             requested: a plugin package needs an https:// address"
+        );
+        assert_eq!(server.requests().len(), asked_before + 2);
+        assert_eq!(h.app.plugins(), [], "nothing was installed");
 
         // Something that is no package: it is handled as such a file is.
         server.put("downloads/page.rkp", "<html>not a package</html>");

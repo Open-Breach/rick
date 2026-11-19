@@ -942,8 +942,23 @@ fn install_from_url_downloads_a_package_and_handles_it_as_a_file() {
     assert_eq!(count(&harness, "Install from URL"), 0);
     assert!(harness.state().extensions_open());
 
-    // An address: the package is downloaded, unpacked and noted with
-    // where it came from.
+    // Plain HTTP to another machine is no address either: the prompt
+    // says that https:// is needed, Install takes no click, and nothing
+    // is asked of anybody.
+    let asked = server.requests().len();
+    click(&mut harness, "Install from URL…");
+    typed(&mut harness, "http://plugins.example/probe-1.0.rkp");
+    harness.get_by_label("Enter the https:// address of a plugin package.");
+    click(&mut harness, "Install");
+    harness.get_by_label("Install from URL");
+    assert!(!fake.config_dir().join("plugins").exists());
+    assert_eq!(server.requests().len(), asked);
+    harness.key_press(egui::Key::Escape);
+    steps(&mut harness);
+
+    // An address — plain HTTP here, which this machine's own server
+    // speaks: the package is downloaded, unpacked and noted with where
+    // it came from.
     click(&mut harness, "Install from URL…");
     typed(&mut harness, &address);
     assert_eq!(

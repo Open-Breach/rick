@@ -108,7 +108,9 @@ impl Packaging {
 }
 
 /// Whether `url` is an address *Install from URL…* takes: `https://` with
-/// a host, or `http://` on this machine.
+/// a host, or plain `http://` to this machine — a loopback address or the
+/// name `localhost` — so that no plain-HTTP request for a plugin leaves
+/// it.
 #[must_use]
 pub fn is_package_address(url: &str) -> bool {
     plugins_registry::is_package_address(url)
