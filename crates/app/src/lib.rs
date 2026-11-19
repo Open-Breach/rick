@@ -99,7 +99,8 @@ pub use ops::hash;
 pub use ops::{PermissionRequest, Recursion};
 pub use places::{PLACES_FILE, defaults as default_places, virtual_icon};
 pub use registry::{
-    Available, CACHE_DIR, Offering, PluginRegistry, RegistryCommand, RegistryProblem, Update,
+    Available, CACHE_DIR, Offering, PluginRegistry, REGISTRY_AFTER_START, RegistryCommand,
+    RegistryProblem, Update,
 };
 pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
 pub use settings::SETTINGS_FILE;
@@ -365,9 +366,11 @@ enum Msg {
     /// announced last.
     RegistryDone {
         fetched: Option<Result<plugins_registry::Cached, plugins_registry::Error>>,
-        start: bool,
+        command: RegistryCommand,
         announced: Option<String>,
     },
+    /// The timer of the plugin list's background check has run out.
+    RegistryDue,
     /// A job started waiting for its volume, or stopped.
     Schedule,
     /// The mounted volumes were enumerated.
@@ -4790,9 +4793,10 @@ impl App {
             Msg::RegistryChecking => self.registry_checking(),
             Msg::RegistryDone {
                 fetched,
-                start,
+                command,
                 announced,
-            } => self.registry_done(fetched, start, announced.as_deref(), events),
+            } => self.registry_done(fetched, command, announced.as_deref(), events),
+            Msg::RegistryDue => self.registry_command(RegistryCommand::Daily),
             Msg::PluginInstalled(Err(text))
             | Msg::PluginRemoved {
                 result: Err(text), ..
@@ -6634,6 +6638,7 @@ impl Drop for App {
     fn drop(&mut self) {
         self.settings_watch.cancel();
         self.volumes_watch.cancel();
+        self.plugin_registry.stop();
         for live in self.live.values() {
             live.cancel.cancel();
             for child in live.children.values() {

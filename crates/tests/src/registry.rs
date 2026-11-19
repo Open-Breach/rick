@@ -83,6 +83,17 @@ pub fn index(plugins: &[Value]) -> Value {
     })
 }
 
+/// The background check of the plugin list, as the application's timer
+/// brings it a minute after the start and whenever the list is a day old
+/// (specs/plugin-distribution.md §6): a test does not wait the minute.
+/// What comes of it reaches the window through the application's loop.
+pub fn background_check(app: &mut app::App) {
+    app.handle(
+        app::Command::Registry(app::RegistryCommand::Daily),
+        &mut Vec::new(),
+    );
+}
+
 /// The `[registry]` table that points a Rick at `server` and the key of
 /// `signer`, with *Look for plugins and updates online* as `check` has it.
 #[must_use]

@@ -5768,8 +5768,8 @@ impl eframe::App for RickUi {
         self.sync_window_ref(frame, &ctx);
         // The integration check: asked for once the first frame is drawn.
         // The plugin list with it: what is cached is read then, and
-        // fetched when the settings allow it and it is a day old
-        // (specs/plugin-distribution.md §6).
+        // nobody is asked. The application's background check follows a
+        // minute later (specs/plugin-distribution.md §6).
         if self.integration.frame(&mut self.requests) {
             self.requests
                 .push(Request::Command(Command::Registry(RegistryCommand::Start)));
