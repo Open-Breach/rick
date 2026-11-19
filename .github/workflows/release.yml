@@ -319,26 +319,24 @@ jobs:
           done
           echo "what the plugin links of GStreamer:"
           otool -L "$media/libext_preview_media.dylib" | grep -i gst
-      # A short video for the smoke test to play: the test pattern, H.264
-      # where an encoder is there and MPEG-4 part 2 otherwise, written by
-      # the GStreamer the build has (the system's on Linux, the official
-      # runtime on macOS and Windows). The frames are 4:2:0, as a camera
-      # or a phone writes them: left to itself the encoder keeps the
-      # pattern's 4:4:4, which the decoder of macOS does not take.
+      # A short video for the smoke test to play: the test pattern as
+      # MPEG-4 part 2, written by the GStreamer the build has (the system's
+      # on Linux, the official runtime on macOS and Windows). GStreamer
+      # decodes that codec itself on every platform, through libav, whose
+      # library lies in the media plugin's folder on macOS and Windows; so
+      # the test is of the runtime, not of the machine. H.264 would be:
+      # the macOS runners are virtual machines without a hardware video
+      # decoder, and GStreamer's hardware decoder of macOS stops playback
+      # there (vtdec_hw, "VTDecompressionSessionCreate returned -12906").
       - name: media sample
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p check
-          encoder=""
-          for candidate in x264enc openh264enc avenc_mpeg4; do
-            if gst-inspect-1.0 --exists "$candidate"; then encoder="$candidate"; break; fi
-          done
-          test -n "$encoder" || { echo "no video encoder in this GStreamer"; exit 1; }
-          echo "encoder: $encoder"
+          gst-inspect-1.0 --exists avenc_mpeg4 || { echo "no MPEG-4 encoder (avenc_mpeg4) in this GStreamer"; exit 1; }
           gst-launch-1.0 -q videotestsrc num-buffers=90 pattern=smpte ! \
             video/x-raw,width=320,height=240,framerate=30/1 ! videoconvert ! \
-            video/x-raw,format=I420 ! "$encoder" ! mp4mux ! filesink location=check/sample.mp4
+            avenc_mpeg4 ! mp4mux ! filesink location=check/sample.mp4
           ls -l check/sample.mp4
       - uses: actions/download-artifact@v4
         with: { name: third-party-licenses }
