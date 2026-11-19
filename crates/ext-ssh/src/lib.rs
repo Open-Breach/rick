@@ -44,8 +44,9 @@ pub mod shell;
 use std::sync::Arc;
 
 use ext::{
-    API_VERSION, Capabilities, Connector, Extension, Manifest, Platforms, Points, Provider,
-    Registry, SettingField, SettingKind, SettingsSchema, Text, Version,
+    API_VERSION, Capabilities, ConnectionSection, ConnectionSpec, Connector, Extension, Manifest,
+    Platforms, Points, Provider, Registry, SettingField, SettingKind, SettingsSchema, Text,
+    Version,
 };
 use types::{Error, ExtId, Location, ProviderId, VPath};
 
@@ -160,6 +161,11 @@ impl SshExtension {
                 points: Points::PROVIDER | Points::ACTION,
                 platforms: Platforms::ALL,
                 previews: &[],
+                markers: &[],
+                connections: &[ConnectionSpec {
+                    section: ConnectionSection::Network,
+                    title: "SSH",
+                }],
                 commands: &[],
             },
         }

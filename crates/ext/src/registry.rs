@@ -86,6 +86,8 @@
 //!     points: Points::DECORATOR | Points::ACTION,
 //!     platforms: Platforms::ALL,
 //!     previews: &[],
+//!     markers: &[],
+//!     connections: &[],
 //!     commands: &[],
 //! };
 //!
@@ -192,8 +194,14 @@ use crate::search::SearchIndex;
 /// 21 a provider's files can open from where they lie (#156):
 /// [`Provider`] gained `local_path`, defaulted; 22 a form field can take
 /// its value from the clipboard (#221): [`Field`](crate::Field) gained
-/// `clipboard`, the rule `Field::from_clipboard` sets.
-pub const API_VERSION: u32 = 22;
+/// `clipboard`, the rule `Field::from_clipboard` sets; 23 a manifest says
+/// what the plugin is for (#250, specs/plugin-distribution.md §5):
+/// [`Manifest`] gained `markers`, the names of an entry that make a folder
+/// the plugin's business, and `connections`, the
+/// [`ConnectionSpec`](crate::ConnectionSpec)s of what it adds to *Add…* in
+/// the side panel; with `previews` they are the plugin's triggers, and
+/// `plugin.toml` carries all three.
+pub const API_VERSION: u32 = 23;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
@@ -347,6 +355,18 @@ pub struct Manifest {
     /// without previewers, and for a previewer that claims no file by its
     /// name (the hex view, which takes what nothing else recognises).
     pub previews: &'static [&'static str],
+    /// The names of an entry directly inside a folder that make the folder
+    /// the extension's business: `.git` for Git, `.svn` for Subversion.
+    /// Compared as whole names, case as written. With `previews` and
+    /// `connections` these are the extension's triggers: what Rick can
+    /// know about a plugin without having it
+    /// (specs/plugin-distribution.md §5). Empty for an extension no folder
+    /// calls for.
+    pub markers: &'static [&'static str],
+    /// The kinds of connection the extension adds to *Add…* in the side
+    /// panel, each with its section and its title; `plugin.toml` carries
+    /// them as `[[connections]]`. Empty for an extension that adds none.
+    pub connections: &'static [crate::ConnectionSpec],
     /// The subcommands of the `rick` command line the extension provides
     /// (`rick <name> <args…>`), each with its help line: what `rick
     /// --help` lists and `plugin.toml` carries as `[[commands]]`. The
@@ -905,6 +925,8 @@ mod tests {
             points: Points::empty(),
             platforms: Platforms::ALL,
             previews: &[],
+            markers: &[],
+            connections: &[],
             commands: &[],
         }));
         assert!(matches!(result, Err(Error::Unsupported(_))));
@@ -963,6 +985,8 @@ mod tests {
             points: Points::ACTION,
             platforms: Platforms::ALL,
             previews: &[],
+            markers: &[],
+            connections: &[],
             commands: &[],
         };
         assert!(matches!(
@@ -1022,6 +1046,8 @@ mod tests {
             points: Points::empty(),
             platforms: Platforms::ALL,
             previews: &[],
+            markers: &[],
+            connections: &[],
             commands: &[],
         };
         assert!(matches!(
@@ -1030,6 +1056,8 @@ mod tests {
         ));
         assert!(registry.commands().is_empty());
         let declared = Manifest {
+            markers: &[],
+            connections: &[],
             commands: &[CommandSpec {
                 name: "say",
                 help: "Say the arguments back",

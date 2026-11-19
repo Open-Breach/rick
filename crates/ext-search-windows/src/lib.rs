@@ -81,6 +81,8 @@ impl WindowsSearchExtension {
                 points: Points::SEARCH_INDEX,
                 platforms: Platforms::WINDOWS,
                 previews: &[],
+                markers: &[],
+                connections: &[],
                 commands: &[],
             },
         }

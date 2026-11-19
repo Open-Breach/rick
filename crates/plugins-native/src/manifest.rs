@@ -11,10 +11,11 @@
 //! name = "Git"
 //! description = "Shows Git status badges and adds the Git actions."
 //! version = "0.5.0"
-//! api_version = 22
+//! api_version = 23
 //! points = ["decorator", "action"]
 //! platforms = ["linux", "macos", "windows"]
 //! previews = []
+//! markers = [".git"]
 //! rick = "0.5.0"
 //! toolchain = "rustc 1.97.0 (2d8144b78 2026-07-07)"
 //!
@@ -34,10 +35,22 @@
 //! name = "install"
 //! help = "Install a tar or zip archive as an application"
 //! ```
+//!
+//! `previews`, `markers` and `connections` are the plugin's triggers: what
+//! Rick can know about a plugin without having it
+//! (specs/plugin-distribution.md §5). A plugin that adds a kind of
+//! connection to *Add…* in the side panel carries one `[[connections]]`
+//! table per kind, the section and the title:
+//!
+//! ```toml
+//! [[connections]]
+//! section = "cloud"
+//! title = "S3"
+//! ```
 
 use std::path::{Path, PathBuf};
 
-use ext::{CommandSpec, Manifest, Platforms, Points};
+use ext::{CommandSpec, ConnectionSpec, Manifest, Platforms, Points};
 use serde::{Deserialize, Serialize};
 
 /// The file's name inside a plugin's directory.
@@ -130,6 +143,26 @@ impl From<&CommandSpec> for CommandToml {
     }
 }
 
+/// A kind of connection the plugin adds to *Add…* in the side panel: one
+/// `[[connections]]` table, from the manifest's [`ConnectionSpec`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectionToml {
+    /// The side panel's section, by name: `network` or `cloud`.
+    pub section: String,
+    /// The title of the kind of connection, as its *Add…* entry reads.
+    pub title: String,
+}
+
+impl From<&ConnectionSpec> for ConnectionToml {
+    fn from(spec: &ConnectionSpec) -> Self {
+        Self {
+            section: spec.section.name().to_owned(),
+            title: spec.title.to_owned(),
+        }
+    }
+}
+
 /// What `plugin.toml` holds: the extension's manifest as the host can read
 /// it without loading the library, plus the facts of the build the library
 /// came from.
@@ -158,6 +191,11 @@ pub struct PluginToml {
     /// loading the plugin. Absent in a manifest written before API 12.
     #[serde(default)]
     pub previews: Vec<String>,
+    /// The names of an entry directly inside a folder that make the folder
+    /// the plugin's business (`.git`), compared as whole names. Absent in
+    /// a manifest written before API 23.
+    #[serde(default)]
+    pub markers: Vec<String>,
     /// The version of Rick the plugin was built with: a plugin loads in
     /// that release and in no other (specs/plugin-distribution.md §3).
     /// Absent in a manifest written before the field existed, which the
@@ -168,6 +206,11 @@ pub struct PluginToml {
     pub toolchain: String,
     /// The library's file name per platform.
     pub library: Library,
+    /// The kinds of connection the plugin adds to *Add…* in the side
+    /// panel, as `[[connections]]` tables after the library. Absent in a
+    /// manifest written before API 23.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connections: Vec<ConnectionToml>,
     /// The subcommands of the `rick` command line the plugin provides,
     /// as `[[commands]]` tables after the library; what `rick --help`
     /// lists without loading the plugin. Absent in a manifest written
@@ -201,9 +244,15 @@ impl PluginToml {
                 .map(|n| (*n).to_owned())
                 .collect(),
             previews: manifest.previews.iter().map(|n| (*n).to_owned()).collect(),
+            markers: manifest.markers.iter().map(|n| (*n).to_owned()).collect(),
             rick: rick.to_owned(),
             toolchain: toolchain.to_owned(),
             library: Library::for_crate(crate_name),
+            connections: manifest
+                .connections
+                .iter()
+                .map(ConnectionToml::from)
+                .collect(),
             commands: manifest.commands.iter().map(CommandToml::from).collect(),
         }
     }
@@ -324,7 +373,7 @@ impl Head {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ext::{API_VERSION, Capabilities, Version};
+    use ext::{API_VERSION, Capabilities, ConnectionSection, Version};
     use types::ExtId;
 
     #[test]
@@ -339,6 +388,11 @@ mod tests {
             points: Points::DECORATOR | Points::ACTION,
             platforms: Platforms::ALL,
             previews: &["pdf", "tar.gz"],
+            markers: &[".git"],
+            connections: &[ConnectionSpec {
+                section: ConnectionSection::Cloud,
+                title: "Amazon S3",
+            }],
             commands: &[CommandSpec {
                 name: "install",
                 help: "Install an archive",
@@ -352,6 +406,14 @@ mod tests {
         );
         assert_eq!(toml.previews, ["pdf", "tar.gz"]);
         assert_eq!(toml.rick, "0.5.0");
+        assert_eq!(toml.markers, [".git"]);
+        assert_eq!(
+            toml.connections,
+            [ConnectionToml {
+                section: "cloud".to_owned(),
+                title: "Amazon S3".to_owned()
+            }]
+        );
         assert_eq!(
             toml.commands,
             [CommandToml {
@@ -372,7 +434,12 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
         assert!(text.starts_with("id = \"git\"\n"), "{text}");
         assert!(text.contains("\nrick = \"0.5.0\"\n"), "{text}");
+        assert!(text.contains("\nmarkers = [\".git\"]\n"), "{text}");
         assert!(text.contains("\n[library]\n"), "{text}");
+        assert!(
+            text.contains("\n[[connections]]\nsection = \"cloud\"\ntitle = \"Amazon S3\"\n"),
+            "{text}"
+        );
         assert!(
             text.contains("\n[[commands]]\nname = \"install\"\nhelp = \"Install an archive\"\n"),
             "{text}"
@@ -408,6 +475,10 @@ mod tests {
             "an older manifest names no commands"
         );
         assert!(parsed.rick.is_empty(), "an older manifest names no Rick");
+        assert!(
+            parsed.markers.is_empty() && parsed.connections.is_empty(),
+            "an older manifest names no markers and no connections"
+        );
         assert!(matches!(parsed.points(), Err(ManifestError::UnknownPoint(p)) if p == "wizard"));
         assert_eq!(parsed.library.for_os("macos"), Some("b"));
         assert_eq!(parsed.library.for_os("plan9"), None);

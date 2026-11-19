@@ -82,6 +82,8 @@ fn tracker() -> Arc<dyn Extension> {
         points: Points::SEARCH_INDEX,
         platforms: Platforms::ALL,
         previews: &[],
+        markers: &[],
+        connections: &[],
         commands: &[],
     }))
 }

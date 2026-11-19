@@ -79,6 +79,8 @@ impl MediaPreview {
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
                 previews: PREVIEWS,
+                markers: &[],
+                connections: &[],
                 commands: &[],
             },
         }
