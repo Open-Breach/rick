@@ -3,6 +3,11 @@
 //! parts are what the release's extensions register — the README is
 //! checked, not trusted.
 //!
+//! One fixed part comes with a release: the privacy paragraph of section
+//! 9 is asked of a README that describes 0.6.0 or later and refused in
+//! one that describes an earlier release, so the page stays as it is
+//! until the release pull request and cannot miss the paragraph then.
+//!
 //! The README describes the latest release, so its live parts are held
 //! against the code only when the workspace's version is a release
 //! version: between releases, on a `-dev` version, the page stays as the
@@ -266,6 +271,22 @@ fn the_readme_has_the_structure_of_its_spec() {
         .any(|(at, _)| text[at + 1..].starts_with(|c: char| c.is_ascii_digit()));
     assert!(!numbered, "README.md names an issue or pull request number");
     assert!(!text.contains("QUESTIONS.md"));
+}
+
+/// The privacy paragraph (specs/readme.md, section 9): in force from the
+/// release that fetches the plugin list by itself, word for word and in
+/// its place, and not in a README that describes a release before it.
+/// The spec that asks for the statement quotes the same words.
+#[test]
+fn the_privacy_paragraph_comes_with_the_release_that_fetches_the_plugin_list() {
+    let spec = read("specs/readme.md");
+    readme::check_privacy(&read("README.md"), &spec).unwrap_or_else(|e| panic!("{e}"));
+    let wording = readme::privacy_wording(&spec).unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        read("specs/system-integration.md").contains(&format!("\n  > {wording}\n")),
+        "specs/system-integration.md §9 does not quote the privacy paragraph of \
+         specs/readme.md, section 9, word for word"
+    );
 }
 
 /// The file types under the six items (specs/readme.md, *File types*): one

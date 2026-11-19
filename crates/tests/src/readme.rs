@@ -14,6 +14,11 @@
 //! second time: its wording is fixed in specs/readme.md, and [`features`]
 //! takes the sentence from there ([`fixed_wording`]).
 //!
+//! One fixed part is held against the spec here too, because it comes
+//! into force with a release: the privacy paragraph (specs/readme.md,
+//! section 9), which a README has from [`PRIVACY_SINCE`] on and not
+//! before ([`check_privacy`]).
+//!
 //! The markers:
 //!
 //! ```text
@@ -53,6 +58,32 @@ pub enum ReadmeError {
     /// The spec's Features list quotes no wording for an item.
     #[error("specs/readme.md quotes no wording for item {0} of its Features list")]
     NoWording(u8),
+    /// The spec does not quote the privacy paragraph as one paragraph
+    /// under its heading.
+    #[error("specs/readme.md does not quote one paragraph under `{PRIVACY_HEADING}`")]
+    NoPrivacyWording,
+    /// The README describes a release that has the privacy paragraph,
+    /// and the paragraph is not there, not in its place, or not the
+    /// spec's word for word.
+    #[error(
+        "README.md describes {version} and has no privacy paragraph where specs/readme.md \
+         (section 9) puts it: the spec's words, as the first line under the rule above the \
+         closing links. The release pull request of {PRIVACY_SINCE} adds it"
+    )]
+    NoPrivacy {
+        /// The version the status line names.
+        version: String,
+    },
+    /// The README describes a release before the privacy paragraph and
+    /// has it all the same.
+    #[error(
+        "README.md describes {version}, which fetches no plugin list, and has the privacy \
+         paragraph of {PRIVACY_SINCE} already: it comes with the release pull request"
+    )]
+    PrivacyEarly {
+        /// The version the status line names.
+        version: String,
+    },
     /// A previewer declares a file type the README has no kind for.
     #[error("{previewer} previews {name}, which has no kind in the README's file types")]
     NoKind {
@@ -726,6 +757,93 @@ pub fn version(readme: &str) -> Result<String, ReadmeError> {
         .ok_or(ReadmeError::NoVersion)
 }
 
+/// The first release whose README has the privacy paragraph: the first
+/// that fetches the plugin list by itself (specs/readme.md, section 9;
+/// specs/plugin-distribution.md §6).
+pub const PRIVACY_SINCE: &str = "0.6.0";
+
+/// The heading of specs/readme.md under which the privacy paragraph is
+/// quoted.
+pub const PRIVACY_HEADING: &str = "### 9. Privacy (fixed)";
+
+/// The privacy paragraph as `spec`, the text of specs/readme.md, fixes
+/// it: the one paragraph of the block quote under [`PRIVACY_HEADING`].
+///
+/// # Errors
+///
+/// [`ReadmeError::NoPrivacyWording`] when the spec has no such heading,
+/// no quote under it before the next heading, or a quote of more than
+/// one paragraph.
+pub fn privacy_wording(spec: &str) -> Result<&str, ReadmeError> {
+    let (_, section) = spec
+        .split_once(PRIVACY_HEADING)
+        .ok_or(ReadmeError::NoPrivacyWording)?;
+    let mut quoted = section
+        .lines()
+        .skip(1)
+        .take_while(|line| !line.starts_with('#'))
+        .skip_while(|line| !line.starts_with('>'))
+        .take_while(|line| line.starts_with('>'))
+        .map(|line| line.trim_start_matches('>').trim());
+    match (quoted.next(), quoted.next()) {
+        (Some(paragraph), None) if !paragraph.is_empty() => Ok(paragraph),
+        _ => Err(ReadmeError::NoPrivacyWording),
+    }
+}
+
+/// The three numbers of a release's version, without what follows them:
+/// `0.6.0-rc1` is `[0, 6, 0]`.
+fn numbers(version: &str) -> Option<[u64; 3]> {
+    let mut numbers = version
+        .split(['-', '+'])
+        .next()?
+        .split('.')
+        .map(|number| number.parse::<u64>().ok());
+    Some([numbers.next()??, numbers.next()??, numbers.next()??])
+}
+
+/// Holds `readme` against the privacy paragraph `spec`, the text of
+/// specs/readme.md, fixes (section 9). This is how the paragraph comes
+/// into force with a release and not before, while the README stays
+/// untouched between releases:
+///
+/// - A README whose status line names [`PRIVACY_SINCE`] or a later
+///   release has the paragraph, word for word, as a line of its own: the
+///   first under the rule (`---`) that sets the closing lines off, above
+///   the line of links.
+/// - A README that names an earlier release does not have it: it
+///   describes a release that makes no request by itself.
+///
+/// The release pull request writes the new version into the status line
+/// (`cargo xtask readme`), and from that commit this fails until the
+/// paragraph is there.
+///
+/// # Errors
+///
+/// [`ReadmeError::NoPrivacy`] and [`ReadmeError::PrivacyEarly`] as
+/// above; [`ReadmeError::NoPrivacyWording`] when the spec quotes none;
+/// [`ReadmeError::NoBlock`] and [`ReadmeError::NoVersion`] when the
+/// status line names no release.
+pub fn check_privacy(readme: &str, spec: &str) -> Result<(), ReadmeError> {
+    let wording = privacy_wording(spec)?;
+    let version = version(readme)?;
+    let since = numbers(PRIVACY_SINCE).ok_or(ReadmeError::NoVersion)?;
+    let described = numbers(&version).ok_or(ReadmeError::NoVersion)?;
+    if described >= since {
+        // Under the rule, a paragraph of its own, then the links.
+        let in_place = format!("\n---\n\n{wording}\n\n[");
+        if readme.matches(wording).count() == 1 && readme.contains(&in_place) {
+            Ok(())
+        } else {
+            Err(ReadmeError::NoPrivacy { version })
+        }
+    } else if readme.contains(wording) {
+        Err(ReadmeError::PrivacyEarly { version })
+    } else {
+        Ok(())
+    }
+}
+
 /// The README brought up to the release `version`: the version in the
 /// status line and the call to action, whose wording stays as it is, the
 /// Features list and the file types from `facts`, with the wording `spec`
@@ -947,6 +1065,131 @@ mod tests {
             regenerate(&new, SPEC, "0.5.0", &facts(), &platforms),
             Ok(new)
         );
+    }
+
+    /// A spec that quotes a privacy paragraph, and the paragraph.
+    const PRIVACY_SPEC: &str = "### 8. Portal animation (fixed)\n\nAn animation.\n\n\
+        ### 9. Privacy (fixed)\n\nOne paragraph. Verbatim:\n\n\
+        > Rick asks *one* thing by itself.\n\n- From 0.6.0.\n\n### Closing lines\n\n- Links.\n";
+    const PRIVACY: &str = "Rick asks *one* thing by itself.";
+
+    /// A README that describes `version`, with `foot` as its end.
+    fn readme_of(version: &str, foot: &str) -> String {
+        format!(
+            "# Rick\n\n<!-- generated:status -->\nv{version} · early.\n\n\
+             [Download v{version}](#install) now.\n<!-- /generated:status -->\n\n\
+             ## Join in\n\nCome.\n\n{foot}"
+        )
+    }
+
+    #[test]
+    fn the_privacy_paragraph_is_the_one_the_spec_quotes() {
+        assert_eq!(privacy_wording(PRIVACY_SPEC), Ok(PRIVACY));
+        for spec in [
+            // No such section, no quote in it, and a quote that belongs
+            // to the next section.
+            "### 8. Portal animation (fixed)\n\n> Not this.\n",
+            "### 9. Privacy (fixed)\n\nOne paragraph.\n",
+            "### 9. Privacy (fixed)\n\nOne paragraph.\n\n### Closing lines\n\n> Not this.\n",
+            // Two paragraphs are not one.
+            "### 9. Privacy (fixed)\n\n> One.\n>\n> Two.\n",
+            "### 9. Privacy (fixed)\n\n>\n",
+        ] {
+            assert_eq!(
+                privacy_wording(spec),
+                Err(ReadmeError::NoPrivacyWording),
+                "{spec:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_privacy_paragraph_comes_into_force_with_its_release() {
+        let without = "---\n\n[Building](docs/building.md)\n\nLicensed.\n";
+        let with = format!("---\n\n{PRIVACY}\n\n[Building](docs/building.md)\n\nLicensed.\n");
+        let missing = |version: &str| {
+            Err(ReadmeError::NoPrivacy {
+                version: version.to_owned(),
+            })
+        };
+
+        // Before the release: the README is as the last release left it,
+        // and the paragraph would describe a request that release does
+        // not make.
+        for version in ["0.4.0", "0.5.0", "0.5.9"] {
+            assert_eq!(
+                check_privacy(&readme_of(version, without), PRIVACY_SPEC),
+                Ok(()),
+                "{version}"
+            );
+            assert_eq!(
+                check_privacy(&readme_of(version, &with), PRIVACY_SPEC),
+                Err(ReadmeError::PrivacyEarly {
+                    version: version.to_owned()
+                }),
+                "{version}"
+            );
+        }
+
+        // From the release on: the status line names it, and the
+        // paragraph has to be there.
+        for version in ["0.6.0", "0.6.1", "0.10.0", "1.0.0"] {
+            assert_eq!(
+                check_privacy(&readme_of(version, without), PRIVACY_SPEC),
+                missing(version),
+                "{version}"
+            );
+            assert_eq!(
+                check_privacy(&readme_of(version, &with), PRIVACY_SPEC),
+                Ok(()),
+                "{version}"
+            );
+        }
+
+        // Word for word, and in its place.
+        for (case, foot) in [
+            (
+                "other words",
+                "---\n\nRick asks one thing by itself.\n\n[Building](docs/building.md)\n"
+                    .to_owned(),
+            ),
+            (
+                "above the rule",
+                format!("{PRIVACY}\n\n---\n\n[Building](docs/building.md)\n"),
+            ),
+            (
+                "under the links",
+                format!("---\n\n[Building](docs/building.md)\n\n{PRIVACY}\n"),
+            ),
+            (
+                "inside another paragraph",
+                format!("---\n\nNote: {PRIVACY}\n\n[Building](docs/building.md)\n"),
+            ),
+            (
+                "twice",
+                format!("{PRIVACY}\n\n---\n\n{PRIVACY}\n\n[Building](docs/building.md)\n"),
+            ),
+        ] {
+            assert_eq!(
+                check_privacy(&readme_of("0.6.0", &foot), PRIVACY_SPEC),
+                missing("0.6.0"),
+                "{case}"
+            );
+        }
+
+        // A spec that quotes no paragraph, and a README that names no
+        // release, are said as what they are.
+        assert_eq!(
+            check_privacy(&readme_of("0.6.0", &with), "### 9. Privacy (fixed)\n"),
+            Err(ReadmeError::NoPrivacyWording)
+        );
+        assert_eq!(
+            check_privacy("# Rick\n", PRIVACY_SPEC),
+            Err(ReadmeError::NoBlock(STATUS))
+        );
+        assert_eq!(numbers("0.6.0-rc1+build.5"), Some([0, 6, 0]));
+        assert_eq!(numbers("0.6"), None);
+        assert_eq!(numbers("six"), None);
     }
 
     #[test]
