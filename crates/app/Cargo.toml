@@ -19,6 +19,8 @@ ops = { workspace = true }
 plugins-registry = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
+# The SHA-256 of a plugin package, for the record of what was installed.
+sha2 = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "macros"] }
 toml = { workspace = true }
 encoding_rs = { workspace = true }

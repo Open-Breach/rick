@@ -21,19 +21,39 @@
 //! - A Rick with a pre-release part in its version fits nothing the
 //!   registry has, and asks for nothing.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use plugins_registry::{Cache, Cached, Index, Source, due, is_pre_release, refresh};
-use types::JobId;
+use ext::{Points, t};
+use plugins_registry::{
+    Cache, Cached, Expected, Index, Offer, Source, download, due, is_pre_release, refresh,
+};
+use types::{JobId, Progress};
 
+use crate::plugins::{self, Origin};
 use crate::{App, Msg};
 
 /// The folder of the config directory that is the cache of a Rick started
 /// on a config directory of its own (`--config-dir`), and of every
 /// application the binary did not name another one for.
 pub const CACHE_DIR: &str = "cache";
+
+/// The folder of the cache a package is downloaded to before it is
+/// unpacked.
+const DOWNLOADS_DIR: &str = "downloads";
+
+/// What an install job fails with when the package did not arrive whole:
+/// the user's words for it.
+fn failure(error: &plugins_registry::Error) -> types::Error {
+    use plugins_registry::Error;
+    plugins::failure(match error {
+        Error::Mismatch => t!("plugins-download-mismatch"),
+        Error::Fetch(reason) => t!("plugins-download-failed", reason = reason.as_str()),
+        other => other.to_string(),
+    })
+}
 
 /// An occasion to read the plugin list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,9 +93,11 @@ impl From<&plugins_registry::Error> for RegistryProblem {
             Error::Unverified => Self::Unverified,
             Error::NewerSchema(_) => Self::NewerRick,
             Error::Fetch(_) => Self::Offline,
-            Error::NotSetUp | Error::Unreadable(_) | Error::Key(_) | Error::Io { .. } => {
-                Self::Unreadable
-            }
+            Error::NotSetUp
+            | Error::Unreadable(_)
+            | Error::Mismatch
+            | Error::Key(_)
+            | Error::Io { .. } => Self::Unreadable,
         }
     }
 }
@@ -107,6 +129,51 @@ pub struct PluginRegistry {
     pub problem: Option<RegistryProblem>,
 }
 
+/// A plugin of the *Available* view: one the registry has a build of
+/// that fits this Rick, and that is in neither plugins folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Available {
+    /// The extension id.
+    pub id: String,
+    /// The plugin's name; its id when the list gives none.
+    pub name: String,
+    /// What it does, in one line.
+    pub description: String,
+    /// The version of the build that fits.
+    pub version: String,
+    /// The extension points it fills.
+    pub points: Points,
+    /// The file name extensions its previewers claim.
+    pub previews: Vec<String>,
+    /// The names of an entry that make a folder its business.
+    pub markers: Vec<String>,
+    /// The titles of the kinds of connection it adds.
+    pub connections: Vec<String>,
+    /// The size of its package in bytes.
+    pub size: u64,
+    /// Its install is running.
+    pub installing: bool,
+}
+
+/// What the *Available* view has to show (specs/plugin-distribution.md §3
+/// and §6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Offering {
+    /// No public key: *The plugin list is not set up in this build*.
+    NotSetUp,
+    /// This Rick's version has a pre-release part, and nothing fits it.
+    PreRelease,
+    /// This Rick is older than the registry's oldest release: its plugins
+    /// are no longer published.
+    TooOld,
+    /// No plugin list yet: none was cached and none fetched. Why is in
+    /// [`PluginRegistry::problem`], or it is the switch that is off.
+    Nothing,
+    /// The plugins on offer, in the list's order; empty when every plugin
+    /// for this Rick is installed, or none is published for it.
+    Plugins(Vec<Available>),
+}
+
 /// The registry's state and the work in flight.
 #[derive(Debug)]
 pub(crate) struct RegistryRun {
@@ -118,6 +185,8 @@ pub(crate) struct RegistryRun {
     cache_read: bool,
     /// The running job; a second one is never started beside it.
     job: Option<JobId>,
+    /// The installs from the registry that are running, by plugin id.
+    installing: BTreeMap<String, JobId>,
     /// Where the index is and which key signs it, as `rick.toml` had it
     /// at the start: another address or key is taken up by the next start.
     source: Source,
@@ -143,6 +212,7 @@ impl RegistryRun {
             cache_dir,
             cache_read: false,
             job: None,
+            installing: BTreeMap::new(),
             source,
         }
     }
@@ -273,6 +343,151 @@ impl App {
             }
             None => {}
         }
+    }
+
+    /// What the *Available* view shows now: why there is no list, or the
+    /// plugins of the list that fit this Rick and are in neither plugins
+    /// folder. A plugin removed in this session is on offer again.
+    #[must_use]
+    pub fn offering(&self) -> Offering {
+        let run = &self.plugin_registry;
+        if !run.view.set_up {
+            return Offering::NotSetUp;
+        }
+        if is_pre_release(&run.view.rick) {
+            return Offering::PreRelease;
+        }
+        let Some(index) = &run.view.index else {
+            return Offering::Nothing;
+        };
+        match index.offer(&run.view.platform, &run.view.rick) {
+            Offer::PreRelease => Offering::PreRelease,
+            Offer::TooOld => Offering::TooOld,
+            Offer::Plugins(offered) => Offering::Plugins(
+                offered
+                    .into_iter()
+                    .filter(|offered| {
+                        !self
+                            .plugins
+                            .iter()
+                            .any(|row| row.id == offered.plugin.id && !row.removed)
+                    })
+                    .map(|offered| {
+                        let plugin = offered.plugin;
+                        let triggers = &plugin.meta.triggers;
+                        Available {
+                            id: plugin.id.clone(),
+                            name: if plugin.name.is_empty() {
+                                plugin.id.clone()
+                            } else {
+                                plugin.name.clone()
+                            },
+                            description: plugin.description.clone(),
+                            version: offered.build.version.clone(),
+                            points: plugin
+                                .meta
+                                .points
+                                .iter()
+                                .filter_map(|name| Points::named(name))
+                                .fold(Points::empty(), |all, point| all | point),
+                            previews: triggers.previews.clone(),
+                            markers: triggers.markers.clone(),
+                            connections: triggers
+                                .connections
+                                .iter()
+                                .map(|connection| connection.title.clone())
+                                .collect(),
+                            size: offered.build.size,
+                            installing: run.installing.contains_key(&plugin.id),
+                        }
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    /// **Install** on the available plugin `id`: a job that downloads the
+    /// package of the build that fits into the cache, holds it against
+    /// the size and the SHA-256 the list names, unpacks it into the
+    /// per-user plugins folder as *Install from file…* does and notes it
+    /// in the record as the registry's. The job is in the operations
+    /// area, counts the bytes and can be cancelled; a package that is
+    /// another one is deleted and the job fails, and nothing reaches the
+    /// plugins folder.
+    pub(crate) fn install_available(&mut self, id: &str) {
+        let run = &self.plugin_registry;
+        if run.installing.contains_key(id) {
+            return;
+        }
+        let Some(index) = run.view.index.clone() else {
+            return;
+        };
+        let Some(plugin) = index.plugin(id) else {
+            return;
+        };
+        let Some(build) = plugin.fitting(&run.view.platform, &run.view.rick).cloned() else {
+            return;
+        };
+        let name = if plugin.name.is_empty() {
+            id.to_owned()
+        } else {
+            plugin.name.clone()
+        };
+        let rick = run.view.rick.clone();
+        let downloads = run.cache_dir.join(DOWNLOADS_DIR);
+        let package = downloads.join(format!(
+            "{id}-{}.{}",
+            build.version,
+            plugins::PACKAGE_EXTENSION
+        ));
+        let dir = self.plugins_dir();
+        let tx = self.mailbox.clone();
+        let handle = self
+            .jobs
+            .spawn_named(format!("Install {name}"), move |job| async move {
+                let total = Some(build.size);
+                job.progress.report(Progress::Bytes { done: 0, total });
+                std::fs::create_dir_all(&downloads)?;
+                let expected = Expected {
+                    size: build.size,
+                    sha256: &build.sha256,
+                };
+                let progress = job.progress.clone();
+                download(&build.url, &package, &rick, Some(expected), &mut |done| {
+                    progress.report(Progress::Bytes { done, total });
+                })
+                .await
+                .map_err(|error| failure(&error))?;
+                let unpacked = {
+                    let package = package.clone();
+                    runtime::handle()
+                        .spawn_blocking(move || {
+                            let unpacked = plugins::unpack(&package, &dir, Origin::Registry, None);
+                            // The package has done its work either way.
+                            let _ = std::fs::remove_file(&package);
+                            unpacked
+                        })
+                        .await
+                };
+                let (plugin, record) = unpacked
+                    .map_err(|join| plugins::failure(join.to_string()))?
+                    .map_err(|error| plugins::failure(error.to_string()))?;
+                tx.send(Msg::PluginRecord(record));
+                tx.send(Msg::PluginInstalled(Ok(Box::new(plugin))));
+                Ok(())
+            });
+        self.plugin_registry
+            .installing
+            .insert(id.to_owned(), handle.id);
+    }
+
+    /// A job ended: when it was an install from the registry, that
+    /// install is no longer running, and `true` says it was one.
+    pub(crate) fn install_finished(&mut self, job: JobId) -> bool {
+        let installing = &mut self.plugin_registry.installing;
+        let before = installing.len();
+        installing.retain(|_, running| *running != job);
+        installing.len() < before
     }
 
     /// An index that verified is the one to show.

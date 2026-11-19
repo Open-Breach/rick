@@ -387,6 +387,9 @@ extensions-remove = Remove
 extensions-where = Plugins live in the plugins folder beside the binary and in the config directory; a per-user plugin wins on an id clash.
 extensions-install = Install from file…
 extensions-install-title = Install a plugin from a file
+# An install from the plugin registry that failed (issue 251).
+plugins-download-mismatch = The download did not match the plugin list
+plugins-download-failed = The plugin could not be downloaded: { $reason }
 shell-phosphor-fill = phosphor-fill
 close = Close
 shell-restore = Restore
