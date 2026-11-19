@@ -67,6 +67,7 @@ mod properties;
 mod providers;
 mod readme;
 mod real_chords;
+mod registry;
 mod remote_cap;
 mod remote_providers;
 mod removed_media;
