@@ -2,7 +2,9 @@
 //!
 //! Fixture plugins with a wrong API version, a wrong toolchain, another
 //! platform and a panicking entry point are refused or caught, listed with
-//! their reason, and the host keeps running; a per-user plugin wins over
+//! their reason, and the host keeps running; a plugin built for another
+//! Rick is refused for that before its library is opened (issue 250); a
+//! per-user plugin wins over
 //! the one beside the binary; disabling a plugin writes `rick.toml` and the
 //! next start lists it disabled; a job spawned inside a plugin shows in the
 //! job table and cancels from it; the Git plugin decorates a work tree and
@@ -145,6 +147,102 @@ fn fixture_plugins_are_refused_or_caught_and_the_host_keeps_running() {
     assert_eq!(registry.extensions(), &[types::ExtId("probe")]);
     assert_eq!(registry.previewers().len(), 1);
     assert_eq!(registry.actions().len(), 1);
+}
+
+/// The reason the host refused the plugin `id` with, word for word.
+fn refusal<'a>(host: &'a Host, id: &str) -> &'a str {
+    match status_of(host, id) {
+        PluginStatus::Refused(reason) => reason,
+        other => panic!("{id}: expected a refusal, got {other:?}"),
+    }
+}
+
+/// Issue 250, item 2: `plugin.toml` names the Rick the plugin was built
+/// with, and the host refuses another one's before it opens the library
+/// (specs/plugin-distribution.md §3).
+#[test]
+fn a_plugin_built_for_another_rick_is_refused_and_its_library_never_opened() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let plugins = dir.path().join("plugins");
+    // The bundler's manifest names this build's Rick, and loads.
+    let own = install(&plugins, "plugin_probe", |t| {
+        assert_eq!(t.rick, plugins_native::HOST_RICK);
+        assert_eq!(t.rick, env!("CARGO_PKG_VERSION"), "the workspace's version");
+    });
+    // The release before, with a library that would load.
+    let before = install(&plugins, "plugin_probe", |t| {
+        t.id = "probe-before".into();
+        t.rick = "0.4.1".into();
+    });
+    // The same with a library whose entry point panics, and with a file
+    // that is no library: opening either would give another reason.
+    let panics = install(&plugins, "plugin_panic", |t| {
+        t.id = "panic-before".into();
+        t.rick = "0.4.1".into();
+    });
+    let broken = install(&plugins, "plugin_probe", |t| {
+        t.id = "broken-before".into();
+        t.rick = "0.4.1".into();
+    });
+    let library = Library::for_crate("plugin_probe");
+    let library = library
+        .for_os(std::env::consts::OS)
+        .unwrap_or_else(|| panic!("no library name for this OS"));
+    fs::write(broken.join(library), "not a library").unwrap_or_else(|e| panic!("{e}"));
+    // A manifest from before the field existed.
+    let unknown = install(&plugins, "plugin_probe", |t| t.id = "probe-unknown".into());
+    let manifest = unknown.join(MANIFEST_FILE);
+    let text = fs::read_to_string(&manifest).unwrap_or_else(|e| panic!("{e}"));
+    let without = text.replace(&format!("rick = \"{}\"\n", plugins_native::HOST_RICK), "");
+    assert_ne!(without, text, "the manifest names its Rick: {text}");
+    fs::write(&manifest, without).unwrap_or_else(|e| panic!("{e}"));
+    // A release to come, whose manifest holds a key this host does not
+    // know: still refused for its release, and listed by its name.
+    let later = install(&plugins, "plugin_probe", |t| {
+        t.id = "probe-later".into();
+        t.name = "Later probe".into();
+        t.version = "99.0.0".into();
+        t.rick = "99.0.0".into();
+    });
+    let manifest = later.join(MANIFEST_FILE);
+    let text = fs::read_to_string(&manifest).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(&manifest, format!("holograms = true\n{text}")).unwrap_or_else(|e| panic!("{e}"));
+
+    let host = Host::load(&options(vec![(Source::BesideBinary, plugins)]));
+    assert_eq!(status_of(&host, "probe"), &PluginStatus::Loaded);
+    assert_eq!(refusal(&host, "probe-before"), "Built for Rick 0.4.1");
+    assert_eq!(refusal(&host, "panic-before"), "Built for Rick 0.4.1");
+    assert_eq!(refusal(&host, "broken-before"), "Built for Rick 0.4.1");
+    assert_eq!(refusal(&host, "probe-unknown"), "Built for an unknown Rick");
+    assert_eq!(refusal(&host, "probe-later"), "Built for Rick 99.0.0");
+    let row = host
+        .plugins()
+        .iter()
+        .find(|p| p.id == "probe-later")
+        .unwrap_or_else(|| panic!("{:?}", host.plugins()));
+    assert_eq!(
+        (row.name.as_str(), row.version.as_str()),
+        ("Later probe", "99.0.0")
+    );
+    assert_eq!(host.extensions().len(), 1, "{:?}", host.plugins());
+
+    // The proof that no library of another release was opened: the list
+    // the kernel keeps of the files this process has mapped names the one
+    // plugin that loaded and none of the refused ones. The list is Linux's;
+    // elsewhere the reasons above stand for it, since a library that
+    // panics and a file that is none were refused for their release.
+    if std::env::consts::OS == "linux" {
+        let maps = fs::read_to_string("/proc/self/maps").unwrap_or_else(|e| panic!("{e}"));
+        let mapped = |dir: &Path| {
+            let dir = fs::canonicalize(dir).unwrap_or_else(|e| panic!("{e}"));
+            maps.contains(&format!("{}/", dir.display()))
+        };
+        assert!(mapped(&own), "the loaded plugin's library is mapped");
+        for dir in [&before, &panics, &broken, &unknown, &later] {
+            assert!(!mapped(dir), "{} was opened", dir.display());
+        }
+    }
+    drop(host);
 }
 
 #[test]
@@ -479,6 +577,11 @@ fn the_extensions_dialogue_lists_the_plugins_and_its_switch_writes_the_setting()
         t.name = "Old probe".into();
         t.api_version = API_VERSION + 1;
     });
+    install(&plugins, "plugin_probe", |t| {
+        t.id = "probe-rick".into();
+        t.name = "Probe of 0.4".into();
+        t.rick = "0.4.1".into();
+    });
     let host = Host::load(&options(vec![(Source::BesideBinary, plugins)]));
 
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
@@ -513,7 +616,7 @@ fn the_extensions_dialogue_lists_the_plugins_and_its_switch_writes_the_setting()
     // Both are listed, under what they mainly contribute, with what the
     // manifest says: the probe's description is the test plugin's.
     harness.get_by_label("PREVIEWERS");
-    harness.get_by_label("2 installed  ·  2 enabled  ·  1 needs attention");
+    harness.get_by_label("3 installed  ·  3 enabled  ·  2 need attention");
     row(&mut harness, "Probe");
     harness.get_by_label("The test plugin of the plugin host.");
     harness.get_by_label("Built-in plugin");
@@ -524,7 +627,13 @@ fn the_extensions_dialogue_lists_the_plugins_and_its_switch_writes_the_setting()
         .get_all_by_label_contains("extension API version")
         .count();
     assert!(refused >= 1, "the host's reason is shown");
-    assert_eq!(harness.get_all_by_label("Needs attention").count(), 2);
+    // The mark of each of the two refused rows, and the chip of the one
+    // whose details are open.
+    assert_eq!(harness.get_all_by_label("Needs attention").count(), 3);
+    // So does the one built for another Rick, in the words of the spec
+    // (issue 250).
+    row(&mut harness, "Probe of 0.4");
+    harness.get_by_label("Rick did not load this plugin: Built for Rick 0.4.1.");
 
     // The switch of the loaded row writes the setting and says that it
     // waits for the next start.
