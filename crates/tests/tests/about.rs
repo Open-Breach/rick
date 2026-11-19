@@ -281,10 +281,10 @@ fn the_licence_card_counts_and_loaded_plugins_opens_the_extensions_screen() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let (mut harness, _fake) = harness(dir.path());
     open(&mut harness);
-    // One crate and the eight bundled runtimes; two plugins, one from
+    // One crate and the nine bundled runtimes; two plugins, one from
     // outside the release's plugins folder.
-    assert_eq!(harness.state().about().component_count(), Some(9));
-    harness.get_by_label_contains("9 components");
+    assert_eq!(harness.state().about().component_count(), Some(10));
+    harness.get_by_label_contains("10 components");
     harness.get_by_label_contains("2 plugins · 1 third-party");
     assert!(!harness.state().extensions_open());
     click_button(&mut harness, "Loaded plugins");
@@ -330,8 +330,8 @@ fn licences_search<'h>(harness: &'h Harness<'_, RickUi>) -> egui_kittest::Node<'
 /// Opens the dialog and its Third-party licences page.
 fn open_licences(harness: &mut Harness<'_, RickUi>) {
     open(harness);
-    // Two crates, eight bundled runtimes and the plugin's one entry.
-    assert_eq!(harness.state().about().component_count(), Some(11));
+    // Two crates, nine bundled runtimes and the plugin's one entry.
+    assert_eq!(harness.state().about().component_count(), Some(12));
     click_button(harness, "Third-party licences");
     assert!(harness.state().about().licences_page().is_some());
 }
@@ -354,7 +354,7 @@ fn the_third_party_page_lists_the_sections_and_opens_one_row_at_a_time() {
     ] {
         harness.get_by_role_and_label(Role::Button, row);
     }
-    harness.get_by_label_contains("11 components, 7 licence types");
+    harness.get_by_label_contains("12 components, 8 licence types");
 
     // A row opens in place with its copyright line and text; another row
     // replaces it (one at the top, so the open text does not scroll the
