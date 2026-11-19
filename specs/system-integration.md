@@ -141,7 +141,7 @@ Per the Figma frame: header with the app icon, title *Set up Rick on this system
 
 ### 10.4 Update checks
 
-- Package-manager installs update themselves. AppImage, the portable zip and the installer get a **new version available** check against the GitHub releases API: once a day at most, opt-out in *Settings → General*, never automatic download; the result is a line in the About dialog and a one-time toast. The DMG uses Sparkle.
+- Specified in [`specs/plugin-distribution.md`](plugin-distribution.md) §6, *The update notice for Rick itself*. Rick makes no update check of its own: the plugin list it already fetches names the newest release, and a toast, the menu and the About dialog say so, under the switch *Look for plugins and updates online*. Nothing is downloaded or installed by Rick; a Rick a package manager installed is told to update there.
 
 ## 11. Operator checklist
 
