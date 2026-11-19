@@ -9,9 +9,9 @@ use ext::platform::Platform;
 use ext::{API_VERSION, Extension, Platforms, Points};
 use tracing::{debug, info, info_span, warn};
 
-use crate::HOST_TOOLCHAIN;
 use crate::load::{Loaded, load_library};
-use crate::manifest::{MANIFEST_FILE, ManifestError, PluginToml};
+use crate::manifest::{self, Head, MANIFEST_FILE, ManifestError, PluginToml};
+use crate::{HOST_RICK, HOST_TOOLCHAIN};
 
 /// The directory, beside the binary and in the config directory, whose
 /// subdirectories are plugins.
@@ -147,7 +147,8 @@ pub struct Host {
 struct Candidate {
     source: Source,
     dir: PathBuf,
-    toml: Result<PluginToml, ManifestError>,
+    /// What its manifest file holds, or why there is none to read.
+    text: Result<String, ManifestError>,
 }
 
 impl Host {
@@ -202,8 +203,8 @@ impl Host {
     }
 }
 
-/// The subdirectories of `dir`, each with its manifest or the reason it
-/// has none, in name order. A missing `dir` is nothing found.
+/// The subdirectories of `dir`, each with its manifest's text or the reason
+/// it has none, in name order. A missing `dir` is nothing found.
 fn scan(source: Source, dir: &Path) -> Vec<Candidate> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -221,10 +222,43 @@ fn scan(source: Source, dir: &Path) -> Vec<Candidate> {
     dirs.into_iter()
         .map(|dir| Candidate {
             source,
-            toml: PluginToml::read(&dir.join(MANIFEST_FILE)),
+            text: manifest::text(&dir.join(MANIFEST_FILE)),
             dir,
         })
         .collect()
+}
+
+/// The reason a plugin of another Rick release is refused with, as the
+/// plugins table and the Extensions dialogue show it; `rick` is what its
+/// manifest names, empty when it names none.
+fn built_for(rick: &str) -> String {
+    if rick.is_empty() {
+        "Built for an unknown Rick".to_owned()
+    } else {
+        format!("Built for Rick {rick}")
+    }
+}
+
+/// The row of a plugin whose manifest this host could not read as a whole:
+/// what `head` says of it, the directory's name for its id when the file
+/// names none, and the reason.
+fn unread(candidate: Candidate, head: Head, reason: String) -> Plugin {
+    warn!(dir = %candidate.dir.display(), %reason, "plugin refused");
+    let dir_name = candidate
+        .dir
+        .file_name()
+        .map_or_default(|n| n.to_string_lossy().into_owned());
+    Plugin {
+        id: head.id.unwrap_or(dir_name),
+        name: head.name,
+        description: head.description,
+        version: head.version,
+        points: Points::empty(),
+        previews: Vec::new(),
+        dir: candidate.dir,
+        source: candidate.source,
+        status: PluginStatus::Refused(reason),
+    }
 }
 
 /// Checks one candidate and loads it when everything fits.
@@ -233,33 +267,30 @@ fn process(
     options: &Options,
     taken: &mut BTreeMap<String, PathBuf>,
 ) -> (Plugin, Option<Arc<Loaded>>) {
-    let dir_name = candidate
-        .dir
-        .file_name()
-        .map_or_default(|n| n.to_string_lossy().into_owned());
-    let toml = match &candidate.toml {
+    let text = match &candidate.text {
+        Ok(text) => text,
+        Err(error) => {
+            let reason = error.to_string();
+            return (unread(candidate, Head::default(), reason), None);
+        }
+    };
+    let toml = match PluginToml::parse(text) {
         Ok(toml) => toml,
         Err(error) => {
-            warn!(dir = %candidate.dir.display(), %error, "plugin refused");
-            return (
-                Plugin {
-                    id: dir_name,
-                    name: String::new(),
-                    description: String::new(),
-                    version: String::new(),
-                    points: Points::empty(),
-                    previews: Vec::new(),
-                    dir: candidate.dir,
-                    source: candidate.source,
-                    status: PluginStatus::Refused(error.to_string()),
-                },
-                None,
-            );
+            // The file of another release may hold keys this host does not
+            // know. It is refused for its release, which the user can act
+            // on, not for its spelling.
+            let head = Head::parse(text);
+            let reason = match &head {
+                Some(head) if head.rick != HOST_RICK => built_for(&head.rick),
+                _ => error.to_string(),
+            };
+            return (unread(candidate, head.unwrap_or_default(), reason), None);
         }
     };
     let span = info_span!("plugin", id = %toml.id, dir = %candidate.dir.display());
     let _enter = span.enter();
-    let outcome = check_and_load(toml, &candidate.dir, options, taken);
+    let outcome = check_and_load(&toml, &candidate.dir, options, taken);
     let status = match &outcome {
         Ok(Some(_)) => {
             info!("loaded");
@@ -276,12 +307,12 @@ fn process(
     };
     (
         Plugin {
-            id: toml.id.clone(),
-            name: toml.name.clone(),
-            description: toml.description.clone(),
-            version: toml.version.clone(),
             points: toml.points().unwrap_or_default(),
-            previews: toml.previews.clone(),
+            id: toml.id,
+            name: toml.name,
+            description: toml.description,
+            version: toml.version,
+            previews: toml.previews,
             dir: candidate.dir,
             source: candidate.source,
             status,
@@ -297,6 +328,13 @@ fn check_and_load(
     options: &Options,
     taken: &mut BTreeMap<String, PathBuf>,
 ) -> Result<Option<Arc<Loaded>>, String> {
+    // The release first, and from the manifest alone: a plugin shares the
+    // kernel libraries with the Rick it was built with, so the library of
+    // another release is never mapped (specs/plugin-distribution.md §3).
+    // Its id stays free for a plugin of this release.
+    if toml.rick != HOST_RICK {
+        return Err(built_for(&toml.rick));
+    }
     let points = toml.points().map_err(|e| e.to_string())?;
     let platforms = toml.platforms().map_err(|e| e.to_string())?;
     if let Some(winner) = taken.get(&toml.id) {
