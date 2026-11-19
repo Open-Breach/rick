@@ -395,6 +395,17 @@ pub enum Command {
     /// *Remove* of the Extensions dialogue, at once and without a
     /// question. A plugin beside the binary is left alone.
     RemovePlugin(PathBuf),
+    /// **Install** on a plugin of the *Available* view, by its id: the
+    /// package of the build that fits is downloaded, held against the
+    /// size and the SHA-256 the plugin list names, and unpacked into the
+    /// per-user plugins folder, as a job (specs/plugin-distribution.md
+    /// §7). Answered by `Event::PluginInstalled`; a package that is not
+    /// the one the list describes is deleted and the job fails.
+    InstallAvailable(String),
+    /// **Update all** of the Extensions dialogue and of the toast: every
+    /// plugin [`App::updates`](crate::App::updates) lists is installed
+    /// over its folder, each as a job of its own.
+    UpdateAll,
     /// Show the pane's file through one previewer whatever the scores
     /// say. It holds for this file only, until the selection moves on.
     /// The card of a file no previewer claims sent it for *Open as hex*
@@ -617,6 +628,11 @@ pub enum Command {
     /// check, apply the dialog's rows, add or restore one item from
     /// Settings → Integration, reset the choices.
     Integration(crate::IntegrationCommand),
+    /// The plugin registry (specs/plugin-distribution.md §6): an occasion
+    /// to read the plugin list — the start, the *Available* view opened,
+    /// *Check now*. What came of it is in
+    /// [`App::plugin_registry`](crate::App::plugin_registry).
+    Registry(crate::RegistryCommand),
 }
 
 /// What the application tells the UI happened. The model already reflects
@@ -825,6 +841,13 @@ pub enum Event {
     PluginInstalled {
         /// The plugin's folder.
         path: PathBuf,
+    },
+    /// The start found plugins that need the build for this Rick, for
+    /// the first time for this release (specs/plugin-distribution.md §7,
+    /// *Updates*): the UI says so in a toast with **Update all**.
+    PluginUpdates {
+        /// How many plugins have an update.
+        count: usize,
     },
     /// What `Command::ShowProperties` found: the dialogue's contents.
     Properties(Box<PropertiesInfo>),
@@ -1037,6 +1060,10 @@ impl fmt::Debug for Event {
             Self::PluginInstalled { path } => f
                 .debug_struct("PluginInstalled")
                 .field("path", path)
+                .finish(),
+            Self::PluginUpdates { count } => f
+                .debug_struct("PluginUpdates")
+                .field("count", count)
                 .finish(),
             Self::Properties(info) => f
                 .debug_struct("Properties")

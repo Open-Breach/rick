@@ -81,6 +81,7 @@ mod external;
 mod integration;
 mod places;
 pub mod plugins;
+mod registry;
 mod session;
 pub mod settings;
 mod timeline;
@@ -97,6 +98,9 @@ pub use ops::hash;
 /// What a `Command::SetPermissions` carries, re-exported for the UI.
 pub use ops::{PermissionRequest, Recursion};
 pub use places::{PLACES_FILE, defaults as default_places, virtual_icon};
+pub use registry::{
+    Available, CACHE_DIR, Offering, PluginRegistry, RegistryCommand, RegistryProblem, Update,
+};
 pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
 pub use settings::SETTINGS_FILE;
 
@@ -349,6 +353,20 @@ enum Msg {
     PluginRemoved {
         path: PathBuf,
         result: Result<(), String>,
+    },
+    /// `installed.toml` was written: the record as it is now.
+    PluginRecord(plugins::Record),
+    /// The cached plugin list was read, or could not be used.
+    RegistryCached(Result<Option<plugins_registry::Cached>, plugins_registry::Error>),
+    /// The registry job began to fetch the plugin list.
+    RegistryChecking,
+    /// The registry job ended, with its fetch's answer when it made one;
+    /// the job of a start names the release of Rick whose updates were
+    /// announced last.
+    RegistryDone {
+        fetched: Option<Result<plugins_registry::Cached, plugins_registry::Error>>,
+        start: bool,
+        announced: Option<String>,
     },
     /// A job started waiting for its volume, or stopped.
     Schedule,
@@ -832,6 +850,11 @@ pub struct App {
     index_generation: u64,
     /// The integration check or apply in flight.
     integration: integration::IntegrationRun,
+    /// The plugin registry: what is known of it, and the job that asks.
+    plugin_registry: registry::RegistryRun,
+    /// `installed.toml`: where the plugins of the per-user plugins folder
+    /// came from.
+    installed: plugins::Record,
 }
 
 impl App {
@@ -1102,6 +1125,12 @@ impl App {
                 tx.send(Msg::Prompts);
             }));
         }
+        // An entry of the plugin record whose folder is gone is dropped.
+        let installed = plugins::Record::prune(&config_dir.join(plugins::PLUGINS_DIR));
+        let plugin_registry = registry::RegistryRun::new(
+            &model.settings.registry,
+            config_dir.join(registry::CACHE_DIR),
+        );
         let mut app = Self {
             model,
             mounts,
@@ -1166,6 +1195,8 @@ impl App {
             properties_waiting: None,
             index_generation: 0,
             integration: integration::IntegrationRun::default(),
+            plugin_registry,
+            installed,
         };
         app.watch_settings();
         if seeded {
@@ -1235,29 +1266,38 @@ impl App {
 
     /// Unpacks a plugin package into the per-user plugins folder as a job
     /// (SPEC.md *Extensions dialogue*): nothing is checked and nothing is
-    /// asked, and the plugin loads at the next start. Answered by
-    /// [`Event::PluginInstalled`], or by an error notice.
+    /// asked, and the plugin loads at the next start. The record notes it
+    /// as installed from a file. Answered by [`Event::PluginInstalled`],
+    /// or by an error notice.
     fn install_plugin(&mut self, package: PathBuf) {
         let dir = self.plugins_dir();
         let tx = self.mailbox.clone();
         let name = format!("Install {}", package.display());
         let handle = self.jobs.spawn_named(name, move |_job| async move {
             let result = tokio::task::spawn_blocking(move || {
-                plugins::install(&package, &dir)
-                    .map(|folder| Box::new(plugins::describe(&folder)))
+                plugins::unpack(&package, &dir, plugins::Origin::File, None)
                     .map_err(|error| error.to_string())
             })
             .await
             .unwrap_or_else(|join| Err(join.to_string()));
-            tx.send(Msg::PluginInstalled(result));
+            match result {
+                Ok((plugin, record)) => {
+                    tx.send(Msg::PluginRecord(record));
+                    tx.send(Msg::PluginInstalled(Ok(Box::new(plugin))));
+                }
+                Err(text) => {
+                    tx.send(Msg::PluginInstalled(Err(text)));
+                }
+            }
             Ok(())
         });
         self.internal.insert(handle.id);
     }
 
     /// Deletes the folder of a user's plugin as a job, at once and
-    /// without a question; a plugin that ships beside the binary is not
-    /// removed. The plugin stays loaded until the next start.
+    /// without a question, and drops its entry of the record; a plugin
+    /// that ships beside the binary is not removed. The plugin stays
+    /// loaded until the next start.
     fn remove_plugin(&mut self, path: PathBuf) {
         let listed = self
             .plugins
@@ -1272,10 +1312,18 @@ impl App {
         let handle = self.jobs.spawn_named(name, move |_job| async move {
             let folder = path.clone();
             let result = tokio::task::spawn_blocking(move || {
-                plugins::remove(&folder, &dir).map_err(|error| error.to_string())
+                plugins::remove(&folder, &dir).map_err(|error| error.to_string())?;
+                // The record's entry goes with the folder.
+                Ok(plugins::Record::forget(&dir, &folder))
             })
             .await
             .unwrap_or_else(|join| Err(join.to_string()));
+            let result = result.map(|record| match record {
+                Ok(record) => {
+                    tx.send(Msg::PluginRecord(record));
+                }
+                Err(error) => warn!(%error, "the plugin record is not written"),
+            });
             tx.send(Msg::PluginRemoved { path, result });
             Ok(())
         });
@@ -1287,6 +1335,13 @@ impl App {
     #[must_use]
     pub fn plugins(&self) -> &[Plugin] {
         &self.plugins
+    }
+
+    /// `installed.toml`: where the plugins of the per-user plugins folder
+    /// came from, as far as Rick unpacked them itself.
+    #[must_use]
+    pub fn installed(&self) -> &plugins::Record {
+        &self.installed
     }
 
     /// The extension an action came from, as its manifest describes it:
@@ -2031,6 +2086,8 @@ impl App {
             Command::PreviewCancel(pane) => self.cancel_preview(pane, events),
             Command::InstallPlugin(package) => self.install_plugin(package),
             Command::RemovePlugin(path) => self.remove_plugin(path),
+            Command::InstallAvailable(id) => self.install_available(&id),
+            Command::UpdateAll => self.update_all(),
             Command::PreviewWith { pane, previewer } => {
                 if let Some(job) = self.preview.get(&pane) {
                     self.preview_with.insert(pane, (job.entry, previewer));
@@ -2108,6 +2165,7 @@ impl App {
             Command::DeleteLayout(name) => self.delete_layout(&name, events),
             Command::RenameLayout { from, to } => self.rename_layout(&from, &to, events),
             Command::Integration(command) => self.integration(command, events),
+            Command::Registry(command) => self.registry_command(command),
         }
         self.sync_panes(events);
         self.sync_preview();
@@ -4726,6 +4784,14 @@ impl App {
                     row.removed = true;
                 }
             }
+            Msg::PluginRecord(record) => self.installed = record,
+            Msg::RegistryCached(cached) => self.registry_cached(cached),
+            Msg::RegistryChecking => self.registry_checking(),
+            Msg::RegistryDone {
+                fetched,
+                start,
+                announced,
+            } => self.registry_done(fetched, start, announced.as_deref(), events),
             Msg::PluginInstalled(Err(text))
             | Msg::PluginRemoved {
                 result: Err(text), ..
@@ -5613,10 +5679,20 @@ impl App {
                 if self.internal.remove(&id) {
                     return;
                 }
+                // An install says what went wrong in the user's words;
+                // any other job's error writes itself.
+                let install = self.install_finished(id);
+                let said = |error: &Error| {
+                    if install {
+                        plugins::said(error)
+                    } else {
+                        error.to_string()
+                    }
+                };
                 let state = match &result {
                     Ok(()) => JobState::Done,
                     Err(Error::Cancelled) => JobState::Cancelled,
-                    Err(error) => JobState::Failed(error.to_string()),
+                    Err(error) => JobState::Failed(said(error)),
                 };
                 if let Err(error) = &result
                     && !matches!(error, Error::Cancelled)
@@ -5634,7 +5710,7 @@ impl App {
                     });
                     events.push(Event::Notify {
                         level: Level::Error,
-                        text: format!("{name}: {error}"),
+                        text: format!("{name}: {}", said(error)),
                     });
                 }
                 self.waiting.remove(&id);

@@ -186,17 +186,22 @@ fn row_detail(row: &IntegrationItem, desktop: Option<Desktop>, home: &Path) -> S
 impl IntegrationDialog {
     /// Counts the frames to the check at startup: asked for once, at the
     /// start of the second frame, so the first is on screen before
-    /// anything is read.
-    pub fn frame(&mut self, requests: &mut Vec<Request>) {
+    /// anything is read. `true` that one time: the first frame is drawn,
+    /// and what else waited for it can be asked for.
+    pub fn frame(&mut self, requests: &mut Vec<Request>) -> bool {
         match self.startup {
-            Startup::Before => self.startup = Startup::Drawn,
+            Startup::Before => {
+                self.startup = Startup::Drawn;
+                false
+            }
             Startup::Drawn => {
                 self.startup = Startup::Asked;
                 requests.push(Request::Command(Command::Integration(
                     IntegrationCommand::Check { startup: true },
                 )));
+                true
             }
-            Startup::Asked => {}
+            Startup::Asked => false,
         }
     }
 

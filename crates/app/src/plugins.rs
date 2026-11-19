@@ -10,13 +10,21 @@
 //! plugins folder. [`remove`] deletes a plugin's folder. [`describe`]
 //! reads what a folder's `plugin.toml` says, for the row a plugin
 //! installed in this session gets before the host has seen it.
+//!
+//! [`Record`] is `installed.toml` in the plugins folder
+//! (specs/plugin-distribution.md §7, *The record*): per plugin folder,
+//! where the plugin came from, its version and the SHA-256 of its
+//! package. A plugin put into the folder by hand has no entry.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use ext::Points;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 use crate::{Plugin, PluginStatus};
 
@@ -53,6 +61,233 @@ pub enum PluginError {
     Io(PathBuf, #[source] io::Error),
 }
 
+/// The error of an install job that fails with `text`, the user's words
+/// for what went wrong.
+pub(crate) fn failure(text: impl Into<String>) -> types::Error {
+    types::Error::Io(io::Error::other(text.into()))
+}
+
+/// What the error of an install job says: the words [`failure`] was
+/// given, without the kind of error before them.
+pub(crate) fn said(error: &types::Error) -> String {
+    match error {
+        types::Error::Io(inner) => inner.to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Unpacks `package` into `plugins` as [`install`] does, notes in the
+/// record that it came from `origin` — with the package's SHA-256, the
+/// version its manifest gives and, for a download, the `url` — and
+/// returns the plugin's row with the record as it is now.
+///
+/// # Errors
+///
+/// What [`install`] returns, and the I/O error of hashing the package. A
+/// record that cannot be written is logged: the plugin is installed all
+/// the same, as one put there by hand.
+pub fn unpack(
+    package: &Path,
+    plugins: &Path,
+    origin: Origin,
+    url: Option<String>,
+) -> Result<(Plugin, Record), PluginError> {
+    let sha256 = sha256_of(package)?;
+    let folder = install(package, plugins)?;
+    let plugin = describe(&folder);
+    let entry = Installed {
+        source: origin,
+        version: plugin.version.clone(),
+        sha256,
+        url,
+    };
+    let record = Record::note(plugins, &folder, entry).unwrap_or_else(|error| {
+        tracing::warn!(%error, "the plugin record is not written");
+        Record::read(plugins)
+    });
+    Ok((plugin, record))
+}
+
+/// The file in the per-user plugins folder that notes where each plugin
+/// came from.
+pub const RECORD_FILE: &str = "installed.toml";
+
+/// Where an installed plugin came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Origin {
+    /// *Install* in the *Available* view: the package was checked against
+    /// the signed plugin list.
+    Registry,
+    /// *Install from file…*: nothing was checked.
+    File,
+    /// *Install from URL…*: nothing was checked.
+    Url,
+}
+
+/// One entry of [`Record`]: what is known of how a plugin got into the
+/// per-user plugins folder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Installed {
+    /// Where it came from.
+    pub source: Origin,
+    /// The plugin's version, as its manifest gave it when it was
+    /// installed.
+    #[serde(default)]
+    pub version: String,
+    /// The SHA-256 of the package it was unpacked from, in hexadecimal.
+    #[serde(default)]
+    pub sha256: String,
+    /// The address the package was downloaded from, for [`Origin::Url`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+/// `installed.toml`: one table per plugin folder of the per-user plugins
+/// folder that Rick unpacked itself, under the folder's name — which is
+/// the plugin's id for every package a release publishes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Record(BTreeMap<String, Installed>);
+
+/// One writer of the record at a time: an install and a remove that end
+/// together each read the file, change it and write it back.
+static RECORD: Mutex<()> = Mutex::new(());
+
+impl Record {
+    /// The entry of the plugin folder `dir`.
+    #[must_use]
+    pub fn get(&self, dir: &Path) -> Option<&Installed> {
+        self.0.get(dir.file_name()?.to_str()?)
+    }
+
+    /// The folders with an entry, in name order.
+    pub fn folders(&self) -> impl Iterator<Item = &str> {
+        self.0.keys().map(String::as_str)
+    }
+
+    /// Reads the record of the plugins folder `plugins`. A missing file
+    /// is an empty record, and so is one that cannot be read, which is
+    /// logged: the record says where plugins came from, and a plugin
+    /// without an entry is one nobody vouches for.
+    #[must_use]
+    pub fn read(plugins: &Path) -> Self {
+        let path = plugins.join(RECORD_FILE);
+        match fs::read_to_string(&path) {
+            Ok(text) => toml::from_str(&text).unwrap_or_else(|error| {
+                tracing::warn!(%error, path = %path.display(), "the plugin record is not read");
+                Self::default()
+            }),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Self::default(),
+            Err(error) => {
+                tracing::warn!(%error, path = %path.display(), "the plugin record is not read");
+                Self::default()
+            }
+        }
+    }
+
+    /// Writes the record through a temporary file renamed over the old
+    /// one.
+    fn write(&self, plugins: &Path) -> Result<(), PluginError> {
+        let path = plugins.join(RECORD_FILE);
+        let text = toml::to_string(self)
+            .map_err(|error| PluginError::Io(path.clone(), io::Error::other(error)))?;
+        fs::create_dir_all(plugins).map_err(|error| PluginError::Io(plugins.to_owned(), error))?;
+        let part = plugins.join(format!("{RECORD_FILE}.part"));
+        fs::write(&part, text).map_err(|error| PluginError::Io(part.clone(), error))?;
+        fs::rename(&part, &path).map_err(|error| {
+            let _ = fs::remove_file(&part);
+            PluginError::Io(path, error)
+        })
+    }
+
+    /// Reads the record, changes it and writes it back when it changed;
+    /// returns it as it is on the disk afterwards.
+    fn change(plugins: &Path, change: impl FnOnce(&mut Self)) -> Result<Self, PluginError> {
+        let _one = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
+        let before = Self::read(plugins);
+        let mut record = before.clone();
+        change(&mut record);
+        if record != before {
+            record.write(plugins)?;
+        }
+        Ok(record)
+    }
+
+    /// Notes that the plugin folder `dir` of `plugins` was unpacked from
+    /// a package, in place of what the record said of it before.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error of the write.
+    pub fn note(plugins: &Path, dir: &Path, entry: Installed) -> Result<Self, PluginError> {
+        let name = folder_name(dir)?;
+        Self::change(plugins, |record| {
+            record.0.insert(name, entry);
+        })
+    }
+
+    /// Drops the entry of the plugin folder `dir`, which was removed.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error of the write.
+    pub fn forget(plugins: &Path, dir: &Path) -> Result<Self, PluginError> {
+        let name = folder_name(dir)?;
+        Self::change(plugins, |record| {
+            record.0.remove(&name);
+        })
+    }
+
+    /// The record at a start: every entry whose folder is gone is
+    /// dropped, in the file as well. A file that cannot be written is
+    /// logged, and the record is right for this session all the same.
+    #[must_use]
+    pub fn prune(plugins: &Path) -> Self {
+        let _one = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
+        let before = Self::read(plugins);
+        let mut record = before.clone();
+        record.0.retain(|name, _| plugins.join(name).is_dir());
+        if record != before
+            && let Err(error) = record.write(plugins)
+        {
+            tracing::warn!(%error, "the plugin record is not written");
+        }
+        record
+    }
+}
+
+/// The name of the plugin folder `dir`, which a record's entry is under.
+fn folder_name(dir: &Path) -> Result<String, PluginError> {
+    dir.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| is_folder_name(name))
+        .map(str::to_owned)
+        .ok_or_else(|| PluginError::Outside(dir.to_owned()))
+}
+
+/// The SHA-256 of the file `path`, in lower-case hexadecimal: what the
+/// record keeps of a package.
+///
+/// # Errors
+///
+/// The I/O error of the read.
+pub fn sha256_of(path: &Path) -> Result<String, PluginError> {
+    let at = |error| PluginError::Io(path.to_owned(), error);
+    let mut file = fs::File::open(path).map_err(at)?;
+    let mut hash = Sha256::new();
+    io::copy(&mut file, &mut hash).map_err(at)?;
+    Ok(hash
+        .finalize()
+        .iter()
+        .fold(String::with_capacity(64), |mut text, byte| {
+            use std::fmt::Write as _;
+            // Writing into a String cannot fail.
+            let _ = write!(text, "{byte:02x}");
+            text
+        }))
+}
+
 /// A path of an archive entry as the list of its plain names; `None` for
 /// one that is absolute, climbs with `..` or is empty, which is never
 /// written.
@@ -86,6 +321,10 @@ fn is_folder_name(name: &str) -> bool {
 fn staging(plugins: &Path) -> PathBuf {
     plugins.with_file_name(".plugins-staging")
 }
+
+/// One install or remove at a time: they share the staging folder, and
+/// the second of two that ran together would empty it under the first.
+static STAGING: Mutex<()> = Mutex::new(());
 
 /// An empty staging folder; what an earlier run left behind goes first.
 fn fresh_staging(plugins: &Path) -> Result<PathBuf, PluginError> {
@@ -153,6 +392,7 @@ pub fn install(package: &Path, plugins: &Path) -> Result<PathBuf, PluginError> {
         let path = path.to_owned();
         move |error| PluginError::Io(path, error)
     };
+    let _one = STAGING.lock().unwrap_or_else(PoisonError::into_inner);
     let staging = fresh_staging(plugins)?;
     let part = staging.join(&name);
     let old = staging.join(format!("{name}.old"));
@@ -209,6 +449,7 @@ pub fn remove(dir: &Path, plugins: &Path) -> Result<(), PluginError> {
     let (Some(name), true) = (name, dir.parent() == Some(plugins)) else {
         return Err(PluginError::Outside(dir.to_owned()));
     };
+    let _one = STAGING.lock().unwrap_or_else(PoisonError::into_inner);
     let staging = fresh_staging(plugins)?;
     let moved =
         fs::rename(dir, staging.join(name)).map_err(|error| PluginError::Io(dir.to_owned(), error));

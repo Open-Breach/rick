@@ -7,6 +7,62 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+Plugins come in two kinds from here on: the ones every install has, and
+the ones that are separate downloads. The extension API is 23: a plugin
+built for 0.5.0 is refused until it is rebuilt.
+
+### Changed
+
+- **Git, SVN, ZFS, SSH, S3, Azure Blob, Google Cloud Storage, the Office
+  and 3D previewers and, on macOS and Windows, the audio and video
+  previewer are now separate downloads.** The release archives no longer
+  carry them. They hold the default set: the trash and the archives, the
+  previewers for archives, markup, icons and the hex view, the search,
+  bulk rename, compress and extract, compare, the console and the
+  installer, and on Linux the audio and video previewer. A release
+  publishes each separate plugin as a package of its own on the release
+  page, `<id>-<version>-<platform>.rkp`: download the ones for your
+  platform and install them with *Install from file…* in the Extensions
+  dialogue; they are loaded at the next start. Whoever updates Rick by
+  unpacking a new archive has these plugins again only once their
+  packages are installed (#260).
+- A plugin loads only in the Rick release it was built with. Its
+  `plugin.toml` names that release as `rick`, written by the bundler, and
+  Rick refuses a plugin of another release before it opens the library:
+  *Built for Rick 0.5.0* in the Extensions dialogue and in `rick
+  --list-plugins`, or *Built for an unknown Rick* for a plugin from
+  before the key existed. Such a plugin does not stand in the way of the
+  one beside the binary (#255).
+- On macOS and Windows the GStreamer runtime travels in the audio and
+  video plugin's folder, in place of beside the binary, so the plugin's
+  package holds it and it is found from the per-user plugins folder as
+  well. The archives of those two platforms hold no GStreamer any more.
+  On Windows Rick puts the folder of a plugin that brings libraries of
+  its own first on the `PATH` before it loads the plugin. GStreamer's
+  plugin scanner is no longer bundled on macOS; GStreamer reads its
+  elements in the process, as it did on Windows. Linux uses the system's
+  GStreamer as before (#258).
+- The extension API is 23 (#256): a manifest says what the plugin is for.
+  `ext::Manifest` gained `markers`, the names of an entry that make a
+  folder the plugin's business (`.git`, `.svn`), and `connections`, what
+  the plugin adds to *Add…* in the side panel (SSH, S3, Azure Blob,
+  Google Cloud Storage). With `previews` they are the plugin's triggers
+  and `plugin.toml` carries all three. Nothing reads the two new lists
+  yet. Every plugin is rebuilt against the new contract, and one built
+  against 22 is refused.
+
+### Added
+
+- `cargo xtask package`, which makes the packages of the separate plugins
+  from a bundle: one `.rkp` per plugin and `plugins-<platform>.json`, the
+  list the plugin registry's publisher reads, with each file's size and
+  SHA-256. The same bundle gives the same bytes. A plugin crate says that
+  it is separate under `[package.metadata.rick]` in its `Cargo.toml`
+  (#257).
+- The release page carries the packages and the lists of the four
+  platforms beside the archives, and `SHA256SUMS.txt` names them all
+  (#260).
+
 ## [0.5.0] - 2026-11-15
 
 On Linux, ZFS snapshots with a time slider and AppImages in the installer.

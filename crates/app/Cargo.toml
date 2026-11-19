@@ -16,8 +16,12 @@ vfs-local = { workspace = true }
 vfs-rick = { workspace = true }
 model = { workspace = true }
 ops = { workspace = true }
+plugins-registry = { workspace = true }
 futures = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true }
+# The SHA-256 of a plugin package, for the record of what was installed.
+sha2 = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "macros"] }
 toml = { workspace = true }
 encoding_rs = { workspace = true }
@@ -31,6 +35,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+plugins-registry = { workspace = true, features = ["fixtures"] }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

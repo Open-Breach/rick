@@ -12,12 +12,26 @@
 //! page, *Open folder*, and *Remove* for a user's plugin. The footer has
 //! *Install from file…*, which unpacks a plugin package, and *Close*.
 //! Switching, installing and removing take effect at the next start; until
-//! then the row and the details carry a *restart* chip.
+//! then the row and the details carry a *restart* chip, and the footer
+//! offers *Restart now*.
+//!
+//! A segmented control above the search field switches the list between
+//! *Installed* and *Available* (specs/plugin-distribution.md §7): the
+//! plugins the registry has for this Rick that are in neither plugins
+//! folder, under the same headings, each row with its download size. The
+//! details of one have *Install* in place of the switch, and an info card
+//! with what it contributes, its size and its source. Where there is no
+//! list, the view says why in one line — not set up in this build, a
+//! pre-release, too old a Rick, offline, switched off, not verified — and
+//! offers *Check now* where checking can help.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use app::{App, Command, Plugin, PluginStatus};
+use app::{
+    App, Available, Command, Offering, Plugin, PluginRegistry, PluginStatus, RegistryCommand,
+    RegistryProblem, Update,
+};
 use egui::{Align, Align2, FontId, Rect, Sense, pos2, vec2};
 use ext::{Level, Points, t};
 use model::SettingsChange;
@@ -26,7 +40,7 @@ use crate::copy_button::CopyButton;
 use crate::shell::Request;
 use crate::theme::{self, ICON, TEXT_BODY, TEXT_CAPS, TEXT_SECONDARY};
 use crate::widgets::{self, ButtonKind};
-use crate::{dialog, icons};
+use crate::{dialog, format, icons};
 
 /// The dialogue's width.
 const WIDTH: f32 = 840.0;
@@ -52,6 +66,19 @@ const LABEL: f32 = 96.0;
 const INFO_ROW: f32 = 39.0;
 /// The attention dot.
 const DOT: f32 = 8.0;
+/// The strip at the foot of the *Available* list: the list's date, or why
+/// the last check gave none, and *Check now*.
+const STRIP: f32 = 52.0;
+
+/// Which of the dialogue's two lists is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Tab {
+    /// The plugins in the two plugins folders.
+    #[default]
+    Installed,
+    /// The plugins the registry offers.
+    Available,
+}
 
 /// What the dialogue is doing.
 #[derive(Debug, Default)]
@@ -67,6 +94,11 @@ pub struct ExtensionsDialog {
     /// The list scrolls to the chosen row in the next frame: a plugin was
     /// just installed, and its row may be out of view.
     reveal: bool,
+    /// The list that is shown.
+    tab: Tab,
+    /// The chosen plugin of the *Available* list, by its id; the list's
+    /// first when it is none of those listed.
+    chosen_available: Option<String>,
 }
 
 /// What a plugin mainly is: the heading it is listed under and the kind
@@ -218,6 +250,12 @@ fn status(plugin: &Plugin) -> String {
 /// What a frame of the dialogue asked for.
 enum Ask {
     Close,
+    Show(Tab),
+    ChooseAvailable(String),
+    InstallAvailable(String),
+    UpdateAll,
+    CheckNow,
+    Restart,
     Choose(PathBuf),
     Toggle(String, bool),
     Copy(String),
@@ -228,11 +266,12 @@ enum Ask {
 }
 
 impl ExtensionsDialog {
-    /// Opens the dialogue with an empty search, on the plugin it showed
-    /// last.
+    /// Opens the dialogue with an empty search, on the installed plugins
+    /// and the one it showed last.
     pub fn open(&mut self) {
         self.open = true;
         self.filter.clear();
+        self.tab = Tab::Installed;
     }
 
     /// Whether the dialogue is open.
@@ -241,10 +280,11 @@ impl ExtensionsDialog {
         self.open
     }
 
-    /// A plugin package was unpacked into `path`: its row is the chosen
-    /// one.
+    /// A plugin package was unpacked into `path`: its row, under
+    /// *Installed*, is the chosen one.
     pub fn installed(&mut self, path: PathBuf) {
         self.filter.clear();
+        self.tab = Tab::Installed;
         self.chosen = Some(path);
         self.reveal = true;
     }
@@ -257,14 +297,15 @@ impl ExtensionsDialog {
         }
         // The list: what the search leaves, by kind and then by name.
         let needle = self.filter.trim().to_lowercase();
+        let found = |name: &str, id: &str| {
+            needle.is_empty()
+                || name.to_lowercase().contains(&needle)
+                || id.to_lowercase().contains(&needle)
+        };
         let mut listed: Vec<&Plugin> = app
             .plugins()
             .iter()
-            .filter(|plugin| {
-                needle.is_empty()
-                    || name_of(plugin).to_lowercase().contains(&needle)
-                    || plugin.id.to_lowercase().contains(&needle)
-            })
+            .filter(|plugin| found(name_of(plugin), &plugin.id))
             .collect();
         listed.sort_by_key(|plugin| (Kind::of(plugin.points), name_of(plugin).to_lowercase()));
         let chosen = listed
@@ -272,11 +313,42 @@ impl ExtensionsDialog {
             .find(|plugin| Some(&plugin.path) == self.chosen.as_ref())
             .or(listed.first())
             .copied();
+        // The other list: what the registry offers, in the same order.
+        let offering = app.offering();
+        let on_offer: &[Available] = match &offering {
+            Offering::Plugins(plugins) => plugins,
+            _ => &[],
+        };
+        let mut available: Vec<&Available> = on_offer
+            .iter()
+            .filter(|plugin| found(&plugin.name, &plugin.id))
+            .collect();
+        available.sort_by_key(|plugin| (Kind::of(plugin.points), plugin.name.to_lowercase()));
+        let chosen_available = available
+            .iter()
+            .find(|plugin| Some(&plugin.id) == self.chosen_available.as_ref())
+            .or(available.first())
+            .copied();
+        let lists = Lists {
+            listed: &listed,
+            chosen,
+            available: &available,
+            chosen_available,
+            on_offer: on_offer.len(),
+            // The strip stands under a list that is there to be dated.
+            strip: matches!(offering, Offering::Plugins(_)),
+        };
+        let restart = app
+            .plugins()
+            .iter()
+            .any(|plugin| waits_for_restart(app, plugin));
+        // The plugins the registry has this Rick's build of.
+        let updates = app.updates();
 
         let mut asked = None;
         let modal = dialog::modal(ctx, egui::Id::new("extensions"), WIDTH, |ui| {
             let scheme = theme::scheme(ui);
-            if dialog::band(ui, None, &t!("extensions"), &counts(app)) {
+            if dialog::band(ui, None, &t!("extensions"), &counts(app, updates.len())) {
                 asked = Some(Ask::Close);
             }
             // Header and footer stay in view in a low window.
@@ -290,38 +362,29 @@ impl ExtensionsDialog {
             ui.painter().rect_filled(left, 0.0, scheme.bg_panel);
             ui.painter()
                 .vline(split - 0.5, body.y_range(), scheme.hairline());
-            self.list(ui, left, app, &listed, chosen, &mut asked);
-            match chosen {
-                Some(plugin) => details(ui, right, app, plugin, &mut asked),
-                None => nothing(ui, right, app.plugins().is_empty()),
+            self.list(ui, left, app, &lists, &mut asked);
+            match (self.tab, chosen, chosen_available) {
+                (Tab::Installed, Some(plugin), _) => {
+                    let update = updates.iter().find(|update| update.path == plugin.path);
+                    details(ui, right, app, plugin, update, &mut asked);
+                }
+                (Tab::Installed, None, _) => {
+                    let text = if app.plugins().is_empty() {
+                        t!("settings-no-plugins-found")
+                    } else {
+                        t!("extensions-no-match")
+                    };
+                    nothing(ui, right, &text, false, &mut asked);
+                }
+                (Tab::Available, _, Some(plugin)) => {
+                    available_details(ui, right, app, plugin, &mut asked);
+                }
+                (Tab::Available, _, None) => {
+                    let (text, check) = no_offer(app, &offering, on_offer.is_empty());
+                    nothing(ui, right, &text, check, &mut asked);
+                }
             }
-            let footer = std::cell::Cell::new(None);
-            dialog::footer(
-                ui,
-                |left| {
-                    left.add(
-                        egui::Label::new(
-                            egui::RichText::new(t!("extensions-where"))
-                                .size(TEXT_SECONDARY)
-                                .color(scheme.text_secondary),
-                        )
-                        .wrap()
-                        .selectable(false),
-                    );
-                },
-                |right| {
-                    if widgets::button(right, &t!("close"), true, true).clicked() {
-                        footer.set(Some(Ask::Close));
-                    }
-                    let install = t!("extensions-install");
-                    if widgets::icon_button(right, Some(icons::INSTALL), &install, false, true)
-                        .clicked()
-                    {
-                        footer.set(Some(Ask::Install));
-                    }
-                },
-            );
-            if let Some(ask) = footer.into_inner() {
+            if let Some(ask) = footer(ui, app, restart, !updates.is_empty()) {
                 asked = Some(ask);
             }
         });
@@ -339,6 +402,24 @@ impl ExtensionsDialog {
         match asked {
             None => {}
             Some(Ask::Close) => self.open = false,
+            Some(Ask::Show(tab)) => {
+                if tab == Tab::Available && self.tab != tab {
+                    // Opening the view is an occasion to read the list.
+                    requests.push(Request::Command(Command::Registry(RegistryCommand::Opened)));
+                }
+                self.tab = tab;
+            }
+            Some(Ask::ChooseAvailable(id)) => self.chosen_available = Some(id),
+            Some(Ask::InstallAvailable(id)) => {
+                requests.push(Request::Command(Command::InstallAvailable(id)));
+            }
+            Some(Ask::UpdateAll) => requests.push(Request::Command(Command::UpdateAll)),
+            Some(Ask::CheckNow) => {
+                requests.push(Request::Command(Command::Registry(
+                    RegistryCommand::CheckNow,
+                )));
+            }
+            Some(Ask::Restart) => requests.push(Request::Restart),
             Some(Ask::Choose(path)) => self.chosen = Some(path),
             Some(Ask::Toggle(id, enabled)) => {
                 requests.push(Request::Command(Command::Settings(
@@ -400,23 +481,59 @@ impl ExtensionsDialog {
         }
     }
 
-    /// The list: the search field, then the plugins under the heading of
-    /// their kind.
+    /// The list: the *Installed · Available* control, the search field,
+    /// then the plugins of the chosen list under the heading of their
+    /// kind, and under the *Available* list its strip.
     fn list(
         &mut self,
         ui: &mut egui::Ui,
         rect: Rect,
         app: &App,
-        listed: &[&Plugin],
-        chosen: Option<&Plugin>,
+        lists: &Lists<'_>,
         asked: &mut Option<Ask>,
     ) {
-        let field = Rect::from_min_max(
+        let tabs = Rect::from_min_max(
             pos2(rect.left() + 12.0, rect.top() + 12.0),
-            pos2(rect.right() - 13.0, rect.top() + 44.0),
+            pos2(rect.right() - 13.0, rect.top() + 42.0),
+        );
+        // The control counts what is on offer: *Available 7*.
+        let available = if lists.on_offer > 0 {
+            t!("extensions-tab-available-count", count = lists.on_offer)
+        } else {
+            t!("extensions-tab-available")
+        };
+        let options = [t!("extensions-tab-installed"), available];
+        let picked = widgets::segmented(
+            ui,
+            tabs,
+            ui.id().with("extension-tabs"),
+            &options,
+            usize::from(self.tab == Tab::Available),
+        );
+        match picked {
+            Some(0) => *asked = Some(Ask::Show(Tab::Installed)),
+            Some(_) => *asked = Some(Ask::Show(Tab::Available)),
+            None => {}
+        }
+        let field = Rect::from_min_max(
+            pos2(rect.left() + 12.0, tabs.bottom() + 8.0),
+            pos2(rect.right() - 13.0, tabs.bottom() + 40.0),
         );
         search_field(ui, field, &mut self.filter);
-        let below = Rect::from_min_max(pos2(rect.left(), rect.top() + 52.0), rect.max);
+        let strip = self.tab == Tab::Available && lists.strip;
+        let bottom = if strip {
+            rect.bottom() - STRIP
+        } else {
+            rect.bottom()
+        };
+        if strip {
+            let foot = Rect::from_min_max(pos2(rect.left(), bottom), rect.max);
+            list_strip(ui, foot, app, asked);
+        }
+        let below = Rect::from_min_max(
+            pos2(rect.left(), field.bottom() + 8.0),
+            pos2(rect.right(), bottom),
+        );
         let mut area = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(below)
@@ -424,13 +541,12 @@ impl ExtensionsDialog {
         );
         area.set_clip_rect(below.intersect(ui.clip_rect()));
         egui::ScrollArea::vertical()
-            .id_salt("extension-rows")
+            .id_salt(("extension-rows", self.tab == Tab::Available))
             .auto_shrink([false, false])
             .show(&mut area, |ui| {
                 ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
                 let mut heading = None;
-                for plugin in listed {
-                    let kind = Kind::of(plugin.points);
+                let mut under = |ui: &mut egui::Ui, kind: Kind| {
                     if heading != Some(kind) {
                         heading = Some(kind);
                         let (line, _) = ui.allocate_exact_size(
@@ -444,10 +560,25 @@ impl ExtensionsDialog {
                             )));
                         widgets::caps_heading(&mut at, &kind.heading());
                     }
-                    let is_chosen = chosen.is_some_and(|c| c.path == plugin.path);
-                    let line = row(ui, app, plugin, is_chosen, asked);
-                    if is_chosen && std::mem::take(&mut self.reveal) {
-                        ui.scroll_to_rect(line, Some(Align::Center));
+                };
+                match self.tab {
+                    Tab::Installed => {
+                        for plugin in lists.listed {
+                            under(ui, Kind::of(plugin.points));
+                            let is_chosen = lists.chosen.is_some_and(|c| c.path == plugin.path);
+                            let line = row(ui, app, plugin, is_chosen, asked);
+                            if is_chosen && std::mem::take(&mut self.reveal) {
+                                ui.scroll_to_rect(line, Some(Align::Center));
+                            }
+                        }
+                    }
+                    Tab::Available => {
+                        for plugin in lists.available {
+                            under(ui, Kind::of(plugin.points));
+                            let is_chosen =
+                                lists.chosen_available.is_some_and(|c| c.id == plugin.id);
+                            available_row(ui, plugin, is_chosen, asked);
+                        }
                     }
                 }
                 ui.add_space(8.0);
@@ -455,21 +586,189 @@ impl ExtensionsDialog {
     }
 }
 
+/// The dialogue's footer: where the plugins live at the left — or, while
+/// `rick.toml` names another index or key than this build's own, where
+/// the plugin list is read from — and at the right **Update all** while
+/// any plugin has an update (`updates`), *Restart now* while anything
+/// waits for the next start (`restart`), *Install from file…* and
+/// *Close*.
+fn footer(ui: &mut egui::Ui, app: &App, restart: bool, updates: bool) -> Option<Ask> {
+    let scheme = theme::scheme(ui);
+    let asked = std::cell::Cell::new(None);
+    dialog::footer(
+        ui,
+        |left| {
+            let text = match &app.plugin_registry().custom {
+                Some(address) => t!("extensions-registry-address", address = address.as_str()),
+                None => t!("extensions-where"),
+            };
+            left.add(
+                egui::Label::new(
+                    egui::RichText::new(text)
+                        .size(TEXT_SECONDARY)
+                        .color(scheme.text_secondary),
+                )
+                .wrap()
+                .selectable(false),
+            );
+        },
+        |right| {
+            if widgets::button(right, &t!("close"), true, true).clicked() {
+                asked.set(Some(Ask::Close));
+            }
+            let install = t!("extensions-install");
+            if widgets::icon_button(right, Some(icons::INSTALL), &install, false, true).clicked() {
+                asked.set(Some(Ask::Install));
+            }
+            if restart
+                && widgets::icon_button(
+                    right,
+                    Some(icons::REFRESH),
+                    &t!("extensions-restart-now"),
+                    false,
+                    true,
+                )
+                .clicked()
+            {
+                asked.set(Some(Ask::Restart));
+            }
+            if updates
+                && widgets::icon_button(
+                    right,
+                    Some(icons::INSTALL),
+                    &t!("extensions-update-all"),
+                    false,
+                    true,
+                )
+                .clicked()
+            {
+                asked.set(Some(Ask::UpdateAll));
+            }
+        },
+    );
+    asked.into_inner()
+}
+
+/// The two lists of a frame, as the search left them.
+struct Lists<'a> {
+    /// The installed plugins, in the list's order.
+    listed: &'a [&'a Plugin],
+    /// The chosen one of them.
+    chosen: Option<&'a Plugin>,
+    /// The plugins on offer, in the list's order.
+    available: &'a [&'a Available],
+    /// The chosen one of them.
+    chosen_available: Option<&'a Available>,
+    /// How many plugins are on offer, whatever the search says.
+    on_offer: usize,
+    /// The *Available* list has its strip: there is a plugin list.
+    strip: bool,
+}
+
+/// Why the last check gave no plugin list, in the view's words.
+fn problem_line(problem: RegistryProblem) -> String {
+    match problem {
+        RegistryProblem::Offline => t!("extensions-offline"),
+        RegistryProblem::Unverified => t!("extensions-unverified"),
+        RegistryProblem::NewerRick => t!("extensions-newer-rick"),
+        RegistryProblem::Unreadable => t!("extensions-unreadable"),
+    }
+}
+
+/// What the *Available* view says in place of a plugin's details, and
+/// whether *Check now* stands under it: why there is no list, or that
+/// nothing is left to offer. `none_at_all` is the list being empty before
+/// the search.
+fn no_offer(app: &App, offering: &Offering, none_at_all: bool) -> (String, bool) {
+    let registry = app.plugin_registry();
+    let version = registry.rick.as_str();
+    match offering {
+        Offering::NotSetUp => (t!("extensions-not-set-up"), false),
+        Offering::PreRelease => (t!("extensions-pre-release", version = version), false),
+        Offering::TooOld => (t!("extensions-too-old", version = version), false),
+        Offering::Nothing if registry.checking => (t!("extensions-checking"), false),
+        Offering::Nothing => {
+            let text = match registry.problem {
+                Some(problem) => problem_line(problem),
+                // Nothing cached, and nothing went wrong: nothing was
+                // asked, because the switch is off.
+                None => t!("extensions-check-off"),
+            };
+            (text, true)
+        }
+        Offering::Plugins(_) if none_at_all => {
+            (t!("extensions-none-available", version = version), false)
+        }
+        Offering::Plugins(_) => (t!("extensions-no-match"), false),
+    }
+}
+
+/// The strip under the *Available* list: why the last check gave no list
+/// — the one shown is then the last good one — or the date of the list,
+/// and *Check now*.
+fn list_strip(ui: &mut egui::Ui, rect: Rect, app: &App, asked: &mut Option<Ask>) {
+    let scheme = theme::scheme(ui);
+    let registry: &PluginRegistry = app.plugin_registry();
+    ui.painter()
+        .hline(rect.x_range(), rect.top() + 0.5, scheme.hairline());
+    let text = if registry.checking {
+        t!("extensions-checking")
+    } else if let Some(problem) = registry.problem {
+        problem_line(problem)
+    } else {
+        let date = format::date(
+            registry.fetched,
+            std::time::SystemTime::now(),
+            app.model().settings.date_format,
+        )
+        .0;
+        t!("extensions-list-of", date = date)
+    };
+    let mut right = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt("extension-strip")
+            .max_rect(rect.shrink2(vec2(13.0, 0.0)))
+            .layout(egui::Layout::right_to_left(Align::Center)),
+    );
+    let check = widgets::card_button(
+        &mut right,
+        None,
+        &t!("extensions-check-now"),
+        ButtonKind::Secondary,
+    );
+    if check.clicked() && !registry.checking {
+        *asked = Some(Ask::CheckNow);
+    }
+    let left = rect.left() + 18.0;
+    widgets::line(
+        ui,
+        pos2(left, rect.center().y),
+        &text,
+        FontId::proportional(TEXT_SECONDARY),
+        scheme.text_secondary,
+        check.rect.left() - 10.0 - left,
+    );
+}
+
 /// The header's secondary line: how many plugins there are, how many are
-/// switched on and how many need attention.
-fn counts(app: &App) -> String {
+/// switched on, how many need attention and, while there are any, how
+/// many have an update — *2 updates*.
+fn counts(app: &App, updates: usize) -> String {
     let plugins: Vec<&Plugin> = app.plugins().iter().filter(|p| !p.removed).collect();
     let on = plugins.iter().filter(|p| enabled(app, p)).count();
     let attention = plugins
         .iter()
         .filter(|p| attention(app, p).is_some())
         .count();
-    [
+    let mut parts = vec![
         t!("extensions-installed", count = plugins.len()),
         t!("extensions-enabled", count = on),
         t!("extensions-attention", count = attention),
-    ]
-    .join("  ·  ")
+    ];
+    if updates > 0 {
+        parts.push(t!("extensions-updates", count = updates));
+    }
+    parts.join("  ·  ")
 }
 
 /// The search field of the list: a magnifier and the text, on `bg/card`.
@@ -673,33 +972,282 @@ fn row(
     line
 }
 
-/// The details when no plugin is listed: nothing was found, or nothing
-/// matches the search.
-fn nothing(ui: &mut egui::Ui, rect: Rect, none_at_all: bool) {
+/// The details when no plugin is listed: `text`, one line or a few,
+/// centred, and *Check now* under it when `check` says checking can help.
+fn nothing(ui: &mut egui::Ui, rect: Rect, text: &str, check: bool, asked: &mut Option<Ask>) {
     let scheme = theme::scheme(ui);
-    let text = if none_at_all {
-        t!("settings-no-plugins-found")
-    } else {
-        t!("extensions-no-match")
-    };
-    let font = FontId::proportional(TEXT_BODY);
-    let width = ui
-        .painter()
-        .layout_no_wrap(text.clone(), font.clone(), scheme.text_secondary)
-        .size()
-        .x;
-    widgets::line(
-        ui,
-        pos2(rect.center().x - width / 2.0, rect.center().y),
-        &text,
-        font,
+    let width = rect.width() - 2.0 * PAD;
+    let galley = ui.painter().layout(
+        text.to_owned(),
+        FontId::proportional(TEXT_BODY),
         scheme.text_secondary,
-        rect.width() - 2.0 * PAD,
+        width,
+    );
+    let button = if check { 32.0 + 14.0 } else { 0.0 };
+    let top = rect.center().y - f32::midpoint(galley.size().y, button);
+    let at = Rect::from_min_size(
+        pos2(rect.center().x - galley.size().x / 2.0, top),
+        galley.size(),
+    );
+    ui.painter().galley(at.min, galley, scheme.text_secondary);
+    ui.interact(at, ui.id().with("extensions-nothing"), Sense::hover())
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text.to_owned()));
+    if !check {
+        return;
+    }
+    let label = t!("extensions-check-now");
+    let mut below = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt("extensions-nothing-check")
+            .max_rect(Rect::from_min_max(
+                pos2(rect.left(), at.bottom() + 14.0),
+                pos2(rect.right(), at.bottom() + 14.0 + 32.0),
+            ))
+            .layout(egui::Layout::top_down(Align::Center)),
+    );
+    if widgets::card_button(&mut below, None, &label, ButtonKind::Secondary).clicked() {
+        *asked = Some(Ask::CheckNow);
+    }
+}
+
+/// One row of the *Available* list, 34 px: the icon of the plugin's kind,
+/// its name and, where an installed plugin has its switch, the size of
+/// the download.
+fn available_row(ui: &mut egui::Ui, plugin: &Available, chosen: bool, asked: &mut Option<Ask>) {
+    let scheme = theme::scheme(ui);
+    let radius = theme::metrics(ui.ctx()).corner_radius();
+    let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::hover());
+    let inner = Rect::from_min_max(
+        pos2(line.left() + 8.0, line.top()),
+        pos2(line.right() - 9.0, line.bottom()),
+    );
+    let response = ui.interact(
+        inner,
+        ui.id().with(("available", &plugin.id)),
+        Sense::click(),
+    );
+    if chosen {
+        ui.painter()
+            .rect_filled(inner, radius, scheme.bg_selected_soft);
+    } else if response.hovered() {
+        ui.painter().rect_filled(inner, radius, scheme.bg_subtle);
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::RadioButton,
+            true,
+            chosen,
+            plugin.name.clone(),
+        )
+    });
+    if response.clicked() {
+        *asked = Some(Ask::ChooseAvailable(plugin.id.clone()));
+    }
+    ui.painter().text(
+        pos2(inner.left() + 10.0 + ICON / 2.0, inner.center().y),
+        Align2::CENTER_CENTER,
+        icons::for_plugin(&plugin.id),
+        FontId::proportional(ICON),
+        scheme.icon_default,
+    );
+    // The size stands where the switch does; the name has the rest.
+    let size = format::size(Some(plugin.size));
+    let galley = ui.painter().layout_no_wrap(
+        size,
+        FontId::proportional(TEXT_SECONDARY),
+        scheme.text_secondary,
+    );
+    let right = inner.right() - 10.0 - galley.size().x;
+    let at = Rect::from_min_size(
+        pos2(right, inner.center().y - galley.size().y / 2.0),
+        galley.size(),
+    );
+    let spoken = galley.text().to_owned();
+    ui.painter().galley(at.min, galley, scheme.text_secondary);
+    ui.interact(at, ui.id().with(("size", &plugin.id)), Sense::hover())
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken.clone()));
+    let left = inner.left() + 36.0;
+    let name = widgets::elided(
+        ui,
+        &plugin.name,
+        FontId::proportional(TEXT_BODY),
+        scheme.text_primary,
+        right - 10.0 - left,
+    );
+    ui.painter().galley(
+        pos2(left, inner.center().y - name.size().y / 2.0),
+        name,
+        scheme.text_primary,
     );
 }
 
-/// The details of the chosen plugin.
-fn details(ui: &mut egui::Ui, rect: Rect, app: &App, plugin: &Plugin, asked: &mut Option<Ask>) {
+/// What an available plugin will fill its points with, from what the
+/// plugin list says it is for: a provider with its kinds of connection, a
+/// previewer with its file types, and the entries that make a folder its
+/// business — *Action; Decorator; folders with .git*.
+fn offers(plugin: &Available) -> String {
+    let mut parts = Vec::new();
+    let detail = |name: String, of: String| {
+        if of.is_empty() {
+            name
+        } else {
+            t!("extensions-point-of", point = name, of = of)
+        }
+    };
+    if plugin.points.contains(Points::PROVIDER) {
+        parts.push(detail(
+            t!("extensions-provider"),
+            plugin.connections.join(", "),
+        ));
+    }
+    if plugin.points.contains(Points::PREVIEWER) {
+        parts.push(detail(
+            t!("extensions-previewer"),
+            plugin.previews.join(", "),
+        ));
+    }
+    if plugin.points.contains(Points::SEARCH_INDEX) {
+        parts.push(t!("extensions-search"));
+    }
+    if plugin.points.contains(Points::ACTION) {
+        parts.push(t!("extensions-action"));
+    }
+    if plugin.points.contains(Points::DECORATOR) {
+        parts.push(t!("extensions-decorator"));
+    }
+    if !plugin.markers.is_empty() {
+        parts.push(t!(
+            "extensions-folders-with",
+            names = plugin.markers.join(", ")
+        ));
+    }
+    parts.join("; ")
+}
+
+/// The details of the chosen plugin of the *Available* list: the head as
+/// an installed plugin has it, with the chip *Available* and **Install**
+/// in place of the switch, the description, and an info card with
+/// *Contributes*, *Size* and *Source*, the registry's host.
+fn available_details(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    app: &App,
+    plugin: &Available,
+    asked: &mut Option<Ask>,
+) {
+    let scheme = theme::scheme(ui);
+    let inner = rect.shrink2(vec2(PAD, 20.0));
+    let mut column = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt(("available-details", &plugin.id))
+            .max_rect(inner)
+            .layout(egui::Layout::top_down(Align::Min)),
+    );
+    column.set_clip_rect(inner.intersect(ui.clip_rect()));
+    egui::ScrollArea::vertical()
+        .id_salt("available-details")
+        .auto_shrink([false, false])
+        .show(&mut column, |ui| {
+            ui.spacing_mut().item_spacing = vec2(0.0, GAP);
+            ui.set_width(inner.width());
+            available_head(ui, plugin, asked);
+            if !plugin.description.is_empty() {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&plugin.description)
+                            .size(TEXT_BODY)
+                            .line_height(Some(19.0))
+                            .color(scheme.text_primary),
+                    )
+                    .wrap()
+                    .selectable(false),
+                );
+            }
+            let rows = [
+                InfoRow::text(t!("extensions-contributes"), offers(plugin)),
+                InfoRow::text(t!("extensions-size"), format::size(Some(plugin.size))),
+                InfoRow::text(t!("extensions-source"), app.plugin_registry().host.clone()),
+            ];
+            info_rows(ui, &rows, asked);
+        });
+}
+
+/// The head of an available plugin's details: the icon tile, the name,
+/// under it the id, the version and the kind with the chip *Available*,
+/// and **Install** at the right, which says *Installing…* and takes no
+/// click while the install runs.
+fn available_head(ui: &mut egui::Ui, plugin: &Available, asked: &mut Option<Ask>) {
+    let scheme = theme::scheme(ui);
+    let (band, _) = ui.allocate_exact_size(vec2(ui.available_width(), TILE), Sense::hover());
+    let tile = Rect::from_min_size(band.min, vec2(TILE, TILE));
+    ui.painter().rect_filled(tile, 12.0, scheme.bg_subtle);
+    ui.painter().text(
+        tile.center(),
+        Align2::CENTER_CENTER,
+        icons::for_plugin(&plugin.id),
+        FontId::proportional(26.0),
+        scheme.icon_default,
+    );
+    // The button first: the name and the line under it have what it leaves.
+    let mut at = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt(("install", &plugin.id))
+            .max_rect(band)
+            .layout(egui::Layout::right_to_left(Align::Center)),
+    );
+    let label = if plugin.installing {
+        t!("extensions-installing")
+    } else {
+        t!("extensions-install-available")
+    };
+    let button = widgets::button_of(
+        &mut at,
+        Some(icons::INSTALL),
+        &label,
+        ButtonKind::Primary,
+        !plugin.installing,
+    );
+    if button.clicked() && !plugin.installing {
+        *asked = Some(Ask::InstallAvailable(plugin.id.clone()));
+    }
+    let left = tile.right() + 14.0;
+    let right = button.rect.left() - 14.0;
+    widgets::line(
+        ui,
+        pos2(left, band.top() + 14.0),
+        &plugin.name,
+        FontId::proportional(15.0),
+        scheme.text_primary,
+        right - left,
+    );
+    let kind = Kind::of(plugin.points).name();
+    let meta: Vec<&str> = [plugin.id.as_str(), plugin.version.as_str(), kind.as_str()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect();
+    let y = band.top() + 34.5;
+    let chip_text = t!("extensions-available");
+    let line = widgets::line(
+        ui,
+        pos2(left, y),
+        &meta.join("  ·  "),
+        FontId::proportional(TEXT_SECONDARY),
+        scheme.text_secondary,
+        right - left - chip_width(ui, &chip_text) - 6.0,
+    );
+    chip(ui, line.right() + 6.0, y, &chip_text);
+}
+
+/// The details of the chosen plugin; `update` is the build the registry
+/// has for it, when it has one.
+fn details(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    app: &App,
+    plugin: &Plugin,
+    update: Option<&Update>,
+    asked: &mut Option<Ask>,
+) {
     let scheme = theme::scheme(ui);
     let inner = rect.shrink2(vec2(PAD, 20.0));
     // The actions keep the foot; the rest scrolls above them when a low
@@ -733,9 +1281,7 @@ fn details(ui: &mut egui::Ui, rect: Rect, app: &App, plugin: &Plugin, asked: &mu
                     .selectable(false),
                 );
             }
-            if let Some(text) = attention(app, plugin) {
-                attention_card(ui, &text);
-            }
+            update_or_attention(ui, app, plugin, update, asked);
             info_card(ui, app, plugin, asked);
         });
 }
@@ -803,10 +1349,56 @@ fn head(ui: &mut egui::Ui, app: &App, plugin: &Plugin, asked: &mut Option<Ask>) 
     );
 }
 
+/// The card over the info card. A plugin with an update gets the update's:
+/// the host's reason as it stands, *Built for Rick 0.5.0*, with
+/// **Update** — or, for a plugin that is loaded, the version that is
+/// there to have. Any other plugin that needs attention gets the
+/// attention card.
+fn update_or_attention(
+    ui: &mut egui::Ui,
+    app: &App,
+    plugin: &Plugin,
+    update: Option<&Update>,
+    asked: &mut Option<Ask>,
+) {
+    let Some(update) = update else {
+        if let Some(text) = attention(app, plugin) {
+            attention_card(ui, &t!("extensions-needs-attention"), &text, None);
+        }
+        return;
+    };
+    let (title, text) = match &plugin.status {
+        PluginStatus::Refused(reason) => (t!("extensions-needs-attention"), reason.clone()),
+        _ => (
+            t!("extensions-update-available"),
+            t!(
+                "extensions-update-version",
+                version = update.version.as_str()
+            ),
+        ),
+    };
+    let label = if update.updating {
+        t!("extensions-updating")
+    } else {
+        t!("extensions-update")
+    };
+    if attention_card(ui, &title, &text, Some((&label, !update.updating))) {
+        *asked = Some(Ask::InstallAvailable(update.id.clone()));
+    }
+}
+
 /// The attention card: `bg/card` with an amber border, never an amber
-/// fill, the dot, *Needs attention* and the reason.
-fn attention_card(ui: &mut egui::Ui, text: &str) {
+/// fill, the dot, `title` and the reason, and under them the card's
+/// button when it has one, with whether it takes a click. Returns
+/// whether the button was clicked.
+fn attention_card(
+    ui: &mut egui::Ui,
+    title: &str,
+    text: &str,
+    button: Option<(&str, bool)>,
+) -> bool {
     let scheme = theme::scheme(ui);
+    let mut clicked = false;
     egui::Frame::new()
         .fill(scheme.bg_card)
         .stroke(egui::Stroke::new(1.5, scheme.status_warning))
@@ -821,7 +1413,7 @@ fn attention_card(ui: &mut egui::Ui, text: &str) {
                     .circle_filled(dot.center(), DOT / 2.0, scheme.status_warning);
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new(t!("extensions-needs-attention"))
+                        egui::RichText::new(title)
                             .size(TEXT_BODY)
                             .color(scheme.text_primary),
                     )
@@ -838,7 +1430,19 @@ fn attention_card(ui: &mut egui::Ui, text: &str) {
                 .wrap()
                 .selectable(false),
             );
+            if let Some((label, enabled)) = button {
+                ui.add_space(2.0);
+                let update = widgets::button_of(
+                    ui,
+                    Some(icons::INSTALL),
+                    label,
+                    ButtonKind::Primary,
+                    enabled,
+                );
+                clicked = update.clicked() && enabled;
+            }
         });
+    clicked
 }
 
 /// The path as the card shows it: under the home directory, with `~`.
@@ -852,37 +1456,67 @@ fn shown(app: &App, path: &Path) -> String {
     }
 }
 
+/// One row of an info card.
+struct InfoRow {
+    /// The row's label.
+    label: String,
+    /// What is shown.
+    value: String,
+    /// What the copy button copies, when it is not what is shown.
+    copied: Option<String>,
+    /// The value is a path or the like, in monospace.
+    mono: bool,
+}
+
+impl InfoRow {
+    /// A row of plain text, copied as it is shown.
+    fn text(label: String, value: String) -> Self {
+        Self {
+            label,
+            value,
+            copied: None,
+            mono: false,
+        }
+    }
+
+    /// A row of a path: shown short, in monospace, and copied whole.
+    fn path(label: String, shown: String, whole: String) -> Self {
+        Self {
+            label,
+            value: shown,
+            copied: Some(whole),
+            mono: true,
+        }
+    }
+}
+
 /// The info card: *Contributes*, *Status*, *Location* and, for a plugin
 /// with settings, *Config* — the two paths monospace, every row with a
 /// copy button.
 fn info_card(ui: &mut egui::Ui, app: &App, plugin: &Plugin, asked: &mut Option<Ask>) {
-    let scheme = theme::scheme(ui);
-    let location = plugin.path.display().to_string();
-    let config = app.plugin_config(&plugin.id);
-    // Label, what is shown, what is copied, monospace.
     let mut rows = vec![
-        (
-            t!("extensions-contributes"),
-            contributes(app, plugin),
-            None,
-            false,
-        ),
-        (t!("extensions-status"), status(plugin), None, false),
-        (
+        InfoRow::text(t!("extensions-contributes"), contributes(app, plugin)),
+        InfoRow::text(t!("extensions-status"), status(plugin)),
+        InfoRow::path(
             t!("extensions-location"),
             shown(app, &plugin.path),
-            Some(location),
-            true,
+            plugin.path.display().to_string(),
         ),
     ];
-    if let Some(config) = &config {
-        rows.push((
+    if let Some(config) = app.plugin_config(&plugin.id) {
+        rows.push(InfoRow::path(
             t!("extensions-config"),
-            shown(app, config),
-            Some(config.display().to_string()),
-            true,
+            shown(app, &config),
+            config.display().to_string(),
         ));
     }
+    info_rows(ui, &rows, asked);
+}
+
+/// An info card of `rows`: the label, the value and a copy button each,
+/// with hairlines between them.
+fn info_rows(ui: &mut egui::Ui, rows: &[InfoRow], asked: &mut Option<Ask>) {
+    let scheme = theme::scheme(ui);
     egui::Frame::new()
         .fill(scheme.bg_card)
         .stroke(egui::Stroke::new(1.0, scheme.border_default))
@@ -890,7 +1524,7 @@ fn info_card(ui: &mut egui::Ui, app: &App, plugin: &Plugin, asked: &mut Option<A
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
             ui.set_width(ui.available_width());
-            for (index, (label, value, copied, mono)) in rows.iter().enumerate() {
+            for (index, row) in rows.iter().enumerate() {
                 let (line, _) =
                     ui.allocate_exact_size(vec2(ui.available_width(), INFO_ROW), Sense::hover());
                 if index > 0 {
@@ -900,7 +1534,7 @@ fn info_card(ui: &mut egui::Ui, app: &App, plugin: &Plugin, asked: &mut Option<A
                 widgets::line(
                     ui,
                     pos2(line.left() + 14.0, line.center().y),
-                    label,
+                    &row.label,
                     FontId::proportional(TEXT_SECONDARY),
                     scheme.text_secondary,
                     LABEL,
@@ -910,7 +1544,7 @@ fn info_card(ui: &mut egui::Ui, app: &App, plugin: &Plugin, asked: &mut Option<A
                     vec2(22.0, 22.0),
                 );
                 let left = line.left() + 14.0 + LABEL + 12.0;
-                let font = if *mono {
+                let font = if row.mono {
                     FontId::monospace(TEXT_SECONDARY)
                 } else {
                     FontId::proportional(TEXT_SECONDARY)
@@ -918,14 +1552,16 @@ fn info_card(ui: &mut egui::Ui, app: &App, plugin: &Plugin, asked: &mut Option<A
                 widgets::line(
                     ui,
                     pos2(left, line.center().y),
-                    value,
+                    &row.value,
                     font,
                     scheme.text_primary,
                     button.left() - 12.0 - left,
                 );
-                let name = t!("extensions-copy", what = label.as_str());
+                let name = t!("extensions-copy", what = row.label.as_str());
                 if CopyButton::new(&name).show_at(ui, button, &name).clicked() {
-                    *asked = Some(Ask::Copy(copied.clone().unwrap_or_else(|| value.clone())));
+                    *asked = Some(Ask::Copy(
+                        row.copied.clone().unwrap_or_else(|| row.value.clone()),
+                    ));
                 }
             }
         });

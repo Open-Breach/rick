@@ -93,7 +93,9 @@ filesystem fast paths other crates program against: the bulk directory reader
 (`FICLONE`/`copy_file_range`, `clonefile`, `CopyFileExW`), allocated sizes and
 extent sharing, the `VPath` ↔ `Path` conversion and `file://` URIs both
 ways (`paths::from_uri` decodes a `file:///…` or `rick:///…` URI to a
-path of this machine). It is the only crate
+path of this machine), and `cache_dir`, where Rick keeps what it fetched
+and can fetch again (`$XDG_CACHE_HOME/rick`, `~/Library/Caches/Rick`,
+`%LOCALAPPDATA%\Rick\Cache`). It is the only crate
 allowed `unsafe` and `cfg(target_os)`. It depends on `types` and `runtime`;
 `vfs`, `vfs-local` and the crates above them may depend on it. It also uses
 `raw-window-handle`, `wayland-client` and `x11rb` on Linux, `objc2-app-kit`

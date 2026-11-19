@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
-use app::{App, Command, Event};
+use app::{App, Command, Event, RegistryCommand};
 use egui::{ViewportBuilder, ViewportCommand, ViewportId};
 use egui_dock::{DockArea, TabViewer};
 use ext::{ActionCtx, ActionId, Invocation, Level};
@@ -175,6 +175,9 @@ pub enum Request {
     About,
     /// Open the Settings window on a plugin's page, by the plugin's id.
     PluginSettings(String),
+    /// *Restart now* of the Extensions dialogue: close Rick and start it
+    /// again with its session.
+    Restart,
     /// Rows were dragged past the threshold: start a drag of them.
     StartDrag {
         /// The pane.
@@ -295,6 +298,10 @@ struct Toast {
     /// The window it is shown in — the one the user acted in — or the
     /// window in front when it is tied to none.
     window: Option<WindowId>,
+    /// What the notice offers to do about what it says: the button's
+    /// label and the command it sends. A notice with one stays until it
+    /// is dismissed or its button is pressed.
+    action: Option<(String, Command)>,
 }
 
 /// A text an action asked the host to show.
@@ -1827,6 +1834,20 @@ impl RickUi {
             text: text.into(),
             until,
             window,
+            action: None,
+        });
+    }
+
+    /// A notice that offers to do something about what it says: `label`
+    /// is its button and `command` what the button sends. It stays until
+    /// it is dismissed or the button is pressed.
+    fn toast_with(&mut self, text: impl Into<String>, label: impl Into<String>, command: Command) {
+        self.toasts.push(Toast {
+            level: Level::Info,
+            text: text.into(),
+            until: None,
+            window: None,
+            action: Some((label.into(), command)),
         });
     }
 
@@ -1851,6 +1872,15 @@ impl RickUi {
                 Event::Activate { window, token } => self.activate(window, token.as_deref()),
                 Event::Properties(info) => self.properties.open(*info),
                 Event::PluginInstalled { path } => self.extensions.installed(path),
+                Event::PluginUpdates { count } => {
+                    // *2 plugins need their build for Rick 0.6.0*.
+                    let version = self.app.plugin_registry().rick.clone();
+                    self.toast_with(
+                        t!("extensions-updates-toast", count = count, version = version),
+                        t!("extensions-update-all"),
+                        Command::UpdateAll,
+                    );
+                }
                 Event::PropertiesCounted {
                     pane,
                     path,
@@ -1924,8 +1954,9 @@ impl RickUi {
         }
     }
 
-    /// Rick was installed to the standard location: the session is saved
-    /// for the installed copy to restore, and the binary's hook starts it.
+    /// Rick is to continue from `binary`, the copy it was installed to
+    /// or the one it runs from: the session is saved for that process to
+    /// restore, and the binary's hook starts it.
     fn relaunch_from(&mut self, binary: &std::path::Path) {
         let Some(relaunch) = self.relaunch.clone() else {
             return;
@@ -1933,8 +1964,21 @@ impl RickUi {
         if let Err(error) = self.app.save_session() {
             tracing::warn!(%error, "session not saved before the relaunch");
         }
-        tracing::info!(binary = %binary.display(), "continuing from the installed copy");
+        tracing::info!(binary = %binary.display(), "continuing in a new process");
         relaunch(binary);
+    }
+
+    /// *Restart now*: Rick starts again from the binary it runs from, by
+    /// the rules of a relaunch, and the new process loads the plugins as
+    /// they are now and restores the session.
+    fn restart(&mut self) {
+        match std::env::current_exe() {
+            Ok(binary) => self.relaunch_from(&binary),
+            Err(error) => {
+                tracing::warn!(%error, "the running binary was not found");
+                self.toast(Level::Error, error.to_string());
+            }
+        }
     }
 
     /// Draws the text windows and drops the closed ones.
@@ -2249,6 +2293,7 @@ impl RickUi {
                     }
                     Request::About => self.about.open(),
                     Request::PluginSettings(id) => self.settings.open_plugin(self.root, &id),
+                    Request::Restart => self.restart(),
                     Request::StartDrag {
                         pane,
                         tab,
@@ -4856,15 +4901,26 @@ impl RickUi {
         }
     }
 
+    /// Drops the notices whose time is over, and the one that offers the
+    /// plugin updates once none is left to offer.
+    fn expire_toasts(&mut self) {
+        let now = Instant::now();
+        self.toasts
+            .retain(|t| t.until.is_none_or(|until| until > now));
+        let offers_updates = |toast: &Toast| matches!(&toast.action, Some((_, Command::UpdateAll)));
+        if self.toasts.iter().any(offers_updates) && self.app.updates().is_empty() {
+            self.toasts.retain(|toast| !offers_updates(toast));
+        }
+    }
+
     /// The notices of `window` at its top right, under the title row: the
     /// ones tied to it and, when it is the window in `front`, the ones
     /// tied to none or to a window that is gone. A notice carries its
     /// whole text, wrapped and never cut; an error has a close button and
-    /// stays until that is pressed.
+    /// stays until that is pressed, and so does a notice with a button of
+    /// its own, which stands under its text.
     fn show_toasts(&mut self, ctx: &egui::Context, window: WindowId, front: bool) {
-        let now = Instant::now();
-        self.toasts
-            .retain(|t| t.until.is_none_or(|until| until > now));
+        self.expire_toasts();
         let shown: Vec<usize> = self
             .toasts
             .iter()
@@ -4890,6 +4946,7 @@ impl RickUi {
             content.top() + crate::theme::metrics(ctx).titlebar_height + TOAST_GAP,
         );
         let mut dismissed = None;
+        let mut acted = None;
         egui::Area::new(egui::Id::new(("toasts", window.0)))
             .pivot(egui::Align2::RIGHT_TOP)
             .fixed_pos(corner)
@@ -4908,12 +4965,28 @@ impl RickUi {
                             ui.spacing_mut().item_spacing.x = 8.0;
                             ui.allocate_ui(egui::vec2(TOAST_WIDTH, 0.0), |ui| {
                                 ui.set_max_width(TOAST_WIDTH);
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(&toast.text).color(colour),
-                                    )
-                                    .wrap(),
-                                );
+                                ui.vertical(|ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(&toast.text).color(colour),
+                                        )
+                                        .wrap(),
+                                    );
+                                    // What the notice offers to do about
+                                    // it, under what it says.
+                                    if let Some((label, _)) = &toast.action {
+                                        ui.add_space(4.0);
+                                        let button = crate::widgets::card_button(
+                                            ui,
+                                            None,
+                                            label,
+                                            crate::widgets::ButtonKind::Secondary,
+                                        );
+                                        if button.clicked() {
+                                            acted = Some(index);
+                                        }
+                                    }
+                                });
                             });
                             if sticky {
                                 let (rect, _) = ui.allocate_exact_size(
@@ -4934,6 +5007,13 @@ impl RickUi {
                     });
                 }
             });
+        // The button does what the notice offered, and the notice goes.
+        if let Some(index) = acted {
+            if let Some((_, command)) = self.toasts.remove(index).action {
+                self.requests.push(Request::Command(command));
+            }
+            return;
+        }
         if let Some(index) = dismissed {
             self.toasts.remove(index);
         }
@@ -5687,7 +5767,13 @@ impl eframe::App for RickUi {
         self.embedded = ctx.embed_viewports();
         self.sync_window_ref(frame, &ctx);
         // The integration check: asked for once the first frame is drawn.
-        self.integration.frame(&mut self.requests);
+        // The plugin list with it: what is cached is read then, and
+        // fetched when the settings allow it and it is a day old
+        // (specs/plugin-distribution.md §6).
+        if self.integration.frame(&mut self.requests) {
+            self.requests
+                .push(Request::Command(Command::Registry(RegistryCommand::Start)));
+        }
         self.draw_window(ui, root);
         // The Settings window: its own viewport, or an area over the root
         // window where the backend embeds viewports.

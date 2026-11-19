@@ -25,5 +25,8 @@ that their fixture generators are at hand and their library files are
 built beside the test binaries, from where the tests install them into a
 temporary plugins directory and load them through the host; the
 `gstreamer` feature turns the media previewer's playback on for the media
-tests. It is the top of the dependency graph and may depend on every other
+tests. `plugins-registry` is one with its `fixtures` feature: the registry
+tests run against a server on this machine and a key made in the test, and
+none asks the real registry; the `registry` module builds the index such a
+registry publishes from the plugins' manifests. It is the top of the dependency graph and may depend on every other
 crate in the workspace; nothing depends on it.

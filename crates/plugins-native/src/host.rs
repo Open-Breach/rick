@@ -2,6 +2,7 @@
 //! of every plugin at start.
 
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -321,6 +322,61 @@ fn process(
     )
 }
 
+/// Whether the plugin folder `dir` holds a library besides the plugin's
+/// own, `library`: one the plugin's library may link, as the media
+/// previewer links the GStreamer runtime that travels in its folder.
+fn brings_libraries(dir: &Path, library: &str) -> bool {
+    let suffix = std::env::consts::DLL_SUFFIX;
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .any(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            !name.eq_ignore_ascii_case(library)
+                && name.to_ascii_lowercase().ends_with(suffix)
+                && entry.path().is_file()
+        })
+}
+
+/// `path`, the value of a search path variable, with `dir` put first and
+/// not named a second time.
+fn with_first(dir: &Path, path: Option<&OsStr>) -> Result<OsString, std::env::JoinPathsError> {
+    let rest = path
+        .map(|path| std::env::split_paths(path).collect::<Vec<_>>())
+        .unwrap_or_default();
+    std::env::join_paths(
+        std::iter::once(dir.to_path_buf()).chain(rest.into_iter().filter(|known| known != dir)),
+    )
+}
+
+/// Puts the plugin folder `dir` first on the `PATH`, for the rest of the
+/// process: Windows only.
+///
+/// Windows looks for the libraries a library links beside the binary, in
+/// the system's folders and on the `PATH`, never in the folder of the
+/// library that asks. A plugin that brings libraries of its own in its
+/// folder would not load, wherever the folder lies. The `PATH` is the one
+/// of those places a process can add to that every later load honours as
+/// well, and later loads matter: GStreamer opens its elements by full path
+/// when they are first needed, and what an element links lies in the
+/// plugin's folder too.
+fn lend_to_loader(dir: &Path) {
+    match with_first(dir, std::env::var_os("PATH").as_deref()) {
+        Ok(path) => {
+            // SAFETY: changing the environment is unsound where another
+            // thread may read it at the same moment without std's lock.
+            // That cannot happen on Windows, where the system guards the
+            // environment itself, and this function runs nowhere else
+            // (the caller checks the operating system).
+            unsafe { std::env::set_var("PATH", path) };
+            debug!(dir = %dir.display(), "plugin folder put on the PATH");
+        }
+        Err(error) => warn!(dir = %dir.display(), %error, "plugin folder not put on the PATH"),
+    }
+}
+
 /// The checks, in order, then the load; `Ok(None)` for a disabled plugin.
 fn check_and_load(
     toml: &PluginToml,
@@ -377,6 +433,9 @@ fn check_and_load(
     if options.disabled.contains(&toml.id) {
         return Ok(None);
     }
+    if os == "windows" && brings_libraries(dir, file) {
+        lend_to_loader(dir);
+    }
     let loaded = load_library(
         &path,
         options.platform(),
@@ -404,4 +463,49 @@ fn check_and_load(
         ));
     }
     Ok(Some(Arc::new(loaded)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A plugin's folder counts as bringing libraries when a library other
+    /// than the plugin's own lies in it: the rule by which the host lends
+    /// the folder to the Windows loader (issue 250, item 5).
+    #[test]
+    fn a_folder_brings_libraries_when_one_lies_beside_the_plugin_s_own() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let suffix = std::env::consts::DLL_SUFFIX;
+        let own = format!("ext_preview_media{suffix}");
+        std::fs::write(dir.path().join(&own), "").unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(dir.path().join(MANIFEST_FILE), "").unwrap_or_else(|e| panic!("{e}"));
+        // Elements in a folder below are GStreamer's to find, not the
+        // loader's.
+        let below = dir.path().join("lib").join("gstreamer-1.0");
+        std::fs::create_dir_all(&below).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(below.join(format!("gstcoreelements{suffix}")), "")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(!brings_libraries(dir.path(), &own));
+        assert!(!brings_libraries(dir.path(), &own.to_uppercase()));
+
+        std::fs::write(dir.path().join(format!("gstreamer-1.0-0{suffix}")), "")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(brings_libraries(dir.path(), &own));
+        assert!(!brings_libraries(&dir.path().join("missing"), &own));
+    }
+
+    #[test]
+    fn the_folder_goes_first_on_the_path_and_is_named_once() {
+        let dir = Path::new("plugins").join("preview-media");
+        let other = Path::new("somewhere").join("else");
+        let split = |path: &OsString| std::env::split_paths(path).collect::<Vec<_>>();
+
+        let alone = with_first(&dir, None).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(split(&alone), std::slice::from_ref(&dir));
+
+        let before = std::env::join_paths([other.clone(), dir.clone(), other.join("bin")])
+            .unwrap_or_else(|e| panic!("{e}"));
+        let after = with_first(&dir, Some(&before)).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(split(&after), [dir, other.clone(), other.join("bin")]);
+    }
 }

@@ -3913,6 +3913,280 @@ fn screenshots_of_the_extensions_dialogue() {
     }
 }
 
+/// specs/plugin-distribution.md §7 (issue 251): the *Available* list of
+/// the Extensions dialogue against a registry of the test's own — the
+/// plugins a release publishes separately, under the headings of the
+/// installed ones, each with its size — and the details of one of them
+/// with **Install**, in Light and Dark; and the line the view shows where
+/// there is no list.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_available_plugins() {
+    use app::{Plugin, PluginStatus};
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+    use ext::Extension;
+    use plugins_registry::fixtures::{Server, Signer};
+    use tests::registry;
+    let (_keep, root) = sample_tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    // The default set, as rows beside the binary.
+    let loaded: Vec<Arc<dyn Extension>> = vec![
+        Arc::new(ext_vfs_archive::ArchiveExtension::new()),
+        Arc::new(ext_vfs_trash::TrashExtension::new()),
+        Arc::new(ext_preview_archive::ArchivePreview::new()),
+        Arc::new(ext_preview_hex::HexPreview::new()),
+        Arc::new(ext_preview_icons::IconsPreview::new()),
+        Arc::new(ext_preview_markup::MarkupPreview::new()),
+        Arc::new(ext_search_walk::WalkExtension::new()),
+        Arc::new(ext_action_rename::RenameExtension::new()),
+        Arc::new(ext_action_compress::CompressExtension::new()),
+        Arc::new(ext_action_compare::CompareExtension::new()),
+    ];
+    let beside = Path::new("/opt/rick/plugins");
+    let rows: Vec<Plugin> = loaded
+        .iter()
+        .map(|ext| {
+            let manifest = ext.manifest();
+            Plugin {
+                id: manifest.id.0.to_owned(),
+                name: manifest.name.to_owned(),
+                description: manifest.description.to_owned(),
+                version: registry::RICK.to_owned(),
+                points: manifest.points,
+                previews: manifest.previews.iter().map(|p| (*p).to_owned()).collect(),
+                status: PluginStatus::Loaded,
+                path: beside.join(manifest.id.0),
+                built_in: true,
+                removed: false,
+            }
+        })
+        .collect();
+    // The registry: the plugins a release publishes separately, as their
+    // manifests describe them, with the sizes of their packages.
+    let separate: Vec<(Box<dyn Extension>, u64)> = vec![
+        (Box::new(ext_git::GitExtension::new()), 4_812_800),
+        (Box::new(ext_svn::SvnExtension::new()), 1_126_400),
+        (Box::new(ext_ssh::SshExtension::new()), 6_348_800),
+        (Box::new(ext_vfs_s3::S3Extension::new()), 3_788_800),
+        (Box::new(ext_vfs_azure::AzureExtension::new()), 3_686_400),
+        (Box::new(ext_vfs_gcs::GcsExtension::new()), 3_891_200),
+        (
+            Box::new(ext_preview_office::OfficePreview::new()),
+            2_252_800,
+        ),
+        (Box::new(ext_preview_3d::Preview3d::new()), 9_420_800),
+        (
+            Box::new(ext_preview_media::MediaPreview::new()),
+            148_897_792,
+        ),
+    ];
+    let plugins: Vec<serde_json::Value> = separate
+        .iter()
+        .map(|(ext, size)| {
+            registry::plugin(ext.manifest(), &[registry::listed(registry::RICK, *size)])
+        })
+        .collect();
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(&signer, &registry::index(&plugins));
+    let config = fake.config_dir();
+    fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        config.join(app::SETTINGS_FILE),
+        registry::rick_toml(&server, &signer, true),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: loaded,
+        config_dir: Some(config),
+        start: Some(local(&root)),
+    });
+    app.set_rick_version(registry::RICK);
+    app.set_plugins(rows);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 840.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        // The pointer rests outside the dialogue, on no button.
+        harness.event(egui::Event::PointerMoved(egui::pos2(40.0, 820.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let choose = |harness: &mut Harness<'_, RickUi>, name: &str| {
+        harness
+            .get_by_role_and_label(Role::RadioButton, name)
+            .click();
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::Extensions, pane);
+    for _ in 0..4 {
+        harness.step();
+    }
+    let modes = [(Theme::Light, "light"), (Theme::Dark, "dark")];
+
+    // The control over the installed list, counting what is on offer.
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("extensions-installed-{mode}"));
+    }
+    // The *Available* list, on its first plugin.
+    choose(&mut harness, "Available 9");
+    settle(&mut harness);
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("extensions-available-{mode}"));
+    }
+    // The details of a plugin that is for folders, and of one that adds
+    // a kind of connection.
+    for (name, file) in [("Git", "git"), ("S3", "s3")] {
+        choose(&mut harness, name);
+        for (theme, mode) in modes {
+            set(&mut harness, theme);
+            shoot(&mut harness, &format!("extensions-available-{file}-{mode}"));
+        }
+    }
+}
+
+/// specs/plugin-distribution.md §7, *Updates* (issue 251): after Rick was
+/// updated, a plugin the registry installed is refused as built for the
+/// Rick before, and the list has this Rick's build of it — the start's
+/// notice with **Update all**, and in the Extensions dialogue the header's
+/// count, the card that reads the host's reason with **Update**, and
+/// **Update all** in the footer, in Light and Dark.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_a_plugin_update() {
+    use app::plugins::{Installed, Origin, Record};
+    use app::{Plugin, PluginStatus};
+    use ext::Extension;
+    use plugins_registry::fixtures::{Server, Signer};
+    use tests::registry;
+    let (_keep, root) = sample_tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let loaded: Vec<Arc<dyn Extension>> = vec![
+        Arc::new(ext_vfs_archive::ArchiveExtension::new()),
+        Arc::new(ext_vfs_trash::TrashExtension::new()),
+        Arc::new(ext_preview_archive::ArchivePreview::new()),
+        Arc::new(ext_preview_hex::HexPreview::new()),
+        Arc::new(ext_action_rename::RenameExtension::new()),
+        Arc::new(ext_action_compress::CompressExtension::new()),
+    ];
+    let beside = Path::new("/opt/rick/plugins");
+    let row = |ext: &dyn Extension, version: &str, dir: &Path, status: PluginStatus| {
+        let manifest = ext.manifest();
+        Plugin {
+            id: manifest.id.0.to_owned(),
+            name: manifest.name.to_owned(),
+            description: manifest.description.to_owned(),
+            version: version.to_owned(),
+            points: manifest.points,
+            previews: manifest.previews.iter().map(|p| (*p).to_owned()).collect(),
+            status,
+            path: dir.join(manifest.id.0),
+            built_in: dir == beside,
+            removed: false,
+        }
+    };
+    let mut rows: Vec<Plugin> = loaded
+        .iter()
+        .map(|ext| row(&**ext, registry::RICK, beside, PluginStatus::Loaded))
+        .collect();
+    // Two plugins of the per-user folder, installed from the registry by
+    // the Rick before and refused by this one.
+    let per_user = fake.config_dir().join("plugins");
+    let separate: Vec<(Box<dyn Extension>, u64)> = vec![
+        (Box::new(ext_git::GitExtension::new()), 4_812_800),
+        (Box::new(ext_vfs_s3::S3Extension::new()), 3_788_800),
+        (Box::new(ext_ssh::SshExtension::new()), 6_348_800),
+    ];
+    for (ext, _) in &separate[..2] {
+        let refused = PluginStatus::Refused("Built for Rick 0.5.0".to_owned());
+        let user = row(&**ext, "0.5.0", &per_user, refused);
+        fs::create_dir_all(&user.path).unwrap_or_else(|e| panic!("{e}"));
+        let noted = Installed {
+            source: Origin::Registry,
+            version: "0.5.0".to_owned(),
+            sha256: "00".repeat(32),
+            url: None,
+        };
+        Record::note(&per_user, &user.path, noted).unwrap_or_else(|e| panic!("{e}"));
+        rows.push(user);
+    }
+    let plugins: Vec<serde_json::Value> = separate
+        .iter()
+        .map(|(ext, size)| {
+            registry::plugin(ext.manifest(), &[registry::listed(registry::RICK, *size)])
+        })
+        .collect();
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(&signer, &registry::index(&plugins));
+    let config = fake.config_dir();
+    fs::write(
+        config.join(app::SETTINGS_FILE),
+        registry::rick_toml(&server, &signer, true),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: loaded,
+        config_dir: Some(config),
+        start: Some(local(&root)),
+    });
+    app.set_rick_version(registry::RICK);
+    app.set_plugins(rows);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 840.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        harness.event(egui::Event::PointerMoved(egui::pos2(40.0, 820.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let modes = [(Theme::Light, "light"), (Theme::Dark, "dark")];
+    // The notice of the first start that finds the updates.
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("plugin-updates-notice-{mode}"));
+    }
+    // The dialogue, on one of the two.
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::Extensions, pane);
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::RadioButton, "Git")
+        .click();
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("extensions-update-{mode}"));
+    }
+}
+
 /// SPEC.md *Keyboard shortcuts dialogue* (issue 139, item 8): the
 /// dialogue on *File operations* with a changed row and a cell that
 /// records, on *Git* with a chord that Copy has too — the amber chip —

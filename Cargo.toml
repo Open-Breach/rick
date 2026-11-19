@@ -52,6 +52,7 @@ ext-action-rename = { path = "crates/ext-action-rename" }
 ext-preview-3d = { path = "crates/ext-preview-3d" }
 ext-installer = { path = "crates/ext-installer" }
 plugins-native = { path = "crates/plugins-native" }
+plugins-registry = { path = "crates/plugins-registry" }
 xtask = { path = "crates/xtask" }
 plugin-probe = { path = "crates/plugin-probe" }
 plugin-panic = { path = "crates/plugin-panic" }
@@ -159,6 +160,14 @@ russh = { version = "0.65", default-features = false, features = ["ring", "flate
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 ring = "0.17"
+# The plugin registry's index is signed in minisign format, an Ed25519
+# signature over the file's BLAKE2b hash (specs/plugin-distribution.md §6):
+# `minisign-verify` checks it and brings no dependency of its own. `blake2`
+# is for the tests alone, which sign an index with a key of their own
+# through ring; russh brings the same version, so the lock file gains
+# nothing.
+minisign-verify = "0.3"
+blake2 = "0.11"
 tokio-util = { version = "0.7", default-features = false, features = ["io"] }
 bytes = "1"
 hmac = "0.12"

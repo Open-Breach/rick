@@ -5,16 +5,16 @@
 //! lays out `target/<profile>/bundle/` (QUESTIONS.md 84): the `rick`
 //! binary, the kernel dylibs and the `libstd` they need beside it, pdfium
 //! when the PDF previewer's `library` setting (`preview-pdf.toml` in the
-//! config directory) names it, the GStreamer runtime when
-//! `RICK_GSTREAMER_DIR` names it (QUESTIONS.md 106: on macOS into
-//! `gstreamer/lib/`, on Windows the DLLs beside the binary and the
-//! elements into `gstreamer-1.0/`; Linux uses the system's), the Visual
+//! config directory) names it, the Visual
 //! C++ runtime's libraries beside the binary when `RICK_VCRUNTIME_DIR`
 //! names the toolset's redistributable folder (Windows: every module of
 //! the bundle imports them, and a machine without the Visual C++
 //! Redistributable has none),
 //! `plugins/<id>/plugin.toml` with the library for every plugin crate (an
 //! `ext-*` member built as a `cdylib`) whose manifest names this platform,
+//! the GStreamer runtime into the media plugin's folder
+//! `plugins/preview-media/` when `RICK_GSTREAMER_DIR` names it (macOS and
+//! Windows; Linux uses the system's; see [`gstreamer`]),
 //! and the 7-Zip library (`7z.so` / `7z.dll`, LGPL) with its licence into
 //! `plugins/vfs-archive/` beside the archive plugin when
 //! `RICK_SEVENZIP_DIR` names the directory holding it (SPEC.md
@@ -63,6 +63,9 @@ const PDFIUM_FILES: [&str; 3] = ["libpdfium.so", "libpdfium.dylib", "pdfium.dll"
 /// The 7-Zip library's names, and the plugin it travels beside.
 const SEVENZIP_FILES: [&str; 2] = ["7z.so", "7z.dll"];
 const SEVENZIP_PLUGIN: &str = "vfs-archive";
+/// The plugin the GStreamer runtime travels with: it lies in this plugin's
+/// folder, so the plugin's package holds it.
+const GSTREAMER_PLUGIN: &str = "preview-media";
 /// The licence file beside the library in `RICK_SEVENZIP_DIR`, and its
 /// name in the bundle.
 const SEVENZIP_LICENSE: (&str, &str) = ("License.txt", "7-Zip-License.txt");
@@ -162,9 +165,6 @@ fn bundle(args: &[String]) -> Result<()> {
         copy(lib, &out)?;
     }
     pdfium(&out)?;
-    if let Some(dir) = std::env::var_os("RICK_GSTREAMER_DIR") {
-        gstreamer(Path::new(&dir), &out)?;
-    }
     if let Some(dir) = std::env::var_os("RICK_VCRUNTIME_DIR") {
         vcruntime(Path::new(&dir), &out)?;
     }
@@ -213,6 +213,7 @@ fn bundle(args: &[String]) -> Result<()> {
     if plugins_dir.join("zfs").is_dir() {
         copy(&profile_dir.join(exe("rick-zfs")), &out)?;
     }
+    bundled_gstreamer(&plugins_dir)?;
     match std::env::var_os("RICK_SEVENZIP_DIR") {
         Some(dir) => sevenzip(Path::new(&dir), &plugins_dir)?,
         None => println!("7-zip: RICK_SEVENZIP_DIR not set; the library is not bundled"),
@@ -419,69 +420,85 @@ fn pdfium_setting() -> Option<PathBuf> {
     (!value.is_empty()).then(|| PathBuf::from(value))
 }
 
-/// Copies the GStreamer runtime at `dir` into the bundle, in the layout the
-/// media previewer looks in (QUESTIONS.md 106). macOS: the libraries into
-/// `gstreamer/lib/`, the elements into `gstreamer/lib/gstreamer-1.0/`, the
-/// plugin scanner into `gstreamer/libexec/gstreamer-1.0/`; the official
-/// framework names its libraries through `@rpath`, which the binary and
-/// the media plugin point there. Windows: the DLLs beside the binary,
-/// where every DLL the process loads is searched for, the elements into
-/// `gstreamer-1.0/`. Linux uses the system GStreamer and copies nothing.
-fn gstreamer(dir: &Path, out: &Path) -> Result<()> {
-    let (lib_dir, plugin_dir, scanner) = match std::env::consts::OS {
-        "macos" => (
-            Some((dir.join("lib"), out.join("gstreamer").join("lib"), "dylib")),
-            (
-                dir.join("lib").join("gstreamer-1.0"),
-                out.join("gstreamer").join("lib").join("gstreamer-1.0"),
-            ),
-            Some((
-                dir.join("libexec")
-                    .join("gstreamer-1.0")
-                    .join("gst-plugin-scanner"),
-                out.join("gstreamer").join("libexec").join("gstreamer-1.0"),
-            )),
+/// Copies the GStreamer runtime `RICK_GSTREAMER_DIR` names, when it names
+/// one, into the media plugin's folder of the bundle's `plugins_dir`.
+fn bundled_gstreamer(plugins_dir: &Path) -> Result<()> {
+    match std::env::var_os("RICK_GSTREAMER_DIR") {
+        Some(dir) => gstreamer(
+            Path::new(&dir),
+            &plugins_dir.join(GSTREAMER_PLUGIN),
+            std::env::consts::OS,
         ),
-        "windows" => (
-            Some((dir.join("bin"), out.to_path_buf(), "dll")),
+        None => Ok(()),
+    }
+}
+
+/// Copies the GStreamer runtime at `dir` into `plugin_dir`, the media
+/// plugin's folder in a bundle for `os`, so that the plugin's package
+/// holds it and the plugin finds it wherever its folder lies: beside the
+/// binary or in the per-user plugins folder (specs/plugin-distribution.md
+/// §4).
+///
+/// macOS: the libraries into `gstreamer/lib/` and the elements into
+/// `gstreamer/lib/gstreamer-1.0/`. The plugin's library has a run path to
+/// `gstreamer/lib/` beside itself, every library and element of the
+/// official runtime has one to `../lib` and `..` of its own place, and
+/// GStreamer looks for its elements in `gstreamer-1.0/` beside its
+/// library; so the layout of the runtime is kept, with the folder that
+/// holds the libraries named `lib`.
+///
+/// Windows: the DLLs into the plugin's folder itself, beside the plugin's
+/// library, and the elements into `lib/gstreamer-1.0/`, where GStreamer
+/// looks for them from a library that is in neither a `bin` nor a `lib`
+/// folder. Windows does not search a library's own folder for what it
+/// links, so the plugin host puts the folder on the `PATH` before it
+/// loads the plugin (`plugins_native::Host`).
+///
+/// The plugin scanner is not copied on either platform: a package holds
+/// no program, since *Install from file…* writes none, and GStreamer then
+/// reads its elements in the process itself. Linux uses the system
+/// GStreamer and copies nothing.
+fn gstreamer(dir: &Path, plugin_dir: &Path, os: &str) -> Result<()> {
+    let (libraries, suffix, elements) = match os {
+        "macos" => {
+            let lib = plugin_dir.join("gstreamer").join("lib");
             (
-                dir.join("lib").join("gstreamer-1.0"),
-                out.join("gstreamer-1.0"),
-            ),
-            None,
+                (dir.join("lib"), lib.clone()),
+                "dylib",
+                lib.join("gstreamer-1.0"),
+            )
+        }
+        "windows" => (
+            (dir.join("bin"), plugin_dir.to_path_buf()),
+            "dll",
+            plugin_dir.join("lib").join("gstreamer-1.0"),
         ),
         other => {
             println!("gstreamer: {other} uses the system runtime; nothing bundled");
             return Ok(());
         }
     };
-    let mut count = 0;
-    if let Some((from, to, suffix)) = lib_dir {
-        count += copy_matching(&from, &to, |name| {
-            Path::new(name)
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case(suffix))
-        })?;
-    }
-    let (from, to) = plugin_dir;
-    count += copy_matching(&from, &to, |name| {
+    let (from, to) = libraries;
+    let mut count = copy_matching(&from, &to, |name| {
+        Path::new(name)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case(suffix))
+    })?;
+    count += copy_matching(&dir.join("lib").join("gstreamer-1.0"), &elements, |name| {
         Path::new(name).extension().is_some_and(|e| {
             e.eq_ignore_ascii_case("dylib")
                 || e.eq_ignore_ascii_case("so")
                 || e.eq_ignore_ascii_case("dll")
         })
     })?;
-    if let Some((from, to)) = scanner
-        && from.is_file()
-    {
-        std::fs::create_dir_all(&to)?;
-        copy(&from, &to)?;
-        count += 1;
-    }
     if count == 0 {
         return Err(format!("no GStreamer runtime files found under {}", dir.display()).into());
     }
-    println!("gstreamer: {count} files from {}", dir.display());
+    println!(
+        "gstreamer: {count} files from {} into {}",
+        dir.display(),
+        plugin_dir.display()
+    );
     Ok(())
 }
 
@@ -777,6 +794,97 @@ mod tests {
             .collect();
         assert!(meta.separate.is_subset(&plugins), "{:?}", meta.separate);
         assert!(plugins.contains("ext_vfs_trash") && !meta.separate.contains("ext_vfs_trash"));
+    }
+
+    /// A GStreamer installation as the official packages lay it out.
+    fn runtime(root: &Scratch, libraries: &str, suffix: &str) {
+        for dir in [
+            libraries,
+            "lib/gstreamer-1.0",
+            "libexec/gstreamer-1.0",
+            "lib/pkgconfig",
+        ] {
+            std::fs::create_dir_all(root.0.join(dir)).unwrap_or_else(|e| panic!("{e}"));
+        }
+        for file in [
+            format!("{libraries}/gstreamer-1.0-0.{suffix}"),
+            format!("{libraries}/glib-2.0-0.{suffix}"),
+            format!("{libraries}/gst-launch-1.0"),
+            format!("lib/gstreamer-1.0/gstcoreelements.{suffix}"),
+            "lib/gstreamer-1.0/gstcoreelements.pdb".to_owned(),
+            "libexec/gstreamer-1.0/gst-plugin-scanner".to_owned(),
+            "lib/pkgconfig/gstreamer-1.0.pc".to_owned(),
+        ] {
+            std::fs::write(root.0.join(file), "x").unwrap_or_else(|e| panic!("{e}"));
+        }
+    }
+
+    /// Every file under `dir`, as its path below it with `/` between the
+    /// names, sorted.
+    fn tree(dir: &Path) -> Vec<String> {
+        fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir)
+                .unwrap_or_else(|e| panic!("{e}"))
+                .filter_map(std::result::Result::ok)
+            {
+                let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+                if entry.path().is_dir() {
+                    walk(&entry.path(), &format!("{name}/"), out);
+                } else {
+                    out.push(name);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(dir, "", &mut out);
+        out.sort();
+        out
+    }
+
+    /// Issue 250, item 5: the GStreamer runtime lies in the media plugin's
+    /// folder, laid out so that the plugin and GStreamer itself find it
+    /// from there, and nothing of it beside the binary.
+    #[test]
+    fn the_gstreamer_runtime_goes_into_the_media_plugin_s_folder() {
+        let bundle = Scratch::new("gst-bundle");
+        let plugin = bundle.0.join("plugins").join(GSTREAMER_PLUGIN);
+
+        // macOS: the framework's `lib`, kept as `gstreamer/lib` with the
+        // elements in `gstreamer-1.0` beside the libraries.
+        let framework = Scratch::new("gst-macos");
+        runtime(&framework, "lib", "dylib");
+        gstreamer(&framework.0, &plugin, "macos").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            tree(&bundle.0),
+            [
+                "plugins/preview-media/gstreamer/lib/glib-2.0-0.dylib",
+                "plugins/preview-media/gstreamer/lib/gstreamer-1.0-0.dylib",
+                "plugins/preview-media/gstreamer/lib/gstreamer-1.0/gstcoreelements.dylib",
+            ]
+        );
+
+        // Windows: the DLLs of `bin` beside the plugin's library, the
+        // elements where GStreamer looks from there.
+        std::fs::remove_dir_all(&plugin).unwrap_or_else(|e| panic!("{e}"));
+        let installed = Scratch::new("gst-windows");
+        runtime(&installed, "bin", "dll");
+        gstreamer(&installed.0, &plugin, "windows").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            tree(&bundle.0),
+            [
+                "plugins/preview-media/glib-2.0-0.dll",
+                "plugins/preview-media/gstreamer-1.0-0.dll",
+                "plugins/preview-media/lib/gstreamer-1.0/gstcoreelements.dll",
+            ]
+        );
+
+        // Linux uses the system's: nothing is copied. A folder that holds
+        // no runtime stops the bundle.
+        std::fs::remove_dir_all(&plugin).unwrap_or_else(|e| panic!("{e}"));
+        gstreamer(&installed.0, &plugin, "linux").unwrap_or_else(|e| panic!("{e}"));
+        assert!(!plugin.exists());
+        let empty = Scratch::new("gst-empty");
+        assert!(gstreamer(&empty.0, &plugin, "windows").is_err());
     }
 
     #[test]

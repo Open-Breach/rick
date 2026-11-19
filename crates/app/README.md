@@ -46,7 +46,25 @@ reported a third-party library missing; `Command::InstallPlugin` unpacks a
 plugin package — an `.rkp` file, a zip archive of a plugin's folder — into
 the per-user plugins folder and `Command::RemovePlugin` deletes a user's
 plugin there (`plugins`), each as a job, checking and asking nothing and
-never writing outside that folder. The extension settings store is shared with the plugins through the
+never writing outside that folder. `Command::InstallAvailable` is
+**Install** on a plugin of the registry: a job of the operations area that
+downloads the package of the build that fits into the cache, holds it
+against the size and the SHA-256 the plugin list names, and unpacks it the
+same way; a package that is another one is deleted and the job fails with
+*The download did not match the plugin list*. `App::offering` is the
+*Available* view's list: why there is none, or the plugins of the list
+that fit this Rick and are in neither plugins folder. Every unpack is
+noted in `installed.toml` in the per-user plugins folder (`plugins::Record`:
+per folder the origin — `registry`, `file` or `url` — the version and the
+package's SHA-256); *Remove* drops the entry, and a start drops the
+entries whose folder is gone. `App::updates` lists the plugins of the
+per-user folder that the record marks as the registry's, that the plugin
+list has this Rick's build of, and that the host refused — built for the
+Rick before — or that the list has a higher version of; **Update** is an
+install over the old folder and `Command::UpdateAll` one for each. The
+start that first finds any for a release of Rick says so
+(`Event::PluginUpdates`) and remembers the release in
+`registry/updates-announced` of the cache. The extension settings store is shared with the plugins through the
 registry, so a plugin that found its third-party library writes the path
 into its own setting. The pinned list lives in its settings, and the pin actions
 in `ops` see it through the `PinStore` bridge it hands them. It feeds the
@@ -81,7 +99,18 @@ rows after it waiting for that job and then acting on the installed copy,
 and the apply's end names the copy for the UI to relaunch from; without the
 plugin the row is *Unsupported* and the others work against the folder
 Rick runs from. The
-*Shell integration* switch unties the console and the tab. It depends on `types`,
-`runtime`, `platform`, `ext`, `vfs`, `vfs-local`, `vfs-rick`, `model` and
-`ops` (the built-in operations it loads); only `ui-egui`, `rick` and
-`tests` may depend on it.
+*Shell integration* switch unties the console and the tab. It decides when
+the plugin registry is asked (`registry`, specs/plugin-distribution.md §6):
+`RegistryCommand::Start`, once the first frame is drawn, reads the cached
+plugin list and fetches it when it is a day old, `Opened` fetches when the
+*Available* view is opened, both only while `[registry] check` is on, and
+`CheckNow` fetches whatever the switch says; each is a job off the loop's
+thread through the `plugins-registry` crate, and `App::plugin_registry` is
+what came of it: whether a key is there at all, the last index that
+verified, when it was fetched, and why the last attempt gave none. A Rick
+without a key or with a pre-release version asks nothing. The cache is
+`cache/` in the config directory unless the binary names the platform's
+(`App::set_cache_dir`). It depends on `types`,
+`runtime`, `platform`, `ext`, `vfs`, `vfs-local`, `vfs-rick`, `model`,
+`ops` (the built-in operations it loads) and `plugins-registry`; only
+`ui-egui`, `rick` and `tests` may depend on it.
