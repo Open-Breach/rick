@@ -69,6 +69,10 @@ const DOT: f32 = 8.0;
 /// The strip at the foot of the *Available* list: the list's date, or why
 /// the last check gave none, and *Check now*.
 const STRIP: f32 = 52.0;
+/// The least width the footer's sentence is drawn in.
+const FOOTER_TEXT: f32 = 150.0;
+/// The width of the prompt of *Install from URL…*.
+const PROMPT: f32 = 520.0;
 
 /// Which of the dialogue's two lists is shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -99,6 +103,17 @@ pub struct ExtensionsDialog {
     /// The chosen plugin of the *Available* list, by its id; the list's
     /// first when it is none of those listed.
     chosen_available: Option<String>,
+    /// The prompt of *Install from URL…*, while it is open.
+    address: Option<AddressPrompt>,
+}
+
+/// The prompt of *Install from URL…*: the address as typed so far.
+#[derive(Debug, Default)]
+struct AddressPrompt {
+    /// The field's text.
+    input: String,
+    /// The field takes the focus in the next frame.
+    focus: bool,
 }
 
 /// What a plugin mainly is: the heading it is listed under and the kind
@@ -263,6 +278,12 @@ enum Ask {
     OpenFolder(PathBuf),
     Remove(PathBuf),
     Install,
+    /// *Install from URL…* was pressed: open its prompt.
+    PromptAddress,
+    /// The prompt's *Install*: the address to install from.
+    InstallFrom(String),
+    /// The prompt was dismissed.
+    DropAddress,
 }
 
 impl ExtensionsDialog {
@@ -388,7 +409,11 @@ impl ExtensionsDialog {
                 asked = Some(ask);
             }
         });
-        if modal.should_close() {
+        // The prompt of *Install from URL…* stands over the dialogue, and
+        // is what Escape and a click beside it close.
+        if let Some(prompt) = &mut self.address {
+            asked = address_prompt(ctx, prompt);
+        } else if modal.should_close() {
             asked = Some(Ask::Close);
         }
         self.act(asked, app, requests);
@@ -444,6 +469,17 @@ impl ExtensionsDialog {
                 requests.push(Request::Command(Command::RemovePlugin(path)));
             }
             Some(Ask::Install) => self.pick_package(app),
+            Some(Ask::PromptAddress) => {
+                self.address = Some(AddressPrompt {
+                    input: String::new(),
+                    focus: true,
+                });
+            }
+            Some(Ask::InstallFrom(url)) => {
+                self.address = None;
+                requests.push(Request::Command(Command::InstallPluginFrom(url)));
+            }
+            Some(Ask::DropAddress) => self.address = None,
         }
     }
 
@@ -573,11 +609,14 @@ impl ExtensionsDialog {
                         }
                     }
                     Tab::Available => {
+                        // Nothing is downloaded in a packaged Rick, so no
+                        // row has a download size.
+                        let sized = app.packaging().is_none();
                         for plugin in lists.available {
                             under(ui, Kind::of(plugin.points));
                             let is_chosen =
                                 lists.chosen_available.is_some_and(|c| c.id == plugin.id);
-                            available_row(ui, plugin, is_chosen, asked);
+                            available_row(ui, plugin, is_chosen, sized, asked);
                         }
                     }
                 }
@@ -598,6 +637,11 @@ fn footer(ui: &mut egui::Ui, app: &App, restart: bool, updates: bool) -> Option<
     dialog::footer(
         ui,
         |left| {
+            // The buttons come first: the sentence stands where they
+            // leave it the room of a few words a line.
+            if left.available_width() < FOOTER_TEXT {
+                return;
+            }
             let text = match &app.plugin_registry().custom {
                 Some(address) => t!("extensions-registry-address", address = address.as_str()),
                 None => t!("extensions-where"),
@@ -619,6 +663,10 @@ fn footer(ui: &mut egui::Ui, app: &App, restart: bool, updates: bool) -> Option<
             let install = t!("extensions-install");
             if widgets::icon_button(right, Some(icons::INSTALL), &install, false, true).clicked() {
                 asked.set(Some(Ask::Install));
+            }
+            let from = t!("extensions-install-url");
+            if widgets::icon_button(right, Some(icons::LINK), &from, false, true).clicked() {
+                asked.set(Some(Ask::PromptAddress));
             }
             if restart
                 && widgets::icon_button(
@@ -647,6 +695,136 @@ fn footer(ui: &mut egui::Ui, app: &App, restart: bool, updates: bool) -> Option<
         },
     );
     asked.into_inner()
+}
+
+/// The prompt of *Install from URL…*: a field for the `https://` address
+/// of a plugin package, focused when it opens, and under it what is
+/// wrong with a text that is none. *Install* — and Enter — take an
+/// address; Escape, *Cancel* and a click beside the prompt dismiss it.
+/// The footer says that nothing is checked, as for a file.
+fn address_prompt(ctx: &egui::Context, prompt: &mut AddressPrompt) -> Option<Ask> {
+    let mut asked = None;
+    let typed = prompt.input.trim().to_owned();
+    let valid = app::plugins::is_package_address(&typed);
+    let modal = dialog::modal(ctx, egui::Id::new("extensions-address"), PROMPT, |ui| {
+        let scheme = theme::scheme(ui);
+        if dialog::band(
+            ui,
+            Some(icons::LINK),
+            &t!("extensions-url-title"),
+            &t!("extensions-url-subtitle"),
+        ) {
+            asked = Some(Ask::DropAddress);
+        }
+        dialog::body(ui, |ui| {
+            ui.spacing_mut().item_spacing = vec2(0.0, 8.0);
+            widgets::caps_heading(ui, &t!("extensions-url-heading"));
+            // A text that is no address is said once something is typed.
+            let wrong = !typed.is_empty() && !valid;
+            let field = dialog::text_field(
+                ui,
+                &mut prompt.input,
+                "https://",
+                true,
+                wrong.then_some(scheme.status_warning_border),
+                std::mem::take(&mut prompt.focus),
+            );
+            if wrong {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(t!("extensions-url-invalid"))
+                            .size(TEXT_SECONDARY)
+                            .color(scheme.status_warning),
+                    )
+                    .selectable(false),
+                );
+            }
+            if valid && field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                asked = Some(Ask::InstallFrom(typed.clone()));
+            }
+        });
+        let footer = std::cell::Cell::new(None);
+        dialog::footer(
+            ui,
+            |left| {
+                left.add(
+                    egui::Label::new(
+                        egui::RichText::new(t!("extensions-url-note"))
+                            .size(TEXT_SECONDARY)
+                            .color(scheme.text_secondary),
+                    )
+                    .wrap()
+                    .selectable(false),
+                );
+            },
+            |right| {
+                let install = t!("extensions-install-available");
+                if widgets::icon_button(right, Some(icons::INSTALL), &install, true, valid)
+                    .clicked()
+                    && valid
+                {
+                    footer.set(Some(Ask::InstallFrom(typed.clone())));
+                }
+                if widgets::button(right, &t!("cancel"), false, true).clicked() {
+                    footer.set(Some(Ask::DropAddress));
+                }
+            },
+        );
+        if let Some(ask) = footer.into_inner() {
+            asked = Some(ask);
+        }
+    });
+    if modal.should_close() && asked.is_none() {
+        asked = Some(Ask::DropAddress);
+    }
+    asked
+}
+
+/// What stands in place of **Install** in a Rick a package manager
+/// installed: the line *Installed through your package manager* and,
+/// under it, the command that installs the plugin, monospace with a copy
+/// button.
+fn packaged_card(ui: &mut egui::Ui, command: &str, asked: &mut Option<Ask>) {
+    let scheme = theme::scheme(ui);
+    egui::Frame::new()
+        .fill(scheme.bg_card)
+        .stroke(egui::Stroke::new(1.0, scheme.border_default))
+        .corner_radius(CARD_RADIUS)
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+            ui.set_width(ui.available_width());
+            let (head, _) =
+                ui.allocate_exact_size(vec2(ui.available_width(), INFO_ROW), Sense::hover());
+            widgets::line(
+                ui,
+                pos2(head.left() + 14.0, head.center().y),
+                &t!("extensions-packaged"),
+                FontId::proportional(TEXT_SECONDARY),
+                scheme.text_secondary,
+                head.width() - 28.0,
+            );
+            let (line, _) =
+                ui.allocate_exact_size(vec2(ui.available_width(), INFO_ROW), Sense::hover());
+            ui.painter()
+                .hline(line.x_range(), line.top() + 0.5, scheme.hairline());
+            let button = Rect::from_center_size(
+                pos2(line.right() - 6.0 - 11.0, line.center().y),
+                vec2(22.0, 22.0),
+            );
+            let left = line.left() + 14.0;
+            widgets::line(
+                ui,
+                pos2(left, line.center().y),
+                command,
+                FontId::monospace(TEXT_SECONDARY),
+                scheme.text_primary,
+                button.left() - 12.0 - left,
+            );
+            let name = t!("extensions-copy", what = t!("extensions-command"));
+            if CopyButton::new(&name).show_at(ui, button, &name).clicked() {
+                *asked = Some(Ask::Copy(command.to_owned()));
+            }
+        });
 }
 
 /// The two lists of a frame, as the search left them.
@@ -1012,8 +1190,14 @@ fn nothing(ui: &mut egui::Ui, rect: Rect, text: &str, check: bool, asked: &mut O
 
 /// One row of the *Available* list, 34 px: the icon of the plugin's kind,
 /// its name and, where an installed plugin has its switch, the size of
-/// the download.
-fn available_row(ui: &mut egui::Ui, plugin: &Available, chosen: bool, asked: &mut Option<Ask>) {
+/// the download when `sized` says there is one.
+fn available_row(
+    ui: &mut egui::Ui,
+    plugin: &Available,
+    chosen: bool,
+    sized: bool,
+    asked: &mut Option<Ask>,
+) {
     let scheme = theme::scheme(ui);
     let radius = theme::metrics(ui.ctx()).corner_radius();
     let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::hover());
@@ -1051,21 +1235,25 @@ fn available_row(ui: &mut egui::Ui, plugin: &Available, chosen: bool, asked: &mu
         scheme.icon_default,
     );
     // The size stands where the switch does; the name has the rest.
-    let size = format::size(Some(plugin.size));
-    let galley = ui.painter().layout_no_wrap(
-        size,
-        FontId::proportional(TEXT_SECONDARY),
-        scheme.text_secondary,
-    );
-    let right = inner.right() - 10.0 - galley.size().x;
-    let at = Rect::from_min_size(
-        pos2(right, inner.center().y - galley.size().y / 2.0),
-        galley.size(),
-    );
-    let spoken = galley.text().to_owned();
-    ui.painter().galley(at.min, galley, scheme.text_secondary);
-    ui.interact(at, ui.id().with(("size", &plugin.id)), Sense::hover())
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken.clone()));
+    let mut right = inner.right();
+    if sized {
+        let galley = ui.painter().layout_no_wrap(
+            format::size(Some(plugin.size)),
+            FontId::proportional(TEXT_SECONDARY),
+            scheme.text_secondary,
+        );
+        right -= 10.0 + galley.size().x;
+        let at = Rect::from_min_size(
+            pos2(right, inner.center().y - galley.size().y / 2.0),
+            galley.size(),
+        );
+        let spoken = galley.text().to_owned();
+        ui.painter().galley(at.min, galley, scheme.text_secondary);
+        ui.interact(at, ui.id().with(("size", &plugin.id)), Sense::hover())
+            .widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken.clone())
+            });
+    }
     let left = inner.left() + 36.0;
     let name = widgets::elided(
         ui,
@@ -1150,7 +1338,8 @@ fn available_details(
         .show(&mut column, |ui| {
             ui.spacing_mut().item_spacing = vec2(0.0, GAP);
             ui.set_width(inner.width());
-            available_head(ui, plugin, asked);
+            let packaging = app.packaging();
+            available_head(ui, plugin, packaging.is_none(), asked);
             if !plugin.description.is_empty() {
                 ui.add(
                     egui::Label::new(
@@ -1163,11 +1352,16 @@ fn available_details(
                     .selectable(false),
                 );
             }
-            let rows = [
-                InfoRow::text(t!("extensions-contributes"), offers(plugin)),
-                InfoRow::text(t!("extensions-size"), format::size(Some(plugin.size))),
-                InfoRow::text(t!("extensions-source"), app.plugin_registry().host.clone()),
-            ];
+            let mut rows = vec![InfoRow::text(t!("extensions-contributes"), offers(plugin))];
+            match packaging {
+                // The package manager installs it: the command, and
+                // nothing about a download that does not happen.
+                Some(packaging) => packaged_card(ui, &packaging.command(&plugin.id), asked),
+                None => rows.extend([
+                    InfoRow::text(t!("extensions-size"), format::size(Some(plugin.size))),
+                    InfoRow::text(t!("extensions-source"), app.plugin_registry().host.clone()),
+                ]),
+            }
             info_rows(ui, &rows, asked);
         });
 }
@@ -1175,8 +1369,9 @@ fn available_details(
 /// The head of an available plugin's details: the icon tile, the name,
 /// under it the id, the version and the kind with the chip *Available*,
 /// and **Install** at the right, which says *Installing…* and takes no
-/// click while the install runs.
-fn available_head(ui: &mut egui::Ui, plugin: &Available, asked: &mut Option<Ask>) {
+/// click while the install runs. Without `install` — a Rick a package
+/// manager installed — the head has no button.
+fn available_head(ui: &mut egui::Ui, plugin: &Available, install: bool, asked: &mut Option<Ask>) {
     let scheme = theme::scheme(ui);
     let (band, _) = ui.allocate_exact_size(vec2(ui.available_width(), TILE), Sense::hover());
     let tile = Rect::from_min_size(band.min, vec2(TILE, TILE));
@@ -1189,29 +1384,32 @@ fn available_head(ui: &mut egui::Ui, plugin: &Available, asked: &mut Option<Ask>
         scheme.icon_default,
     );
     // The button first: the name and the line under it have what it leaves.
-    let mut at = ui.new_child(
-        egui::UiBuilder::new()
-            .id_salt(("install", &plugin.id))
-            .max_rect(band)
-            .layout(egui::Layout::right_to_left(Align::Center)),
-    );
-    let label = if plugin.installing {
-        t!("extensions-installing")
-    } else {
-        t!("extensions-install-available")
-    };
-    let button = widgets::button_of(
-        &mut at,
-        Some(icons::INSTALL),
-        &label,
-        ButtonKind::Primary,
-        !plugin.installing,
-    );
-    if button.clicked() && !plugin.installing {
-        *asked = Some(Ask::InstallAvailable(plugin.id.clone()));
+    let mut right = band.right();
+    if install {
+        let mut at = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(("install", &plugin.id))
+                .max_rect(band)
+                .layout(egui::Layout::right_to_left(Align::Center)),
+        );
+        let label = if plugin.installing {
+            t!("extensions-installing")
+        } else {
+            t!("extensions-install-available")
+        };
+        let button = widgets::button_of(
+            &mut at,
+            Some(icons::INSTALL),
+            &label,
+            ButtonKind::Primary,
+            !plugin.installing,
+        );
+        if button.clicked() && !plugin.installing {
+            *asked = Some(Ask::InstallAvailable(plugin.id.clone()));
+        }
+        right = button.rect.left() - 14.0;
     }
     let left = tile.right() + 14.0;
-    let right = button.rect.left() - 14.0;
     widgets::line(
         ui,
         pos2(left, band.top() + 14.0),

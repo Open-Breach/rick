@@ -1,7 +1,8 @@
-//! Acceptance (issue 251, items 2 and 3, specs/plugin-distribution.md §6
-//! and §7): the *Available* view of the Extensions dialogue and the
-//! updates, against a registry of the test's own — a server on this
-//! machine and a key made here. No test asks get.openbreach.dev.
+//! Acceptance (issue 251, items 2 to 4, specs/plugin-distribution.md §6
+//! and §7): the *Available* view of the Extensions dialogue, the updates,
+//! *Install from URL…* and the packaged Rick, against a registry of the
+//! test's own — a server on this machine and a key made here. No test
+//! asks get.openbreach.dev.
 //!
 //! A plugin the registry has for this Rick and that is not installed
 //! shows under *Available*, with its size; **Install** puts it into the
@@ -19,6 +20,11 @@
 //! **Update**, the header counts it, the footer has **Update all**, and
 //! the first start that finds it says so in a toast. After the update
 //! and a restart the plugin loads.
+//!
+//! *Install from URL…* takes an `https://` address, downloads the package
+//! and handles it as a file. A Rick with the file `package` beside its
+//! binary shows the command of its package manager in place of
+//! **Install**.
 
 use std::fs;
 use std::io::Write as _;
@@ -116,6 +122,8 @@ struct Start<'a> {
     folder: &'a Path,
     /// The plugins the host found.
     rows: Vec<app::Plugin>,
+    /// The package manager that installed this Rick, when one did.
+    packaging: Option<app::plugins::Packaging>,
 }
 
 /// The binaries *Restart now* asked to continue in.
@@ -147,6 +155,7 @@ fn shell(start: &Start<'_>) -> (Harness<'static, RickUi>, Restarts) {
     });
     app.set_rick_version(start.rick);
     app.set_plugins(start.rows.clone());
+    app.set_packaging(start.packaging);
     let restarts = Restarts::default();
     let hook: ui_egui::Relaunch = {
         let restarts = Arc::clone(&restarts);
@@ -240,6 +249,7 @@ fn an_available_plugin_is_installed_and_loaded_after_restart_now() {
         rick: RICK,
         folder: dir.path(),
         rows: Vec::new(),
+        packaging: None,
     });
     // A session worth restoring: a second tab.
     harness
@@ -360,6 +370,7 @@ fn a_package_that_differs_from_the_list_is_deleted_and_nothing_is_installed() {
         rick: RICK,
         folder: dir.path(),
         rows: Vec::new(),
+        packaging: None,
     });
     choose(&mut harness, "Available 1");
     click(&mut harness, "Install");
@@ -399,6 +410,7 @@ fn an_index_with_a_bad_signature_is_not_used_and_the_view_says_so() {
         rick: RICK,
         folder: dir.path(),
         rows: Vec::new(),
+        packaging: None,
     });
     choose(&mut harness, "Available 1");
     assert!(listed(&harness, "Git"));
@@ -460,6 +472,7 @@ fn a_build_without_a_key_says_the_list_is_not_set_up_and_asks_nobody() {
         rick: RICK,
         folder: dir.path(),
         rows: Vec::new(),
+        packaging: None,
     });
     // No count on the control: nothing is on offer.
     choose(&mut harness, "Available");
@@ -483,6 +496,7 @@ fn a_pre_release_and_too_old_a_rick_say_why_nothing_is_offered() {
         rick: "0.6.0-dev",
         folder: dir.path(),
         rows: Vec::new(),
+        packaging: None,
     });
     choose(&mut harness, "Available");
     harness
@@ -500,6 +514,7 @@ fn a_pre_release_and_too_old_a_rick_say_why_nothing_is_offered() {
         rick: "0.5.0",
         folder: dir.path(),
         rows: Vec::new(),
+        packaging: None,
     });
     choose(&mut harness, "Available");
     harness.get_by_label(
@@ -523,6 +538,7 @@ fn offline_and_switched_off_say_so_in_one_line_with_check_now() {
         rick: RICK,
         folder: dir.path(),
         rows: Vec::new(),
+        packaging: None,
     });
     choose(&mut harness, "Available");
     harness.get_by_label("Rick is set not to look for plugins online.");
@@ -544,6 +560,7 @@ fn offline_and_switched_off_say_so_in_one_line_with_check_now() {
         rick: RICK,
         folder: dir.path(),
         rows: Vec::new(),
+        packaging: None,
     });
     choose(&mut harness, "Available");
     harness.get_by_label("The plugin list could not be fetched. Rick may be offline.");
@@ -566,6 +583,7 @@ fn the_search_narrows_the_available_list_and_opening_it_fetches() {
         rick: RICK,
         folder: dir.path(),
         rows: Vec::new(),
+        packaging: None,
     });
     // The start fetched the two files; opening the view fetches again.
     assert_eq!(server.requests().len(), 2);
@@ -673,6 +691,7 @@ fn a_plugin_built_for_the_rick_before_is_updated_and_loads_after_a_restart() {
         rick: RICK,
         folder: dir.path(),
         rows: a_plugin_of_the_rick_before(&fake, &package),
+        packaging: None,
     });
 
     // The header counts the update, the card reads the host's reason and
@@ -742,6 +761,7 @@ fn the_first_start_that_finds_updates_says_so_with_update_all() {
         rick: RICK,
         folder: dir.path(),
         rows,
+        packaging: None,
     };
 
     // The start reads the list, finds the update and says so.
@@ -788,6 +808,7 @@ fn update_all_of_the_toast_installs_the_updates() {
         rick: RICK,
         folder: dir.path(),
         rows: a_plugin_of_the_rick_before(&fake, &package),
+        packaging: None,
     });
     click(&mut harness, "Update all");
     // The notice went with its button; the plugin is this Rick's build.
@@ -812,4 +833,130 @@ fn update_all_of_the_toast_installs_the_updates() {
         "{manifest}"
     );
     assert_eq!(harness.state().app().updates(), []);
+}
+
+#[test]
+fn a_packaged_rick_shows_the_command_of_its_package_manager_and_no_install() {
+    use app::plugins::{PACKAGE_FILE, Packaging};
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(&signer, &registry::index(&[git()]));
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    for (says, command) in [
+        ("deb", "sudo apt install rick-plugin-git"),
+        ("rpm", "sudo dnf install rick-plugin-git"),
+    ] {
+        // The file `package` beside the binary, as the deb and the rpm
+        // install it.
+        let bin = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        fs::write(bin.path().join(PACKAGE_FILE), says).unwrap_or_else(|e| panic!("{e}"));
+        let packaging = Packaging::beside(&bin.path().join("rick"));
+        assert!(packaging.is_some(), "{says}");
+        let fake = self::fake();
+        let (mut harness, _) = window(&Start {
+            fake: &fake,
+            settings: registry::rick_toml(&server, &signer, true),
+            rick: RICK,
+            folder: dir.path(),
+            rows: Vec::new(),
+            packaging,
+        });
+        choose(&mut harness, "Available 1");
+        assert!(listed(&harness, "Git"));
+        harness.get_by_label("Available");
+        harness.get_by_label("Installed through your package manager");
+        harness.get_by_label(command);
+        assert_eq!(count(&harness, "Install"), 0, "{says}: no Install");
+        // Nothing is downloaded, so nothing is said about a download.
+        assert_eq!(count(&harness, "4.6 MiB"), 0);
+        assert_eq!(count(&harness, "Size"), 0);
+        assert_eq!(count(&harness, "Source"), 0);
+        // The command copies whole.
+        click(&mut harness, "Copy command");
+        assert_eq!(fake.clipboard_text().as_deref(), Some(command));
+    }
+
+    // An archive has no such file, and Install.
+    let bin = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(Packaging::beside(&bin.path().join("rick")), None);
+    let fake = self::fake();
+    let (mut harness, _) = window(&Start {
+        fake: &fake,
+        settings: registry::rick_toml(&server, &signer, true),
+        rick: RICK,
+        folder: dir.path(),
+        rows: Vec::new(),
+        packaging: None,
+    });
+    choose(&mut harness, "Available 1");
+    harness.get_by_label("Install");
+    assert_eq!(count(&harness, "Installed through your package manager"), 0);
+}
+
+#[test]
+fn install_from_url_downloads_a_package_and_handles_it_as_a_file() {
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(&signer, &registry::index(&[git()]));
+    // A package somewhere the plugin list knows nothing of.
+    let package = probe_package();
+    server.put("somewhere/probe-1.0.rkp", package.clone());
+    let address = server.url("somewhere/probe-1.0.rkp");
+    let fake = fake();
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, _) = window(&Start {
+        fake: &fake,
+        settings: registry::rick_toml(&server, &signer, true),
+        rick: RICK,
+        folder: dir.path(),
+        rows: Vec::new(),
+        packaging: None,
+    });
+
+    // Beside Install from file…, in the footer.
+    let file = harness.get_by_label("Install from file…").rect();
+    let url = harness.get_by_label("Install from URL…").rect();
+    assert!(url.right() <= file.left() && (url.top() - file.top()).abs() < 1.0);
+    click(&mut harness, "Install from URL…");
+    harness.get_by_label("Install from URL");
+    harness.get_by_label("Nothing is checked, as for a file.");
+    let typed = |harness: &mut Harness<'_, RickUi>, text: &str| {
+        harness
+            .get_all_by_role(Role::TextInput)
+            .find(egui_kittest::Node::is_focused)
+            .unwrap_or_else(|| panic!("the address field has the focus"))
+            .type_text(text);
+        steps(harness);
+    };
+    // What is no https:// address is said, and Install takes no click.
+    typed(&mut harness, "ftp://example.org/probe.rkp");
+    harness.get_by_label("Enter the https:// address of a plugin package.");
+    click(&mut harness, "Install");
+    assert!(!fake.config_dir().join("plugins").exists());
+    harness.get_by_label("Install from URL");
+
+    // Escape closes the prompt and leaves the dialogue.
+    harness.key_press(egui::Key::Escape);
+    steps(&mut harness);
+    assert_eq!(count(&harness, "Install from URL"), 0);
+    assert!(harness.state().extensions_open());
+
+    // An address: the package is downloaded, unpacked and noted with
+    // where it came from.
+    click(&mut harness, "Install from URL…");
+    typed(&mut harness, &address);
+    assert_eq!(
+        count(&harness, "Enter the https:// address of a plugin package."),
+        0
+    );
+    click(&mut harness, "Install");
+    assert_eq!(count(&harness, "Install from URL"), 0, "the prompt is gone");
+    let per_user = fake.config_dir().join("plugins");
+    assert!(per_user.join("probe").join(MANIFEST_FILE).is_file());
+    assert!(listed(&harness, "Probe"));
+    harness.get_by_label("User plugin");
+    assert_eq!(count(&harness, "restart"), 2);
+    assert_eq!(harness.state().toasts(), []);
+    let record = fs::read_to_string(per_user.join("installed.toml")).unwrap_or_default();
+    assert!(record.contains("[probe]\nsource = \"url\""), "{record}");
+    assert!(record.contains(&format!("url = \"{address}\"")), "{record}");
+    assert!(record.contains(&sha256(&package)), "{record}");
 }
