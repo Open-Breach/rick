@@ -26,6 +26,16 @@
 //! nothing copied by hand, and the release workflow archives the same
 //! directory.
 //!
+//! `package [--release]` makes the plugin packages from that bundle
+//! (specs/plugin-distribution.md §4): one `<id>-<version>-<platform>.rkp`
+//! in `target/<profile>/packages/` per separate plugin the bundle holds,
+//! and `plugins-<platform>.json` beside them, the manifest the registry's
+//! publisher reads. A plugin is separate when its crate says so under
+//! `[package.metadata.rick]`; the platform is the one the task itself was
+//! built for, named as the release names its archives (`linux-x64`). It
+//! builds nothing: `bundle` comes first. The work is the library's
+//! [`package`] module, which the tests run on real plugins.
+//!
 //! `readme` brings `README.md` up to the release the workspace's version
 //! names (specs/readme.md, *Rules for the release*), in the release pull
 //! request: the test `readme` of the `tests` crate writes the version, the
@@ -42,10 +52,11 @@
 //! kernel crate itself: a build of a smaller package set would rewrite the
 //! shared libraries for another feature set.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+use xtask::{Result, package};
 
 const KERNEL_DYLIBS: [&str; 3] = ["types", "runtime", "ext"];
 const PDFIUM_FILES: [&str; 3] = ["libpdfium.so", "libpdfium.dylib", "pdfium.dll"];
@@ -66,9 +77,11 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let outcome = match args.first().map(String::as_str) {
         Some("bundle") => bundle(&args[1..]),
+        Some("package") => packages(&args[1..]),
         Some("readme") if args.len() == 1 => readme(),
         _ => Err(
-            "usage: cargo xtask bundle [--release] [--features <spec>]\n       cargo xtask readme"
+            "usage: cargo xtask bundle [--release] [--features <spec>]\n       \
+             cargo xtask package [--release]\n       cargo xtask readme"
                 .into(),
         ),
     };
@@ -205,6 +218,62 @@ fn bundle(args: &[String]) -> Result<()> {
         None => println!("7-zip: RICK_SEVENZIP_DIR not set; the library is not bundled"),
     }
     println!("bundle: {}", out.display());
+    Ok(())
+}
+
+/// `cargo xtask package [--release]`: the packages of the separate plugins
+/// of the bundle in `target/<profile>/bundle/`, and their manifest, into
+/// `target/<profile>/packages/`, which is emptied first.
+fn packages(args: &[String]) -> Result<()> {
+    let release = match args {
+        [] => false,
+        [flag] if flag == "--release" => true,
+        _ => return Err("usage: cargo xtask package [--release]".into()),
+    };
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let meta = metadata(&cargo)?;
+    let profile_dir = meta
+        .target_dir
+        .join(if release { "release" } else { "debug" });
+    let plugins_dir = profile_dir.join("bundle").join("plugins");
+    if !plugins_dir.is_dir() {
+        return Err(format!(
+            "no bundle at {}: run `cargo xtask bundle{}` first",
+            profile_dir.join("bundle").display(),
+            if release { " --release" } else { "" }
+        )
+        .into());
+    }
+    let out = profile_dir.join("packages");
+    if out.exists() {
+        std::fs::remove_dir_all(&out)?;
+    }
+    // The task is built for the machine it runs on, and so is the bundle:
+    // the platform is this build's own.
+    let os = std::env::consts::OS;
+    let platform = package::platform_name(os, std::env::consts::ARCH);
+    let made = package::write(
+        &plugins_dir,
+        &out,
+        &platform,
+        os,
+        env!("CARGO_PKG_VERSION"),
+        &meta.separate,
+    )?;
+    for package in &made {
+        println!(
+            "package {}: {} ({} bytes)",
+            package.id,
+            out.join(&package.file).display(),
+            package.size
+        );
+    }
+    println!(
+        "packages: {} in {}, listed in {}",
+        made.len(),
+        out.display(),
+        package::manifest_name(&platform)
+    );
     Ok(())
 }
 
@@ -478,6 +547,10 @@ struct Metadata {
     target_dir: PathBuf,
     /// The `ext-*` members built as a `cdylib`: the plugins.
     plugin_crates: Vec<String>,
+    /// Those of them that are separate plugins on this platform
+    /// (`[package.metadata.rick]`, [`package::is_separate`]), each as its
+    /// library's file name spells the crate: `ext_git`.
+    separate: BTreeSet<String>,
 }
 
 fn metadata(cargo: &std::ffi::OsStr) -> Result<Metadata> {
@@ -496,6 +569,7 @@ fn metadata(cargo: &std::ffi::OsStr) -> Result<Metadata> {
         .as_str()
         .ok_or("cargo metadata: no target_directory")?;
     let mut plugin_crates = Vec::new();
+    let mut separate = BTreeSet::new();
     for package in json["packages"].as_array().into_iter().flatten() {
         let Some(name) = package["name"].as_str() else {
             continue;
@@ -513,6 +587,12 @@ fn metadata(cargo: &std::ffi::OsStr) -> Result<Metadata> {
             });
         if name.starts_with("ext-") && is_cdylib {
             plugin_crates.push(name.to_owned());
+            let mark = &package["metadata"]["rick"]["separate"];
+            if package::is_separate(mark, std::env::consts::OS)
+                .map_err(|e| format!("{name}, [package.metadata.rick]: {e}"))?
+            {
+                separate.insert(name.replace('-', "_"));
+            }
         }
     }
     plugin_crates.sort();
@@ -523,6 +603,7 @@ fn metadata(cargo: &std::ffi::OsStr) -> Result<Metadata> {
         workspace_root: PathBuf::from(workspace_root),
         target_dir: PathBuf::from(target_dir),
         plugin_crates,
+        separate,
     })
 }
 
@@ -659,6 +740,43 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// The marks of the workspace's own crates (specs/plugin-distribution.md
+    /// §4): nine separate plugins everywhere, and the media previewer with
+    /// them on macOS and Windows, where the GStreamer runtime travels with
+    /// it.
+    #[test]
+    fn the_workspace_marks_its_separate_plugins() {
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let meta = metadata(&cargo).unwrap_or_else(|e| panic!("{e}"));
+        let mut expected: BTreeSet<String> = [
+            "ext_git",
+            "ext_svn",
+            "ext_zfs",
+            "ext_ssh",
+            "ext_vfs_s3",
+            "ext_vfs_azure",
+            "ext_vfs_gcs",
+            "ext_preview_office",
+            "ext_preview_3d",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        if std::env::consts::OS != "linux" {
+            expected.insert("ext_preview_media".to_owned());
+        }
+        assert_eq!(meta.separate, expected);
+        // Every one of them is a plugin crate, and the rest are the
+        // default set.
+        let plugins: BTreeSet<String> = meta
+            .plugin_crates
+            .iter()
+            .map(|name| name.replace('-', "_"))
+            .collect();
+        assert!(meta.separate.is_subset(&plugins), "{:?}", meta.separate);
+        assert!(plugins.contains("ext_vfs_trash") && !meta.separate.contains("ext_vfs_trash"));
     }
 
     #[test]

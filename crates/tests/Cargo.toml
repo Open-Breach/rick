@@ -112,6 +112,9 @@ tracing-subscriber = { workspace = true }
 # The tests that write the same process-wide state take turns
 # (`#[serial]`); see `tests/main.rs`.
 serial_test = { workspace = true }
+# The packaging of `cargo xtask package`, run on real plugin libraries: the
+# packages it makes are installed and loaded (issue 250).
+xtask = { workspace = true }
 
 [lints]
 workspace = true

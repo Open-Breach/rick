@@ -3,15 +3,16 @@
 //! Fixture plugins with a wrong API version, a wrong toolchain, another
 //! platform and a panicking entry point are refused or caught, listed with
 //! their reason, and the host keeps running; a plugin built for another
-//! Rick is refused for that before its library is opened, and the manifest
-//! file says what each plugin is for (issue 250); a per-user plugin wins
-//! over
+//! Rick is refused for that before its library is opened, the manifest
+//! file says what each plugin is for, and the package of a separate plugin
+//! installs from file and loads (issue 250); a per-user plugin wins over
 //! the one beside the binary; disabling a plugin writes `rick.toml` and the
 //! next start lists it disabled; a job spawned inside a plugin shows in the
 //! job table and cancels from it; the Git plugin decorates a work tree and
 //! brings its action group exactly as the compiled-in extension did; and
 //! loading it costs at most 50 ms on Linux.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -330,6 +331,79 @@ fn plugin_toml_carries_what_each_plugin_is_for() {
         s3.contains("\n[[connections]]\nsection = \"cloud\"\ntitle = \"S3\"\n"),
         "{s3}"
     );
+}
+
+/// Issue 250, item 4: the package `cargo xtask package` makes of a
+/// separate plugin (specs/plugin-distribution.md §4) is what *Install from
+/// file…* reads, the plugin unpacked from it loads at the next start, and
+/// the same bundle gives the same bytes. The packaging is the task's own
+/// code, run here on a real plugin library.
+#[test]
+fn a_plugin_s_package_installs_from_file_and_loads_from_the_per_user_folder() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    // A bundle's plugins folder: Git, which is separate, with a file
+    // beside its library, and the trash, which is of the default set.
+    let bundle = dir.path().join("bundle").join("plugins");
+    let git = install(&bundle, "ext_git", |_| {});
+    fs::create_dir(git.join("share")).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(git.join("share").join("notice.txt"), "beside the library")
+        .unwrap_or_else(|e| panic!("{e}"));
+    install(&bundle, "ext_vfs_trash", |_| {});
+    let separate: BTreeSet<String> = ["ext_git".to_owned()].into_iter().collect();
+    let os = std::env::consts::OS;
+    let platform = xtask::package::platform_name(os, std::env::consts::ARCH);
+    let pack = |out: &Path| {
+        xtask::package::write(
+            &bundle,
+            out,
+            &platform,
+            os,
+            plugins_native::HOST_RICK,
+            &separate,
+        )
+        .unwrap_or_else(|e| panic!("{e}"))
+    };
+    let first = dir.path().join("packages");
+    let second = dir.path().join("again");
+    let made = pack(&first);
+    assert_eq!(pack(&second), made);
+    let [package] = made.as_slice() else {
+        panic!("one package, of the one separate plugin: {made:?}");
+    };
+    assert_eq!(
+        package.file,
+        format!("git-{}-{platform}.rkp", env!("CARGO_PKG_VERSION"))
+    );
+    for name in [
+        package.file.clone(),
+        xtask::package::manifest_name(&platform),
+    ] {
+        let one = fs::read(first.join(&name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let two = fs::read(second.join(&name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(one == two, "{name} differs between two runs");
+    }
+
+    // *Install from file…* takes the package into an empty per-user
+    // plugins folder, the folder whole.
+    let per_user = dir.path().join("config").join("plugins");
+    let folder = app::plugins::install(&first.join(&package.file), &per_user)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(folder, per_user.join("git"));
+    assert_eq!(
+        fs::read_to_string(folder.join("share").join("notice.txt")).ok(),
+        Some("beside the library".to_owned())
+    );
+    // The next start loads the plugin from there.
+    let host = Host::load(&options(vec![(Source::PerUser, per_user)]));
+    assert_eq!(
+        status_of(&host, "git"),
+        &PluginStatus::Loaded,
+        "{:?}",
+        host.plugins()
+    );
+    assert_eq!(host.plugins()[0].dir, folder);
+    assert_eq!(host.extensions().len(), 1);
+    drop(host);
 }
 
 #[test]

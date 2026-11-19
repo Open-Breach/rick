@@ -8381,6 +8381,7 @@ dependencies = [
  "vfs",
  "vfs-local",
  "vfs-rick",
+ "xtask",
  "zip",
  "zstd",
 ]
@@ -10159,7 +10160,11 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 name = "xtask"
 version = "0.5.0"
 dependencies = [
+ "flate2",
  "serde_json",
+ "sha2 0.10.9",
+ "toml 0.9.12+spec-1.1.0",
+ "zip",
 ]
 
 [[package]]
