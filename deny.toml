@@ -128,4 +128,11 @@ ignore = [
     # own signature on the user's machine and the attacker would have to
     # time it there. Revisit when `rsa` ships constant-time decryption.
     { id = "RUSTSEC-2023-0071", reason = "rsa's timing side channel; transitive via russh for RSA SSH keys, client-side only" },
+    # chrono was declared unmaintained: a notice, not a vulnerability, and
+    # with no release to move to. The date formats of the UI and of six
+    # plugins are written with it, and pdfium-render brings it as well.
+    # Moving to `jiff` or `time` swaps a dependency, which is a task of its
+    # own; until then the notice is ignored, so that the check goes on
+    # reporting everything else (decided by Serge, 2026-11-19).
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, not vulnerable; the date formats of the UI and six plugins, and pdfium-render; replacing it is a task of its own" },
 ]
