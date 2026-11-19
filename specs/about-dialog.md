@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The About dialog tells the user what they are running, where it came from and who made it, and satisfies the attribution duties of the licences Rick ships under: Apache-2.0 and MIT notices for the crates, the BSD notice for pdfium, the LGPL notices for GStreamer and 7-Zip, the font licences for the shipped fonts.
+The About dialog tells the user what they are running, where it came from and who made it, and satisfies the attribution duties of the licences Rick ships under: Apache-2.0 and MIT notices for the crates and for the Rust standard library, the BSD notice for pdfium, the LGPL notices for GStreamer and 7-Zip, the font licences for the shipped fonts.
 
 Design reference: Figma, section "About dialog". This text is binding where it and the frames disagree on behaviour; the frames are binding for layout, spacing and colour.
 
@@ -22,7 +22,7 @@ Design reference: Figma, section "About dialog". This text is binding where it a
 
 - Reached from the Licence card; the header has a back button (returns to the About page), the title, and the close button. 520 × 640 pt, the list scrolls.
 - Tools row: a search field filtering by component name, and a dropdown filtering by licence type (All licences plus one entry per licence id in the data).
-- Sections: Bundled runtimes first — everything shipped outside Cargo: pdfium, GStreamer (bundled in the macOS and Windows archives), 7-Zip, the shipped fonts — listed by hand in `about/bundled.toml` with name, version, licence id, copyright, URL and licence text; then Rust crates, alphabetical, from the generated file.
+- Sections: Bundled runtimes first — everything shipped outside Cargo: pdfium, GStreamer (bundled in the macOS and Windows archives), 7-Zip, the Rust standard library (`libstd`, beside the binary), the shipped fonts — listed by hand in `about/bundled.toml` with name, version, licence id, copyright, URL and licence text; then Rust crates, alphabetical, from the generated file. The libraries built into pdfium are not listed: their licence texts ship as files, in `licenses/pdfium/` beside the binary, copied from the pdfium build the release carries.
 - Row: name (medium), version (mono, `text/secondary`), licence pill (`trash/low-bg` / `trash/low-text`), chevron. Clicking a row expands it in place on `bg/selected-soft`: copyright holder, repository link, and the full licence text in a mono box on `bg/card`. One row is open at a time; clicking the open row closes it.
 - Footer: "Generated at build time from Cargo.lock by cargo-about · N components, M licence types", and Export…, which writes the whole list — bundled runtimes and crates, each with its licence text — as one plain-text file through the save dialog.
 - Plugins loaded from outside `plugins/` contribute their own entries from a `licenses.json` beside the plugin file (same shape as the generated file), shown under the plugin's name as a third section; no file, no section.
