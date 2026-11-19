@@ -560,3 +560,102 @@ fn the_background_check_is_due_once_a_day() {
     // A cached file dated after now is no reason to wait.
     assert!(due(Some(now + Duration::from_secs(3600)), now));
 }
+
+/// The SHA-256 of `bytes`, as the index writes it.
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    hex::encode(sha2::Sha256::digest(bytes))
+}
+
+#[test]
+fn a_package_is_downloaded_and_held_against_the_index() {
+    runtime::block_on(async {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let server = Server::start();
+        let package: Vec<u8> = (0..200_000u32).flat_map(u32::to_le_bytes).collect();
+        server.put("plugins/git.rkp", package.clone());
+        let url = server.url("plugins/git.rkp");
+        let to = dir.path().join("git.rkp");
+        let hash = sha256(&package);
+        let expected = Expected {
+            size: package.len() as u64,
+            sha256: &hash,
+        };
+
+        let mut seen = Vec::new();
+        let arrived = download(&url, &to, "0.6.0", Some(expected), &mut |done| {
+            seen.push(done);
+        })
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(arrived.size, package.len() as u64);
+        assert_eq!(arrived.sha256, hash);
+        assert_eq!(std::fs::read(&to).ok(), Some(package.clone()));
+        assert_eq!(seen.last(), Some(&(package.len() as u64)));
+        assert!(seen.is_sorted(), "the progress only grows");
+        let requests = server.requests();
+        assert_eq!(requests.len(), 1, "one GET");
+        assert_eq!(requests[0].header("user-agent"), Some("rick/0.6.0"));
+
+        // The index may write the hash in capitals.
+        let capitals = hash.to_uppercase();
+        let again = Expected {
+            sha256: &capitals,
+            ..expected
+        };
+        download(&url, &to, "0.6.0", Some(again), &mut |_| {})
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        // Without an expectation nothing is checked, and what arrived is
+        // said.
+        let unchecked = download(&url, &to, "0.6.0", None, &mut |_| {})
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(unchecked, arrived);
+    });
+}
+
+#[test]
+fn a_package_that_is_another_one_is_deleted() {
+    runtime::block_on(async {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let server = Server::start();
+        let package = vec![7u8; 100_000];
+        let hash = sha256(&package);
+        let expected = Expected {
+            size: package.len() as u64,
+            sha256: &hash,
+        };
+        let url = server.url("plugins/git.rkp");
+        let to = dir.path().join("git.rkp");
+
+        let mut changed = package.clone();
+        changed[50_000] = 8;
+        let cases: [(&str, Vec<u8>); 3] = [
+            ("one byte changed", changed),
+            ("too short", package[..99_999].to_vec()),
+            ("too long", vec![7u8; 400_000]),
+        ];
+        for (case, served) in cases {
+            server.put("plugins/git.rkp", served);
+            let refused = download(&url, &to, "0.6.0", Some(expected), &mut |_| {}).await;
+            assert!(
+                matches!(refused, Err(Error::Mismatch)),
+                "{case}: {refused:?}"
+            );
+            assert!(!to.exists(), "{case}: the file is deleted");
+        }
+
+        // A package that is not there is a failed fetch, and leaves no
+        // file either.
+        let missing = server.url("plugins/none.rkp");
+        let failed = download(&missing, &to, "0.6.0", Some(expected), &mut |_| {}).await;
+        assert!(matches!(failed, Err(Error::Fetch(_))), "{failed:?}");
+        assert!(!to.exists());
+        assert_eq!(
+            std::fs::read_dir(dir.path()).map(Iterator::count).ok(),
+            Some(0)
+        );
+    });
+}

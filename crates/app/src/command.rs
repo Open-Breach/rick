@@ -395,6 +395,13 @@ pub enum Command {
     /// *Remove* of the Extensions dialogue, at once and without a
     /// question. A plugin beside the binary is left alone.
     RemovePlugin(PathBuf),
+    /// **Install** on a plugin of the *Available* view, by its id: the
+    /// package of the build that fits is downloaded, held against the
+    /// size and the SHA-256 the plugin list names, and unpacked into the
+    /// per-user plugins folder, as a job (specs/plugin-distribution.md
+    /// §7). Answered by `Event::PluginInstalled`; a package that is not
+    /// the one the list describes is deleted and the job fails.
+    InstallAvailable(String),
     /// Show the pane's file through one previewer whatever the scores
     /// say. It holds for this file only, until the selection moves on.
     /// The card of a file no previewer claims sent it for *Open as hex*

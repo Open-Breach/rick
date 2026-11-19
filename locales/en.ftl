@@ -387,6 +387,34 @@ extensions-remove = Remove
 extensions-where = Plugins live in the plugins folder beside the binary and in the config directory; a per-user plugin wins on an id clash.
 extensions-install = Install from file…
 extensions-install-title = Install a plugin from a file
+# An install from the plugin registry that failed (issue 251).
+plugins-download-mismatch = The download did not match the plugin list
+plugins-download-failed = The plugin could not be downloaded: { $reason }
+# The plugin registry in the Extensions dialogue
+# (specs/plugin-distribution.md §6 and §7, issue 251).
+extensions-tab-installed = Installed
+extensions-tab-available = Available
+extensions-tab-available-count = Available { $count }
+extensions-available = Available
+extensions-install-available = Install
+extensions-installing = Installing…
+extensions-size = Size
+extensions-source = Source
+extensions-folders-with = folders with { $names }
+extensions-restart-now = Restart now
+extensions-check-now = Check now
+extensions-checking = Looking for plugins…
+extensions-list-of = Plugin list of { $date }
+extensions-not-set-up = The plugin list is not set up in this build
+extensions-pre-release = Rick { $version } is a pre-release. Plugins are published for releases only.
+extensions-too-old = The plugins for Rick { $version } are no longer published. Update Rick to install plugins.
+extensions-offline = The plugin list could not be fetched. Rick may be offline.
+extensions-check-off = Rick is set not to look for plugins online.
+extensions-unverified = The plugin list could not be verified
+extensions-newer-rick = This list needs a newer Rick
+extensions-unreadable = The plugin list could not be read
+extensions-none-available = No further plugins are available for Rick { $version }
+extensions-registry-address = The plugin list is read from { $address }.
 shell-phosphor-fill = phosphor-fill
 close = Close
 shell-restore = Restore

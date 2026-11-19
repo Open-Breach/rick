@@ -5093,3 +5093,361 @@ mod registry {
         assert_eq!(server.requests(), [], "not one request");
     }
 }
+
+/// *Install* from the registry and the record of what was installed
+/// (specs/plugin-distribution.md §7), against a registry of the test's
+/// own.
+mod install {
+    use std::io::Write as _;
+
+    use model::JobState;
+    use plugins_registry::fixtures::{Server, Signer};
+    use serde_json::json;
+
+    use super::*;
+    use crate::plugins::{Origin, RECORD_FILE, Record};
+    use crate::{Offering, PluginStatus, RegistryCommand};
+
+    /// The Rick the tests ask as.
+    const RICK: &str = "0.6.0";
+    /// Where the test registry serves the package.
+    const PACKAGE: &str = "plugins/rick/0.6.0/hello.rkp";
+
+    /// The bytes of a plugin package: a zip archive of the folder `hello/`
+    /// with a manifest that names `version`.
+    fn package(version: &str) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        let manifest = format!(
+            "id = \"hello\"\nname = \"Hello\"\ndescription = \"Says hello.\"\n\
+             version = \"{version}\"\npoints = [\"action\"]\n"
+        );
+        for (name, content) in [
+            ("hello/plugin.toml", manifest.as_str()),
+            ("hello/libhello.so", "library"),
+        ] {
+            zip.start_file(name, options)
+                .unwrap_or_else(|e| panic!("{e}"));
+            zip.write_all(content.as_bytes())
+                .unwrap_or_else(|e| panic!("{e}"));
+        }
+        zip.finish().unwrap_or_else(|e| panic!("{e}")).into_inner()
+    }
+
+    fn sha256(bytes: &[u8]) -> String {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let file = dir.path().join("package");
+        fs::write(&file, bytes).unwrap_or_else(|e| panic!("{e}"));
+        crate::plugins::sha256_of(&file).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// An index that offers Hello for [`RICK`] on this platform as the
+    /// package `described`, served at [`PACKAGE`].
+    fn index(server: &Server, described: &[u8]) -> serde_json::Value {
+        json!({
+            "schema": 1,
+            "generated": "2026-11-19T02:00:00Z",
+            "apps": { "rick": { "plugins": [{
+                "id": "hello",
+                "name": "Hello",
+                "description": "Says hello.",
+                "publisher": "Open-Breach",
+                "meta": { "points": ["action"], "triggers": { "markers": [".hello"] } },
+                "builds": [{
+                    "version": "1.2.0",
+                    "app_version": RICK,
+                    "api_version": API_VERSION,
+                    "platform": plugins_registry::platform(),
+                    "url": server.url(PACKAGE),
+                    "size": described.len(),
+                    "sha256": sha256(described),
+                }],
+            }] } },
+        })
+    }
+
+    /// A Rick of version [`RICK`] on a fresh config directory that reads
+    /// `server`'s list, which `signer` signed, and has read it.
+    fn start(server: &Server, signer: &Signer) -> Harness {
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        start_on(&fake, server, signer)
+    }
+
+    fn start_on(fake: &Arc<Fake>, server: &Server, signer: &Signer) -> Harness {
+        let config = fake.config_dir();
+        fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+        let settings = format!(
+            "[registry]\nurl = \"{}\"\npublic_key = \"{}\"\n",
+            server.index_url(),
+            signer.public_key()
+        );
+        fs::write(config.join(SETTINGS_FILE), settings).unwrap_or_else(|e| panic!("{e}"));
+        let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let ui = Arc::new(Scripted::default());
+        let mut app = App::new(Config {
+            platform: fake.clone(),
+            ui: ui.clone(),
+            extensions: Vec::new(),
+            config_dir: Some(config),
+            start: Some(local(root.path())),
+        });
+        app.set_rick_version(RICK);
+        let mut harness = Harness {
+            root,
+            fake: fake.clone(),
+            ui,
+            app,
+            events: Vec::new(),
+        };
+        harness.send(Command::Registry(RegistryCommand::Start));
+        harness.settle();
+        harness
+    }
+
+    /// The ids on offer, or why there is no list.
+    fn offered(app: &App) -> Vec<String> {
+        match app.offering() {
+            Offering::Plugins(plugins) => plugins.into_iter().map(|p| p.id).collect(),
+            other => panic!("no list: {other:?}"),
+        }
+    }
+
+    /// The jobs of the job table, by name, with how they ended.
+    fn jobs(app: &App) -> Vec<(String, JobState)> {
+        app.model()
+            .jobs
+            .values()
+            .map(|job| (job.name.clone(), job.state.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn install_puts_an_available_plugin_into_the_per_user_folder_and_notes_it() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        let bytes = package("1.2.0");
+        server.put(PACKAGE, bytes.clone());
+        server.publish(&signer, &index(&server, &bytes));
+        let mut h = start(&server, &signer);
+
+        // On offer, with what the list says of it.
+        let Offering::Plugins(plugins) = h.app.offering() else {
+            panic!("a list");
+        };
+        let [hello] = plugins.as_slice() else {
+            panic!("one plugin: {plugins:?}");
+        };
+        assert_eq!(
+            (
+                hello.id.as_str(),
+                hello.name.as_str(),
+                hello.version.as_str()
+            ),
+            ("hello", "Hello", "1.2.0")
+        );
+        assert_eq!(hello.points, Points::ACTION);
+        assert_eq!(hello.markers, [".hello"]);
+        assert_eq!(hello.size, bytes.len() as u64);
+        assert!(!hello.installing);
+
+        h.take_events();
+        h.send(Command::InstallAvailable("hello".to_owned()));
+        assert!(
+            matches!(h.app.offering(), Offering::Plugins(p) if p[0].installing),
+            "the install is running"
+        );
+        h.settle();
+
+        // In the per-user plugins folder, whole, and nowhere else.
+        let plugins_dir = h.app.plugins_dir();
+        let folder = plugins_dir.join("hello");
+        assert_eq!(
+            fs::read_to_string(folder.join("libhello.so"))
+                .ok()
+                .as_deref(),
+            Some("library")
+        );
+        let downloads = h.fake.config_dir().join(crate::CACHE_DIR).join("downloads");
+        assert_eq!(
+            fs::read_dir(&downloads).map(Iterator::count).ok(),
+            Some(0),
+            "the package is gone once it is unpacked"
+        );
+        // The row is under Installed, waiting for the next start, and the
+        // plugin is no longer on offer.
+        let row = h
+            .app
+            .plugins()
+            .iter()
+            .find(|row| row.id == "hello")
+            .unwrap_or_else(|| panic!("a row"));
+        assert_eq!(row.status, PluginStatus::Installed);
+        assert_eq!(
+            (row.path.as_path(), row.built_in),
+            (folder.as_path(), false)
+        );
+        assert_eq!(offered(&h.app), [] as [String; 0]);
+        let events = h.take_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::PluginInstalled { path } if *path == folder)),
+            "{events:?}"
+        );
+        assert_eq!(
+            jobs(&h.app),
+            [("Install Hello".to_owned(), JobState::Done)],
+            "a job of the operations area"
+        );
+
+        // The record says where it came from, in memory and in the file.
+        let noted = h.app.installed().get(&folder).cloned();
+        let noted = noted.unwrap_or_else(|| panic!("an entry"));
+        assert_eq!(noted.source, Origin::Registry);
+        assert_eq!(noted.version, "1.2.0");
+        assert_eq!(noted.sha256, sha256(&bytes));
+        assert_eq!(noted.url, None);
+        let text = fs::read_to_string(plugins_dir.join(RECORD_FILE)).unwrap_or_default();
+        assert!(
+            text.contains("[hello]\nsource = \"registry\"\nversion = \"1.2.0\"\nsha256 = \""),
+            "{text}"
+        );
+        assert_eq!(&Record::read(&plugins_dir), h.app.installed());
+
+        // The package was asked for once, as Rick.
+        let asked: Vec<_> = server
+            .requests()
+            .into_iter()
+            .filter(|request| request.path == PACKAGE)
+            .collect();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].header("user-agent"), Some("rick/0.6.0"));
+    }
+
+    #[test]
+    fn a_package_that_differs_from_the_list_is_deleted_and_the_job_fails() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        let described = package("1.2.0");
+        server.publish(&signer, &index(&server, &described));
+        // The registry serves another package than the one it describes:
+        // one byte of it changed, then one of another size.
+        let mut changed = described.clone();
+        let middle = changed.len() / 2;
+        changed[middle] ^= 0xff;
+        for served in [changed, package("6.6.6-and-a-longer-version")] {
+            server.put(PACKAGE, served);
+            let mut h = start(&server, &signer);
+            h.take_events();
+            h.send(Command::InstallAvailable("hello".to_owned()));
+            h.settle();
+
+            let said = "The download did not match the plugin list";
+            assert_eq!(
+                jobs(&h.app),
+                [(
+                    "Install Hello".to_owned(),
+                    JobState::Failed(said.to_owned())
+                )]
+            );
+            let events = h.take_events();
+            let notice = format!("Install Hello: {said}");
+            assert!(
+                events.iter().any(|e| matches!(
+                    e,
+                    Event::Notify { level: Level::Error, text } if *text == notice
+                )),
+                "{events:?}"
+            );
+            // Nothing landed in the plugins folder, and the download is
+            // deleted.
+            let plugins_dir = h.app.plugins_dir();
+            assert!(!plugins_dir.join("hello").exists());
+            assert!(!plugins_dir.join(RECORD_FILE).exists());
+            let downloads = h.fake.config_dir().join(crate::CACHE_DIR).join("downloads");
+            assert_eq!(fs::read_dir(&downloads).map(Iterator::count).ok(), Some(0));
+            assert_eq!(h.app.plugins(), []);
+            // It is still on offer, and can be asked for again.
+            assert!(matches!(
+                h.app.offering(),
+                Offering::Plugins(p) if p.len() == 1 && !p[0].installing
+            ));
+        }
+    }
+
+    #[test]
+    fn a_package_that_does_not_arrive_fails_the_job_in_plain_words() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        // Described, and not served.
+        server.publish(&signer, &index(&server, &package("1.2.0")));
+        let mut h = start(&server, &signer);
+        h.send(Command::InstallAvailable("hello".to_owned()));
+        h.settle();
+        let ended = jobs(&h.app);
+        let [(name, JobState::Failed(said))] = ended.as_slice() else {
+            panic!("the job failed: {ended:?}");
+        };
+        assert_eq!(name, "Install Hello");
+        assert!(
+            said.starts_with("The plugin could not be downloaded: ") && said.contains("404"),
+            "{said}"
+        );
+        assert!(!h.app.plugins_dir().join("hello").exists());
+        // A plugin the list does not have is no job at all.
+        h.send(Command::InstallAvailable("nobody".to_owned()));
+        h.settle();
+        assert_eq!(jobs(&h.app).len(), 1);
+    }
+
+    #[test]
+    fn remove_drops_the_record_s_entry_and_the_plugin_is_available_again() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        let bytes = package("1.2.0");
+        server.put(PACKAGE, bytes.clone());
+        server.publish(&signer, &index(&server, &bytes));
+        let mut h = start(&server, &signer);
+        h.send(Command::InstallAvailable("hello".to_owned()));
+        h.settle();
+        let plugins_dir = h.app.plugins_dir();
+        let folder = plugins_dir.join("hello");
+        assert!(h.app.installed().get(&folder).is_some());
+        assert_eq!(offered(&h.app), [] as [String; 0]);
+
+        h.send(Command::RemovePlugin(folder.clone()));
+        h.settle();
+        assert!(!folder.exists());
+        assert_eq!(h.app.installed().get(&folder), None);
+        assert_eq!(Record::read(&plugins_dir), Record::default());
+        assert_eq!(offered(&h.app), ["hello"]);
+    }
+
+    #[test]
+    fn install_from_file_notes_the_file_and_a_start_drops_what_is_gone() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        server.publish(&signer, &index(&server, &package("1.2.0")));
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let mut h = start_on(&fake, &server, &signer);
+        let bytes = package("0.9.0");
+        let file = h.root.path().join("hello.rkp");
+        fs::write(&file, &bytes).unwrap_or_else(|e| panic!("{e}"));
+        h.send(Command::InstallPlugin(file));
+        h.settle();
+        let plugins_dir = h.app.plugins_dir();
+        let folder = plugins_dir.join("hello");
+        let noted = h.app.installed().get(&folder).cloned();
+        let noted = noted.unwrap_or_else(|| panic!("an entry"));
+        assert_eq!(noted.source, Origin::File);
+        assert_eq!(noted.version, "0.9.0");
+        assert_eq!(noted.sha256, sha256(&bytes));
+        // In the folder, so not on offer, whatever its origin.
+        assert_eq!(offered(&h.app), [] as [String; 0]);
+
+        // A plugin put there by hand has no entry, and the entry of a
+        // folder somebody deleted is dropped at the next start.
+        fs::create_dir_all(plugins_dir.join("by-hand")).unwrap_or_else(|e| panic!("{e}"));
+        fs::remove_dir_all(&folder).unwrap_or_else(|e| panic!("{e}"));
+        assert!(Record::read(&plugins_dir).get(&folder).is_some());
+        let again = start_on(&fake, &server, &signer);
+        assert_eq!(again.app.installed(), &Record::default());
+        assert_eq!(Record::read(&plugins_dir), Record::default());
+        assert!(plugins_dir.join("by-hand").is_dir());
+    }
+}

@@ -10,7 +10,8 @@ const MAX_INDEX: usize = 16 * 1024 * 1024;
 const MAX_SIGNATURE: usize = 16 * 1024;
 /// How long a connection may take to open.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long one of the two requests may take in all.
+/// How long one of the two requests may take in all, and how long any
+/// request may stand still.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// An index that was fetched and whose signature verified, with the bytes
@@ -32,26 +33,34 @@ pub fn user_agent(rick: &str) -> String {
     format!("rick/{rick}")
 }
 
-/// The client of the two requests: `rick/<version>` as the user agent, no
-/// referrer, no cookies, TLS through rustls with ring.
-fn client(rick: &str) -> Result<reqwest::Client, Error> {
+/// The client of every request: `rick/<version>` as the user agent, no
+/// referrer, no cookies, TLS through rustls with ring. A request may take
+/// `whole` in all, or as long as it likes while something arrives every
+/// minute.
+pub(crate) fn client(rick: &str, whole: Option<Duration>) -> Result<reqwest::Client, Error> {
     // Once for the process; a second caller is told it is done already.
     let _ = rustls::crypto::ring::default_provider().install_default();
-    reqwest::Client::builder()
+    let builder = reqwest::Client::builder()
         .user_agent(user_agent(rick))
         .referer(false)
         .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-        .map_err(|error| Error::Fetch(error.to_string()))
+        .read_timeout(REQUEST_TIMEOUT);
+    match whole {
+        Some(whole) => builder.timeout(whole),
+        None => builder,
+    }
+    .build()
+    .map_err(|error| Error::Fetch(error.to_string()))
+}
+
+/// What a request that failed is reported as: reqwest's text without the
+/// address, which the caller names itself.
+pub(crate) fn failed(error: reqwest::Error) -> Error {
+    Error::Fetch(error.without_url().to_string())
 }
 
 /// One GET of `url`, its body read up to `limit` bytes.
 async fn get(client: &reqwest::Client, url: &str, limit: usize) -> Result<Vec<u8>, Error> {
-    let failed = |error: reqwest::Error| {
-        // Without the address: reqwest's own text names it again.
-        Error::Fetch(error.without_url().to_string())
-    };
     let mut response = client.get(url).send().await.map_err(failed)?;
     let status = response.status();
     if !status.is_success() {
@@ -79,7 +88,7 @@ async fn get(client: &reqwest::Client, url: &str, limit: usize) -> Result<Vec<u8
 /// [`Index::parse`] has them.
 pub async fn fetch(source: &Source, rick: &str) -> Result<Fetched, Error> {
     let key = source.key.as_ref().ok_or(Error::NotSetUp)?;
-    let client = client(rick)?;
+    let client = client(rick, Some(REQUEST_TIMEOUT))?;
     let bytes = get(&client, &source.url, MAX_INDEX).await?;
     let signature = get(&client, &source.signature_url(), MAX_SIGNATURE).await?;
     let signature = String::from_utf8(signature).map_err(|_| Error::Unverified)?;

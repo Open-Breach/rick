@@ -322,6 +322,7 @@ dependencies = [
  "runtime",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -6633,6 +6634,7 @@ version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "blake2",
+ "hex",
  "minisign-verify",
  "plugins-registry",
  "reqwest",
@@ -6642,6 +6644,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",

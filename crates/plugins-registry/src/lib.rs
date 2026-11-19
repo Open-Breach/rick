@@ -3,8 +3,8 @@
 //!
 //! The registry is one JSON document, the **index**, with a minisign
 //! signature beside it (`docs/spec.md` 7.2 and 7.5 in
-//! Open-Breach/trebuchet). This crate reads the two, and nothing else of
-//! it reaches the network:
+//! Open-Breach/trebuchet). This crate reads the two and downloads the
+//! packages the index names, and nothing else of it reaches the network:
 //!
 //! - [`Source`] says where the index is and which key signs it: the
 //!   address of the specification and the key compiled in from
@@ -19,6 +19,9 @@
 //!   due.
 //! - [`Index::offer`] is the rule of what fits: a build is for one
 //!   platform and one release of Rick, compared as whole strings.
+//! - [`download`] fetches a package to a file and holds it against the
+//!   size and the SHA-256 the index names; a package that is another one
+//!   is deleted.
 //!
 //! Nothing here decides *when* to ask or whether the user allows it: that
 //! is the application's, with the switch of the settings.
@@ -44,6 +47,7 @@
 #![deny(unsafe_code)]
 
 mod cache;
+mod download;
 mod fetch;
 #[cfg(any(test, feature = "fixtures"))]
 pub mod fixtures;
@@ -56,6 +60,7 @@ mod tests;
 use std::path::PathBuf;
 
 pub use cache::{CACHE_DIR, CHECK_EVERY, Cache, Cached, INDEX_FILE, SIGNATURE_FILE, due, refresh};
+pub use download::{Downloaded, Expected, download};
 pub use fetch::{Fetched, fetch, user_agent};
 pub use index::{
     Build, Connection, Index, Meta, Offer, Offered, Plugin, SCHEMA, Triggers, is_pre_release,
@@ -90,6 +95,10 @@ pub enum Error {
     /// The signature verified and the bytes are still no index.
     #[error("the plugin list could not be read: {0}")]
     Unreadable(String),
+    /// A package arrived and is not the one the index describes: another
+    /// size or another SHA-256. It was deleted.
+    #[error("the download did not match the plugin list")]
+    Mismatch,
     /// A text that should be a minisign public key is none.
     #[error("not a minisign public key: {0}")]
     Key(String),
