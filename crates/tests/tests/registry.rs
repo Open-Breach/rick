@@ -179,3 +179,84 @@ fn the_start_fetches_the_list_once_the_first_frame_is_drawn_and_once_a_day() {
     assert!(again.state().app().plugin_registry().index.is_some());
     assert_eq!(server.requests().len(), 2, "at most once a day");
 }
+
+/// Issue 251, item 5: *Look for plugins and updates online* is on the
+/// Behaviour page of the settings, on by default, and writes `[registry]
+/// check`. Off, nothing is fetched by itself; *Check now* still is.
+#[test]
+fn the_behaviour_page_switches_the_looking_for_plugins_online_off() {
+    use egui::accesskit::{Role, Toggled};
+    use egui_kittest::kittest::{NodeT as _, Queryable as _};
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(&signer, &index());
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let dir = folder();
+    // A rick.toml that says nothing of the switch: it is on.
+    let config = fake.config_dir();
+    fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+    let settings = format!(
+        "[registry]\nurl = \"{}\"\npublic_key = \"{}\"\n",
+        server.index_url(),
+        signer.public_key()
+    );
+    fs::write(config.join(app::SETTINGS_FILE), settings).unwrap_or_else(|e| panic!("{e}"));
+    let host = Arc::new(EguiHost::new());
+    let mut app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: Vec::new(),
+        config_dir: Some(config.clone()),
+        start: Some(local(dir.path())),
+    });
+    app.set_rick_version(RICK);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .with_pixels_per_point(1.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    assert!(harness.state().app().model().settings.registry.check);
+    assert_eq!(server.requests().len(), 2, "the start looked");
+
+    harness.state_mut().open_settings();
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness
+        .get_by_role_and_label(Role::RadioButton, "Behaviour")
+        .click();
+    for _ in 0..4 {
+        harness.step();
+    }
+    let switch =
+        harness.get_by_role_and_label(Role::CheckBox, "Look for plugins and updates online");
+    assert_eq!(
+        switch.accesskit_node().toggled(),
+        Some(Toggled::True),
+        "on by default"
+    );
+    harness.get_by_label_contains("It sends its version and nothing else");
+    switch.click();
+    for _ in 0..4 {
+        harness.step();
+    }
+    assert!(!harness.state().app().model().settings.registry.check);
+    let written = tests::read_until(&config.join(app::SETTINGS_FILE), |text| {
+        text.contains("check = false")
+    });
+    assert!(written.contains("[registry]\ncheck = false"), "{written}");
+    // The address and the key the file named are still there.
+    assert!(written.contains(&server.index_url()), "{written}");
+
+    // Off: the Available view opened asks nobody; Check now does.
+    let send = |harness: &mut Harness<'_, RickUi>, command: app::RegistryCommand| {
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::Registry(command), &mut Vec::new());
+        settle(harness);
+    };
+    send(&mut harness, app::RegistryCommand::Opened);
+    assert_eq!(server.requests().len(), 2, "nothing is fetched by itself");
+    send(&mut harness, app::RegistryCommand::CheckNow);
+    assert_eq!(server.requests().len(), 4);
+}

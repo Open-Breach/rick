@@ -5093,12 +5093,23 @@ mod registry {
         }
         assert_eq!(h.app.plugin_registry().index, None);
 
-        // This build's own key: while the committed file is empty, the
-        // registry is off however the address is set.
+        // An application nobody turned the build's registry on for has
+        // none without a key of its own, whatever key the build carries:
+        // that is every test, and none of them asks the real registry.
+        let addressed = format!("[registry]\nurl = \"{}\"\n", server.index_url());
+        let mut h = start(&self::fake(), &addressed);
+        assert!(!h.app.plugin_registry().set_up);
+        for occasion in occasions {
+            h.registry(occasion);
+        }
+        assert!(!harness().app.plugin_registry().set_up);
+
+        // The binary turns it on. While the committed key file is empty,
+        // the registry is off all the same, however the address is set.
         let built_with_a_key = plugins_registry::Source::new(None, None).key.is_some();
         if !built_with_a_key {
-            let addressed = format!("[registry]\nurl = \"{}\"\n", server.index_url());
             let mut h = start(&self::fake(), &addressed);
+            h.app.use_build_registry();
             assert!(!h.app.plugin_registry().set_up);
             for occasion in occasions {
                 h.registry(occasion);

@@ -898,6 +898,9 @@ pub enum SettingsChange {
         /// `false` adds it to `[plugins] disabled`, `true` removes it.
         enabled: bool,
     },
+    /// *Look for plugins and updates online*: whether Rick fetches the
+    /// plugin list by itself (`[registry] check`).
+    RegistryCheck(bool),
     /// Whether the integration dialog opens when the startup check finds
     /// something; `false` is its *Don't ask again*.
     IntegrationAsk(bool),
@@ -982,6 +985,7 @@ impl Settings {
                     self.plugins.disabled.push(id);
                 }
             }
+            SettingsChange::RegistryCheck(v) => self.registry.check = v,
             SettingsChange::IntegrationAsk(v) => self.integration.ask = v,
             SettingsChange::IntegrationCheckAtStartup(v) => self.integration.check_at_startup = v,
             SettingsChange::ShellIntegration(v) => self.integration.shell_integration = v,
@@ -1050,6 +1054,14 @@ mod tests {
         // One key of the table leaves the others at their defaults.
         let partial: Settings = toml::from_str("[registry]\nurl = \"x\"\n").unwrap_or_default();
         assert!(partial.registry.check);
+        // The switch of the Behaviour page writes the one key.
+        let mut switched = Settings::default();
+        switched.apply(SettingsChange::RegistryCheck(false));
+        assert!(!switched.registry.check);
+        let text = toml::to_string(&switched).unwrap_or_default();
+        assert!(text.contains("[registry]\ncheck = false\n"), "{text}");
+        switched.apply(SettingsChange::RegistryCheck(true));
+        assert_eq!(switched, Settings::default());
     }
 
     #[test]

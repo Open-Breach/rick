@@ -365,6 +365,17 @@ fn the_source_is_this_build_s_unless_rick_toml_says_otherwise() {
     assert_ne!(rekeyed.key, built.key);
     assert!(rekeyed.key.is_some() && rekeyed.custom);
 
+    // The source of an application that is not the released binary has
+    // no key but the one rick.toml names, whatever this build carries.
+    assert_eq!(Source::named(None, None).key, None);
+    assert_eq!(
+        Source::named(Some("http://127.0.0.1:1/i.json"), None).key,
+        None
+    );
+    let named = Source::named(Some("http://127.0.0.1:1/i.json"), Some(&other));
+    assert_eq!(named.key, rekeyed.key);
+    assert!(named.custom);
+
     // A key that was asked for and is none: the compiled one does not
     // stand in for it.
     let broken = Source::with_compiled(&compiled, None, Some("not a key"));

@@ -123,11 +123,13 @@ pub async fn download(
     if !status.is_success() {
         return Err(Error::Fetch(format!("{url}: HTTP {}", status.as_u16())));
     }
-    let mut file = tokio::fs::File::create(to).await.map_err(io)?;
+    // Declared before the file, so dropped after it: the file is closed
+    // before it is deleted, which Windows needs for the name to go at once.
     let mut partial = Partial {
         path: to.to_owned(),
         keep: false,
     };
+    let mut file = tokio::fs::File::create(to).await.map_err(io)?;
     let mut hash = Sha256::new();
     let mut size: u64 = 0;
     while let Some(chunk) = response.chunk().await.map_err(failed)? {

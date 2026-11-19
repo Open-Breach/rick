@@ -114,7 +114,11 @@ plugin list and fetches it when it is a day old, `Opened` fetches when the
 thread through the `plugins-registry` crate, and `App::plugin_registry` is
 what came of it: whether a key is there at all, the last index that
 verified, when it was fetched, and why the last attempt gave none. A Rick
-without a key or with a pre-release version asks nothing. The cache is
+without a key or with a pre-release version asks nothing. The key compiled
+into the build counts only once the binary has said so
+(`App::use_build_registry`): an application made anywhere else, as every
+test is, knows only a key its `rick.toml` names, and so never asks the
+real registry. The cache is
 `cache/` in the config directory unless the binary names the platform's
 (`App::set_cache_dir`). It depends on `types`,
 `runtime`, `platform`, `ext`, `vfs`, `vfs-local`, `vfs-rick`, `model`,
