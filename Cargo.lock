@@ -1040,7 +1040,6 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
- "pure-rust-locales",
  "wasm-bindgen",
  "windows-link",
 ]
@@ -2198,8 +2197,8 @@ dependencies = [
 name = "ext-action-rename"
 version = "0.5.0"
 dependencies = [
- "chrono",
  "ext",
+ "jiff",
  "platform",
  "regex",
  "runtime",
@@ -2245,11 +2244,11 @@ version = "0.5.0"
 dependencies = [
  "backhand",
  "bzip2",
- "chrono",
  "ext",
  "ext-installer",
  "flate2",
  "futures",
+ "jiff",
  "liblzma",
  "platform",
  "runtime",
@@ -2592,10 +2591,10 @@ version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
- "chrono",
  "ext",
  "futures",
  "hmac 0.12.1",
+ "jiff",
  "percent-encoding",
  "platform",
  "reqwest",
@@ -2616,9 +2615,9 @@ version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
- "chrono",
  "ext",
  "futures",
+ "jiff",
  "percent-encoding",
  "platform",
  "reqwest",
@@ -2639,11 +2638,11 @@ name = "ext-vfs-s3"
 version = "0.5.0"
 dependencies = [
  "bytes",
- "chrono",
  "ext",
  "futures",
  "hex",
  "hmac 0.12.1",
+ "jiff",
  "percent-encoding",
  "platform",
  "reqwest",
@@ -2676,9 +2675,9 @@ dependencies = [
 name = "ext-zfs"
 version = "0.5.0"
 dependencies = [
- "chrono",
  "ext",
  "futures",
+ "jiff",
  "platform",
  "runtime",
  "tempfile",
@@ -8856,7 +8855,6 @@ version = "0.5.0"
 dependencies = [
  "ab_glyph",
  "app",
- "chrono",
  "eframe",
  "egui",
  "egui-phosphor",
@@ -8865,9 +8863,11 @@ dependencies = [
  "egui_kittest",
  "ext",
  "image",
+ "jiff",
  "model",
  "percent-encoding",
  "platform",
+ "pure-rust-locales",
  "regex",
  "resvg",
  "runtime",

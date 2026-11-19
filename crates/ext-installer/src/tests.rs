@@ -1831,7 +1831,27 @@ kind = "symlink"
     assert_eq!(record.kind, Kind::Gui);
     assert_eq!(record.external_files.len(), 2);
     assert_eq!(record.commands(), vec!["postman"]);
-    assert!(record.installed_at_time().is_some());
+    // 2026-11-07T18:42:00Z, read to the second and written back the same.
+    let installed = std::time::UNIX_EPOCH + Duration::from_mins(29_901_282);
+    assert_eq!(record.installed_at_time(), Some(installed));
+    assert_eq!(
+        crate::record::datetime_of(installed + Duration::from_millis(750)),
+        record.installed_at
+    );
+    // A datetime without an offset is read as UTC, a date alone is none.
+    let at = |text: &str| Record {
+        installed_at: text.parse().unwrap_or_else(|e| panic!("{e}")),
+        ..record.clone()
+    };
+    assert_eq!(
+        at("2026-11-07T18:42:00").installed_at_time(),
+        Some(installed)
+    );
+    assert_eq!(
+        at("2026-11-07T19:42:00+01:00").installed_at_time(),
+        Some(installed)
+    );
+    assert_eq!(at("2026-11-07").installed_at_time(), None);
     let again = Record::parse(&record.to_toml()).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(again, record);
     assert!(Record::parse("id = 1").is_err());

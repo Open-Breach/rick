@@ -28,7 +28,6 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use app::{App, Command, IntegrationCommand};
-use chrono::{DateTime, Local, NaiveDate};
 use egui::{Align, Align2, FontId, Rect, Sense, pos2, vec2};
 use ext::{Header, HeaderIcon, t};
 use model::{Integration, IntegrationItem, ItemRecord, ItemStatus, SettingsChange};
@@ -686,7 +685,7 @@ pub(crate) fn checked_line(integration: &Integration) -> String {
     } else {
         match integration.checked_at {
             Some(at) => {
-                let time = DateTime::<Local>::from(at).format("%H:%M").to_string();
+                let time = crate::format::local_time(at, "%H:%M");
                 if integration.at_startup {
                     t!("integration-checked-at-start", time = time)
                 } else {
@@ -729,8 +728,13 @@ pub(crate) fn item_name(item: Item) -> String {
 /// The day a record was last touched, as `8 Nov`.
 fn record_day(record: Option<&ItemRecord>) -> Option<String> {
     let date = record?.checked?.date?;
-    let date = NaiveDate::from_ymd_opt(date.year.into(), date.month.into(), date.day.into())?;
-    Some(date.format("%-d %b").to_string())
+    let date = jiff::civil::Date::new(
+        date.year.try_into().ok()?,
+        date.month.try_into().ok()?,
+        date.day.try_into().ok()?,
+    )
+    .ok()?;
+    jiff::fmt::strtime::format("%-d %b", date).ok()
 }
 
 /// The line under an item's title on the settings' Integration page: where a
@@ -859,6 +863,17 @@ mod tests {
             status: ItemStatus::Missing,
             check,
         }
+    }
+
+    /// The day an item was last checked reads `8 Nov`: the day without a
+    /// zero, then the month.
+    #[test]
+    fn the_day_of_a_record_is_written_as_the_day_and_the_month() {
+        let mut record = ItemRecord::new(model::ItemState::Declined);
+        assert_eq!(record_day(Some(&record)), None);
+        record.checked = "2026-11-08".parse().ok();
+        assert_eq!(record_day(Some(&record)).as_deref(), Some("8 Nov"));
+        assert_eq!(record_day(None), None);
     }
 
     #[test]

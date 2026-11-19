@@ -189,9 +189,12 @@ hex = "0.4"
 base64 = "0.22"
 percent-encoding = "2"
 url = "2"
-# `unstable-locales` writes a date as a locale does, for the *System* date
-# format (SPEC.md *Dates*); it brings the locale tables, pure-rust-locales.
-chrono = { version = "0.4", default-features = false, features = ["clock", "std", "unstable-locales"] }
+# Dates and local time: 0.2 is the line `gix-date` brings for the Git plugin,
+# so the lock file holds one jiff.
+jiff = "0.2"
+# The locale tables of the GNU C library, for the *System* date format
+# (SPEC.md *Dates*): how a locale writes a date, its month and weekday names.
+pure-rust-locales = "0.8"
 eframe = "0.36"
 egui = "0.36"
 # The font parser egui renders with, for checking a system font file.

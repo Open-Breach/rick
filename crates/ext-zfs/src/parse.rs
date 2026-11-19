@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use chrono::NaiveDateTime;
+use jiff::civil::DateTime;
 
 /// A mounted ZFS file system.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,14 +190,22 @@ pub fn check_name(dataset: &str, name: &str) -> Result<(), NameProblem> {
 /// The name a new snapshot gets unless the user types another:
 /// `rick-YYYY-MM-DD-HHMMSS` of `at`, which is local time.
 #[must_use]
-pub fn default_name_at(at: NaiveDateTime) -> String {
-    at.format("rick-%Y-%m-%d-%H%M%S").to_string()
+pub fn default_name_at(at: DateTime) -> String {
+    format!(
+        "rick-{:04}-{:02}-{:02}-{:02}{:02}{:02}",
+        at.year(),
+        at.month(),
+        at.day(),
+        at.hour(),
+        at.minute(),
+        at.second()
+    )
 }
 
 /// [`default_name_at`] now, in local time.
 #[must_use]
 pub fn default_name() -> String {
-    default_name_at(chrono::Local::now().naive_local())
+    default_name_at(jiff::Zoned::now().datetime())
 }
 
 #[cfg(test)]
@@ -304,9 +312,7 @@ rpool/ROOT/ubuntu_62wyjh/var/lib@before update\t1790963775\t81920
 
     #[test]
     fn the_default_name_is_a_timestamp() {
-        let at = chrono::NaiveDate::from_ymd_opt(2026, 11, 9)
-            .and_then(|d| d.and_hms_opt(14, 30, 5))
-            .unwrap_or_default();
+        let at = jiff::civil::date(2026, 11, 9).at(14, 30, 5, 0);
         assert_eq!(default_name_at(at), "rick-2026-11-09-143005");
         let now = default_name();
         assert!(now.starts_with("rick-20"), "{now}");

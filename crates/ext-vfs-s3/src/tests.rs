@@ -1,10 +1,11 @@
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use ext::{Capabilities, ConnectionFieldKind, Registry};
 use platform::Fake;
 use types::{EntryKind, Location};
 
-use super::client::{Unsigned, parse_buckets, parse_page};
+use super::client::{Unsigned, amz_date, parse_buckets, parse_page};
 use super::*;
 
 #[test]
@@ -121,7 +122,10 @@ fn listings_and_bucket_lists_parse() {
     assert_eq!(page.objects.len(), 2);
     assert_eq!(page.objects[1].key, "2026/a.jpg");
     assert_eq!(page.objects[1].size, 1234);
-    assert!(page.objects[1].modified.is_some());
+    // 2026-11-08T03:29:15Z, to the second.
+    let modified = SystemTime::UNIX_EPOCH + Duration::from_secs(1_794_108_555);
+    assert_eq!(page.objects[1].modified, Some(modified));
+    assert_eq!(amz_date(modified), "20261108T032915Z");
     assert_eq!(page.next.as_deref(), Some("tok=="));
     let entries = S3Provider::page_entries("work", "photos", "2026/", page, true);
     let names: Vec<(String, EntryKind)> = entries

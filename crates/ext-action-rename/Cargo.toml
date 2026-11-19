@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 types = { workspace = true }
 ext = { workspace = true }
 regex = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
