@@ -1429,6 +1429,8 @@ fn a_file_no_previewer_claims_shows_the_centred_card_with_open_with_alone() {
         version: "0.2.0".to_owned(),
         points: ext::Points::PREVIEWER,
         previews: vec!["abc".to_owned()],
+        markers: Vec::new(),
+        connections: Vec::new(),
         status: app::PluginStatus::Disabled,
         path: dir.path().join("plugins").join("preview-abc"),
         description: String::new(),

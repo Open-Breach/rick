@@ -254,6 +254,8 @@ fn with_the_plugin_disabled_an_ico_shows_the_card_that_says_plugin_available() {
         version: toml.version.clone(),
         points: ext::Points::PREVIEWER,
         previews: toml.previews.clone(),
+        markers: Vec::new(),
+        connections: Vec::new(),
         status: app::PluginStatus::Disabled,
         path: dir.path().join("plugins").join(&toml.id),
         description: String::new(),

@@ -181,8 +181,11 @@ title = "S3"
 ```
 
 A plugin that has none leaves the lists empty. They land in `plugin.toml`
-and in the manifest of the plugin's package; nothing in Rick reads
-`markers` and `connections` yet.
+and in the manifest of the plugin's package. The host hands all three on
+with every plugin it found, loaded or not (`Plugin::previews`, `markers`
+and `connections`), and Rick suggests a plugin by them: one of the
+registry that is not installed, and one that is installed and disabled
+from this very file (specs/plugin-distribution.md §8).
 
 **A subcommand of the command line.** A plugin can add `rick <command>
 <args…>` (specs/system-integration.md §4): the manifest declares the

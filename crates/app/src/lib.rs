@@ -84,6 +84,7 @@ pub mod plugins;
 mod registry;
 mod session;
 pub mod settings;
+mod suggest;
 mod timeline;
 
 pub use command::{
@@ -104,6 +105,7 @@ pub use registry::{
 };
 pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
 pub use settings::SETTINGS_FILE;
+pub use suggest::{ConnectionKind, Remedy, SuggestedConnection, Suggestion};
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -165,6 +167,12 @@ pub struct Plugin {
     /// The file name extensions its previewers claim, as its manifest
     /// lists them, lower case without the dot.
     pub previews: Vec<String>,
+    /// The names of an entry directly inside a folder that make the folder
+    /// its business, as its manifest lists them: `.git`.
+    pub markers: Vec<String>,
+    /// The kinds of connection it adds to *Add…* in the side panel, as its
+    /// manifest lists them.
+    pub connections: Vec<ConnectionKind>,
     /// Loaded, disabled or refused.
     pub status: PluginStatus,
     /// The plugin's directory.
@@ -858,6 +866,8 @@ pub struct App {
     /// `installed.toml`: where the plugins of the per-user plugins folder
     /// came from.
     installed: plugins::Record,
+    /// What the user said of the suggestions in this run.
+    suggestions: suggest::Suggestions,
 }
 
 impl App {
@@ -1200,6 +1210,7 @@ impl App {
             integration: integration::IntegrationRun::default(),
             plugin_registry,
             installed,
+            suggestions: suggest::Suggestions::default(),
         };
         app.watch_settings();
         if seeded {
@@ -1403,22 +1414,11 @@ impl App {
     /// previewer*).
     #[must_use]
     pub fn disabled_plugin_for(&self, name: &str) -> Option<String> {
-        let lower = name.to_ascii_lowercase();
-        let suffixes: Vec<&str> = lower
-            .char_indices()
-            .filter(|(_, c)| *c == '.')
-            .map(|(i, _)| &lower[i + 1..])
-            .filter(|s| !s.is_empty())
-            .collect();
+        let suffixes = suggest::suffixes(name);
         self.plugins
             .iter()
             .filter(|plugin| plugin.status == PluginStatus::Disabled)
-            .find(|plugin| {
-                plugin
-                    .previews
-                    .iter()
-                    .any(|claimed| suffixes.iter().any(|s| claimed.eq_ignore_ascii_case(s)))
-            })
+            .find(|plugin| suggest::claims(&plugin.previews, &suffixes))
             .map(|plugin| plugin.id.clone())
     }
 
@@ -2091,6 +2091,9 @@ impl App {
             Command::RemovePlugin(path) => self.remove_plugin(path),
             Command::InstallAvailable(id) => self.install_available(&id),
             Command::UpdateAll => self.update_all(),
+            Command::SuggestNotNow(id) => self.suggest_not_now(id),
+            Command::SuggestNever(id) => self.suggest_never(id),
+            Command::SuggestAgain(id) => self.suggest_again(id),
             Command::InstallPluginFrom(url) => self.install_from_address(&url, events),
             Command::PreviewWith { pane, previewer } => {
                 if let Some(job) = self.preview.get(&pane) {

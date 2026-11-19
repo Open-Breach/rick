@@ -411,6 +411,18 @@ pub enum Command {
     /// plugin [`App::updates`](crate::App::updates) lists is installed
     /// over its folder, each as a job of its own.
     UpdateAll,
+    /// **Not now** on a suggestion (specs/plugin-distribution.md §8): the
+    /// plugin of this id is not suggested again until Rick is started
+    /// again.
+    SuggestNotNow(String),
+    /// **Don't suggest again** on a suggestion: the plugin's id is written
+    /// to `[plugins] no_suggest` of `rick.toml`, and the plugin is never
+    /// suggested.
+    SuggestNever(String),
+    /// **Suggest again** of the Extensions dialogue: the plugin's id is
+    /// taken off `[plugins] no_suggest`, and off the plugins *Not now*
+    /// silenced in this run.
+    SuggestAgain(String),
     /// Show the pane's file through one previewer whatever the scores
     /// say. It holds for this file only, until the selection moves on.
     /// The card of a file no previewer claims sent it for *Open as hex*
