@@ -235,10 +235,14 @@ pub(crate) struct RegistryRun {
 }
 
 impl RegistryRun {
-    /// The state of a Rick that has asked nothing yet, for the source
-    /// `settings` name and the cache in `cache_dir`.
+    /// The state of an application that has asked nothing yet, for the
+    /// source `settings` name and the cache in `cache_dir`. The key
+    /// compiled into this build is not part of it: only the binary turns
+    /// the build's own registry on ([`App::use_build_registry`]), so an
+    /// application made anywhere else — every test — has a registry only
+    /// where its `rick.toml` names a key.
     pub(crate) fn new(settings: &model::RegistrySettings, cache_dir: PathBuf) -> Self {
-        let source = source_of(settings);
+        let source = Source::named(settings.url.as_deref(), settings.public_key.as_deref());
         Self {
             view: PluginRegistry {
                 set_up: source.key.is_some(),
@@ -262,17 +266,27 @@ impl RegistryRun {
     }
 }
 
-/// The source `rick.toml` names, or this build's own.
-fn source_of(settings: &model::RegistrySettings) -> Source {
-    Source::new(settings.url.as_deref(), settings.public_key.as_deref())
-}
-
 impl App {
     /// What the application knows of the plugin registry: whether it is
     /// set up, the last index that verified, and why there is none.
     #[must_use]
     pub fn plugin_registry(&self) -> &PluginRegistry {
         &self.plugin_registry.view
+    }
+
+    /// Turns on the registry of this build: the registry's address and
+    /// the key compiled in, where `rick.toml` names no others. The binary
+    /// calls it before the first frame. Without the call the application
+    /// knows only the key its `rick.toml` names, and with none it asks
+    /// nobody — which keeps every test away from the real registry.
+    pub fn use_build_registry(&mut self) {
+        let settings = &self.model.settings.registry;
+        let source = Source::new(settings.url.as_deref(), settings.public_key.as_deref());
+        let run = &mut self.plugin_registry;
+        run.view.set_up = source.key.is_some();
+        run.view.host = source.host();
+        run.view.custom = source.custom.then(|| source.url.clone());
+        run.source = source;
     }
 
     /// Names Rick's cache directory, where the plugin list is kept. The

@@ -154,6 +154,9 @@ fn shell(start: &Start<'_>) -> (Harness<'static, RickUi>, Restarts) {
         start: Some(local(start.folder)),
     });
     app.set_rick_version(start.rick);
+    // As the binary does: the registry of this build, where the test's
+    // rick.toml does not name another key.
+    app.use_build_registry();
     app.set_plugins(start.rows.clone());
     app.set_packaging(start.packaging);
     let restarts = Restarts::default();

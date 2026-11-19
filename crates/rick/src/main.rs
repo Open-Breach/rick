@@ -359,6 +359,9 @@ fn run() -> anyhow::Result<ExitCode> {
         ext_settings,
     );
     app.set_plugins(rows);
+    // The plugin registry of this build, with the key compiled into it:
+    // only the binary turns it on.
+    app.use_build_registry();
     // The cache is the platform's own for a Rick on the platform's config
     // directory, and stays inside the config directory `--config-dir`
     // names, so that such a Rick shares nothing with the user's own.
