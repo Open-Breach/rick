@@ -96,6 +96,15 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   install rick-plugin-git`, with a copy button, and Rick downloads none.
   It knows by a file named `package` beside its binary, which the two
   packages install (#269).
+- **Rick says when a newer Rick is out.** The plugin list names the newest
+  release, so nothing is asked for it and nothing is installed by Rick
+  itself. A notice says *Rick 0.7.0 is available*, once for a release,
+  with **Download**, which opens the release page in the browser; the
+  menu button carries a dot and the menu has *Update available* until
+  Rick is that release, and the About dialog has the same line. A Rick
+  installed from a deb or an rpm is told to update through its package
+  manager instead. *Look for plugins and updates online* switches it off
+  with the rest (#281).
 - ***Look for plugins and updates online*** on the Behaviour page of the
   settings, on by default; `[registry] check` in `rick.toml`. On, Rick
   fetches the plugin list when the *Available* list is opened and, in the

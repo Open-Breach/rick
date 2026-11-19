@@ -19,7 +19,7 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use app::{App, Plugin, PluginStatus};
+use app::{App, Plugin, PluginStatus, RickUpdate};
 use egui::{Align, Align2, FontId, Rect, Sense, pos2, vec2};
 use ext::{Level, t};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
@@ -535,6 +535,8 @@ struct Asked {
     copy: bool,
     text: Option<Page>,
     open: Option<String>,
+    /// **Download** of the update line.
+    update: bool,
 }
 
 /// The About dialog's state between frames.
@@ -660,6 +662,7 @@ impl AboutDialog {
             .inner_margin(0);
         let mut asked = Asked::default();
         let plugins = app.plugins();
+        let update = app.rick_update();
         // The page is taken out for the frame: the licences page draws
         // with its own state while the dialog's fields stay readable.
         let mut page = std::mem::take(&mut self.page);
@@ -668,7 +671,7 @@ impl AboutDialog {
             ui.set_width(WIDTH);
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
             match &mut page {
-                Page::About => self.about_page(ui, plugins, &mut asked),
+                Page::About => self.about_page(ui, plugins, update.as_ref(), &mut asked),
                 Page::Text { title, text } => text_page(ui, title, text, &mut asked),
                 Page::Licences(licences) => {
                     title_bar(ui, Some(&t!("about-third-party-licences")), &mut asked);
@@ -706,6 +709,9 @@ impl AboutDialog {
         if let Some(url) = asked.open {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
+        if asked.update {
+            requests.push(Request::RickUpdate);
+        }
         if let Some(page) = asked.text {
             self.page = page;
         }
@@ -728,10 +734,16 @@ impl AboutDialog {
     }
 
     /// The About page: title bar, hero, the three cards, the footer.
-    fn about_page(&self, ui: &mut egui::Ui, plugins: &[Plugin], asked: &mut Asked) {
+    fn about_page(
+        &self,
+        ui: &mut egui::Ui,
+        plugins: &[Plugin],
+        update: Option<&RickUpdate>,
+        asked: &mut Asked,
+    ) {
         let scheme = theme::scheme(ui);
         title_bar(ui, None, asked);
-        self.hero(ui, asked);
+        self.hero(ui, update, asked);
         egui::Frame::new()
             .inner_margin(egui::Margin {
                 left: PAD as i8,
@@ -881,7 +893,7 @@ impl AboutDialog {
 
     /// The hero: the symbol, the name, the tagline, the version pill, the
     /// build line and the two buttons, centred.
-    fn hero(&self, ui: &mut egui::Ui, asked: &mut Asked) {
+    fn hero(&self, ui: &mut egui::Ui, update: Option<&RickUpdate>, asked: &mut Asked) {
         let scheme = theme::scheme(ui);
         egui::Frame::new()
             .inner_margin(egui::Margin {
@@ -933,6 +945,9 @@ impl AboutDialog {
                         )
                         .selectable(false),
                     );
+                    if let Some(update) = update {
+                        update_line(ui, update, asked);
+                    }
                     ui.add_space(6.0);
                     let copy = t!("about-copy-details");
                     let whats_new = t!("about-whats-new");
@@ -974,6 +989,60 @@ impl AboutDialog {
                     }
                 });
             });
+    }
+}
+
+/// The update line of the hero, under the build line, while the plugin
+/// list names a newer Rick (specs/about-dialog.md, *About page*): *Rick
+/// 0.7.0 is available* and, beside it, **Download** as a link that opens
+/// the release's page. A Rick a package manager installed reads *… Update
+/// it through your package manager.* and has no link, and neither has a
+/// release the list names no page for.
+fn update_line(ui: &mut egui::Ui, update: &RickUpdate, asked: &mut Asked) {
+    let scheme = theme::scheme(ui);
+    let version = update.version.clone();
+    let said = |text: String| {
+        egui::Label::new(
+            egui::RichText::new(text)
+                .size(theme::TEXT_BODY)
+                .color(scheme.text_primary),
+        )
+        .selectable(false)
+    };
+    if update.page.is_none() {
+        let text = if update.packaged {
+            t!("update-available-packaged", version = version)
+        } else {
+            t!("update-available", version = version)
+        };
+        ui.add(said(text).wrap());
+        return;
+    }
+    let text = t!("update-available", version = version);
+    let download = t!("update-download");
+    let font = FontId::proportional(theme::TEXT_BODY);
+    let width = |text: &str| {
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), font.clone(), scheme.text_primary)
+            .size()
+            .x
+    };
+    let gap = 8.0;
+    let total = width(&text) + gap + width(&download);
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
+    let mut line = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(Rect::from_min_size(
+                pos2(row.center().x - total / 2.0, row.top()),
+                vec2(total + 2.0, row.height()),
+            ))
+            .layout(egui::Layout::left_to_right(Align::Center)),
+    );
+    line.spacing_mut().item_spacing.x = gap;
+    line.add(said(text));
+    let download = egui::Link::new(egui::RichText::new(download).size(theme::TEXT_BODY));
+    if line.add(download).clicked() {
+        asked.update = true;
     }
 }
 

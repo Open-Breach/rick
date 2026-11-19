@@ -78,7 +78,13 @@ There is no menu bar; the burger menu at the left of the title row — the appli
 | Configuration | Settings | `SLIDERS` | Its shortcut |
 | | Keyboard shortcuts | `KEYBOARD` | Its shortcut |
 | | Extensions | `PUZZLE_PIECE` | Its shortcut |
-| About | About Rick (the About dialog, [`specs/about-dialog.md`](about-dialog.md)) | `INFO` | The version of the running build, `0.4.0` |
+| About | Update available, only while the plugin list names a newer Rick (*The update notice*, below) | `ARROW_CIRCLE_UP` | The version of that release, `0.7.0` |
+| | About Rick (the About dialog, [`specs/about-dialog.md`](about-dialog.md)) | `INFO` | The version of the running build, `0.4.0` |
 
 - Every entry has an icon. No label ends in "…": *Settings*, *Keyboard shortcuts* and *Extensions* are written as GNOME writes them. A shortcut hint comes from the keymap, never from a table of its own: the entry shows the chord bound to it — the first when it has several — and nothing when it is unbound. There is no theme switch in the menu: the scheme follows the system by default and is changed in Settings → Appearance.
 - The submenus are cards of the same form and keep their entries.
+- **The update notice.** While the plugin list names a release of Rick newer than the one that runs ([`specs/plugin-distribution.md`](plugin-distribution.md) §6), three things say so. None of them makes a request, and with *Look for plugins and updates online* off there is none of them.
+  - **The toast**, once for a release, at the top right like every notice: *Rick 0.7.0 is available*, with the button **Download**, which opens the release page in the system browser. It stays until it is dismissed or its button is pressed. On a Rick a package manager installed it reads *Rick 0.7.0 is available. Update it through your package manager.*, has no button, and leaves by itself as a notice without one does.
+  - **The dot on the menu button**: the attention dot of the Extensions dialogue, 8 px in `status/warning`, centred on the top right corner of the button's icon. It says *Update available* to the pointer that rests on it and to a screen reader.
+  - **The entry** *Update available*, the first of the About group, with the release's version where *About Rick* has its own. It does what the toast's button does. On a packaged Rick, where there is nothing to download, it says the toast's sentence again.
+  - The dot and the entry do not depend on the toast: they are there from the moment the list names the release until Rick is that release or a newer one, at every start, whether the toast was dismissed or not.

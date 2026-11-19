@@ -10,6 +10,7 @@ Design reference: Figma, section "About dialog". This text is binding where it a
 
 - Opened from the app menu, About Rick. A modal dialog in the settings window's chrome: `dialog/bg`, 14 px radius, close button top right; 520 pt wide, height from content.
 - Hero, centred: the app symbol (`assets/icons/svg/rick-symbol.svg`) at 96 pt; "Rick" 26 pt medium; tagline "a god-like file manager" 14 pt in `text/secondary`; the version in a pill on `bg/selected-soft`; one monospace build line, 12 pt in `text/secondary`: `<short commit> · <OS> <arch> · plugin ABI <n> · built <YYYY-MM-DD>`. Commit, target and date are build-time environment values from `crates/rick/build.rs`; the ABI number is `ext::API_VERSION`. Nothing is read from git at runtime.
+- Update line, under the build line and above the buttons, only while the plugin list names a release of Rick newer than the one that runs (`specs/plugin-distribution.md` §6; `specs/gui-title-row.md`, *Menu*): *Rick 0.7.0 is available* in 13 pt `text/primary`, centred, and beside it **Download** as a link, which opens the release page in the system browser. On a Rick a package manager installed the line reads *Rick 0.7.0 is available. Update it through your package manager.* and has no link. The line is read from the plugin list Rick holds; the dialog asks nobody for it.
 - Buttons under the hero: Copy details and What's new.
   - Copy details copies plain text: name and version; the build line; the toolchain (`RICK_TOOLCHAIN`); the OS and desktop (Linux: distribution and `XDG_CURRENT_DESKTOP`; macOS and Windows: the OS version); the loaded plugins, one `id version status` line each. `rick --version` prints the same text.
   - What's new shows the running version's section of `CHANGELOG.md` (embedded at build time) in a read-only text view inside the dialog; a `-dev` build shows the Unreleased section.
@@ -41,4 +42,4 @@ All visible text goes through `locales/en.ftl` and `locales/de.ftl`. Licence tex
 
 ## Out of scope
 
-Licence text translation, a donate link, update checks (Version 0.3), signing and notarisation.
+Licence text translation, a donate link, an in-app installer for updates, signing and notarisation.

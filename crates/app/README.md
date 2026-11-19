@@ -115,7 +115,10 @@ a day old, fetches it when it is that old, and `Opened` fetches when the
 `CheckNow` fetches whatever the switch says. Each is a job off the loop's
 thread through the `plugins-registry` crate, and `App::plugin_registry` is
 what came of it: whether a key is there at all, the last index that
-verified, when it was fetched, and why the last attempt gave none. A Rick
+verified, when it was fetched, and why the last attempt gave none.
+`App::rick_update` is the update notice for Rick itself: the release the
+list names as the newest, when it is newer than this Rick, said once for a
+release through `Event::RickUpdate` and remembered in the cache. A Rick
 without a key or with a pre-release version asks nothing. The key compiled
 into the build counts only once the binary has said so
 (`App::use_build_registry`): an application made anywhere else, as every

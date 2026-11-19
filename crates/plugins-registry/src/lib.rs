@@ -19,6 +19,9 @@
 //!   due.
 //! - [`Index::offer`] is the rule of what fits: a build is for one
 //!   platform and one release of Rick, compared as whole strings.
+//! - [`Index::newer_than`] is the update notice for Rick itself: the
+//!   index names the newest release, and no request of its own is made
+//!   for it.
 //! - [`download`] fetches a package to a file and holds it against the
 //!   size and the SHA-256 the index names; a package that is another one
 //!   is deleted.
@@ -70,8 +73,8 @@ pub use cache::{
 pub use download::{Downloaded, Expected, download, is_package_address, package_name};
 pub use fetch::{Fetched, fetch, user_agent};
 pub use index::{
-    Build, Connection, Index, Meta, Offer, Offered, Plugin, SCHEMA, Triggers, is_pre_release,
-    platform, platform_name,
+    Build, Connection, Index, Latest, Meta, Offer, Offered, Plugin, SCHEMA, Triggers,
+    is_pre_release, platform, platform_name,
 };
 pub use key::Key;
 pub use source::{INDEX_URL, Source};

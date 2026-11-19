@@ -17,6 +17,7 @@ use crate::icons;
 use crate::keys::{Intent, KeyMap};
 use crate::shell::{PaneCx, Request};
 use crate::theme::{self, ICON, Scheme, TEXT_BODY, TEXT_SECONDARY};
+use crate::widgets;
 
 /// The application menu's least width (SPEC.md *Menu*); the card grows
 /// when an entry needs more.
@@ -412,8 +413,11 @@ fn scrolling(ui: &mut egui::Ui, entries: impl FnOnce(&mut egui::Ui)) {
 /// groups: New window, the Layouts submenu and one submenu per extension
 /// that put actions in the application menu ([`Action::app_menu`]);
 /// Settings, Keyboard shortcuts and Extensions; About Rick with `version`
-/// at its right. Every entry has an icon, and its hint is the chord the
-/// keymap binds to it, nothing when it is unbound.
+/// at its right, and above it, while a newer Rick is available, Update
+/// available with that release's version. Every entry has an icon, and
+/// its hint is the chord the keymap binds to it, nothing when it is
+/// unbound. The button carries the attention dot while the update is
+/// there.
 pub fn burger(
     ui: &mut egui::Ui,
     requests: &mut Vec<Request>,
@@ -467,6 +471,16 @@ pub fn burger(
         egui::FontId::proportional(ICON),
         band.icon,
     );
+    // A newer Rick is available: the attention dot at the icon's top
+    // right corner, for as long as it is (SPEC.md *Menu*).
+    if app.rick_update().is_some() {
+        widgets::attention_dot(
+            ui,
+            rect.center() + egui::vec2(ICON / 2.0, -ICON / 2.0),
+            response.id.with("update"),
+            &t!("update-entry"),
+        );
+    }
     let response = if open {
         response
     } else {
@@ -499,7 +513,14 @@ fn app_menu(
     version: &str,
 ) {
     let extensions = app_menu_actions(app, pane);
-    fit_app_menu(ui, keys, version, extensions.as_ref());
+    let update = app.rick_update();
+    fit_app_menu(
+        ui,
+        keys,
+        version,
+        update.as_ref().map(|update| update.version.as_str()),
+        extensions.as_ref(),
+    );
 
     // Window and tools.
     intent_item(
@@ -532,8 +553,25 @@ fn app_menu(
         intent_item(ui, requests, pane, keys, Some(icon), &label, intent);
     }
 
-    // About, with the version where a shortcut would be.
+    // About: the newer release while there is one, and About Rick, each
+    // with its version where a shortcut would be.
     separator(ui);
+    if let Some(update) = update {
+        let label = t!("update-entry");
+        let entry = entry_button(
+            ui,
+            Some(icons::UPDATE),
+            &label,
+            Some(update.version),
+            Tone::Plain,
+            None,
+            APP,
+        );
+        if labelled(ui.add(entry), &label).clicked() {
+            requests.push(Request::RickUpdate);
+            ui.close();
+        }
+    }
     let label = t!("about-rick");
     let about = entry_button(
         ui,
@@ -551,11 +589,14 @@ fn app_menu(
 }
 
 /// Sets the application menu's width from what it will list: its own six
-/// entries with their hints, the version, and the extensions' entries.
+/// entries with their hints, the version, the entry of a newer release
+/// with its version (`update`) when there is one, and the extensions'
+/// entries.
 fn fit_app_menu(
     ui: &mut egui::Ui,
     keys: &KeyMap,
     version: &str,
+    update: Option<&str>,
     extensions: Option<&AppMenuActions>,
 ) {
     let own = [
@@ -566,6 +607,7 @@ fn fit_app_menu(
     ];
     let layouts = t!("menu-layouts");
     let about = t!("about-rick");
+    let newer = t!("update-entry");
     let groups = extensions.map(|(_, groups)| groups.as_slice());
     let actions: Vec<String> = groups
         .into_iter()
@@ -580,6 +622,7 @@ fn fit_app_menu(
             (layouts.as_str(), Trailing::Caret),
             (about.as_str(), Trailing::Hint(version)),
         ])
+        .chain(update.map(|update| (newer.as_str(), Trailing::Hint(update))))
         .chain(actions.iter().map(|l| (l.as_str(), Trailing::None)))
         .chain(
             groups

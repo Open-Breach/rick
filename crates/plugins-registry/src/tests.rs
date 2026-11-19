@@ -541,6 +541,113 @@ fn an_index_is_read_leniently_and_only_as_far_as_rick_s_entry() {
     }
 }
 
+/// An index whose entry for Rick names `latest` and no plugin.
+fn with_latest(latest: &serde_json::Value) -> Index {
+    parsed(&json!({ "schema": 1, "apps": { "rick": { "latest": latest } } }))
+}
+
+#[test]
+fn the_index_names_the_newest_release_of_rick() {
+    // `good` names 0.6.0, as the publisher writes it on every release.
+    let index = parsed(&good());
+    let latest = index.latest().unwrap_or_else(|| panic!("latest"));
+    assert_eq!(latest.version, "0.6.0");
+    assert_eq!(latest.url, "https://example.invalid/v0.6.0");
+
+    // Newer than the Rick that asks, and only then.
+    for (rick, newer) in [
+        ("0.5.0", true),
+        ("0.5.9", true),
+        ("0.6.0", false),
+        ("0.6.1", false),
+        ("0.10.0", false),
+        ("1.0.0", false),
+        // A pre-release Rick is told of nothing, not even of its own
+        // release; what is no version is not compared.
+        ("0.6.0-rc1", false),
+        ("0.5.0-dev", false),
+        ("six", false),
+        ("", false),
+    ] {
+        assert_eq!(index.newer_than(rick).is_some(), newer, "{rick}");
+    }
+    assert_eq!(
+        index
+            .newer_than("0.5.0")
+            .map(|latest| latest.version.as_str()),
+        Some("0.6.0")
+    );
+    // Versions are compared as versions, not as text.
+    let ten = with_latest(&json!({ "version": "0.10.0", "url": "https://example.org/r" }));
+    assert!(ten.newer_than("0.9.0").is_some());
+    assert!(ten.newer_than("0.10.0").is_none());
+
+    // A pre-release is never announced as the newest, and what is no
+    // version announces nothing.
+    for version in ["0.7.0-rc1", "0.7.0-beta.2", "newest", "7"] {
+        let index = with_latest(&json!({ "version": version, "url": "https://example.org/r" }));
+        assert_eq!(index.newer_than("0.6.0"), None, "{version}");
+    }
+}
+
+#[test]
+fn an_entry_for_the_newest_release_that_is_none_costs_the_plugin_list_nothing() {
+    for entry in [
+        json!(null),
+        json!("0.7.0"),
+        json!(7),
+        json!([]),
+        json!({}),
+        json!({ "url": "https://example.org/r" }),
+        json!({ "version": 7 }),
+        json!({ "version": "" }),
+    ] {
+        let index = parsed(&json!({
+            "schema": 1,
+            "apps": { "rick": { "latest": entry, "plugins": [{ "id": "git" }] } },
+        }));
+        assert_eq!(index.latest(), None, "{entry}");
+        assert_eq!(index.newer_than("0.1.0"), None, "{entry}");
+        assert!(index.plugin("git").is_some(), "{entry}");
+    }
+    // No entry at all, and no Rick at all.
+    assert_eq!(parsed(&json!({ "schema": 1 })).latest(), None);
+    // A version without an address is a release all the same.
+    let bare = with_latest(&json!({ "version": "0.7.0" }));
+    assert!(bare.newer_than("0.6.0").is_some());
+    assert_eq!(bare.latest().and_then(Latest::page), None);
+}
+
+#[test]
+fn only_an_https_address_is_a_release_page_to_open() {
+    let page = |url: &str| {
+        let latest = Latest {
+            version: "0.7.0".to_owned(),
+            url: url.to_owned(),
+        };
+        latest.page().map(str::to_owned)
+    };
+    for good in [
+        "https://github.com/Open-Breach/rick/releases/tag/v0.7.0",
+        "https://get.openbreach.dev/rick/0.7.0/",
+    ] {
+        assert_eq!(page(good).as_deref(), Some(good));
+    }
+    for bad in [
+        "",
+        "…",
+        "http://github.com/Open-Breach/rick/releases/tag/v0.7.0",
+        "http://127.0.0.1:8123/release",
+        "file:///etc/passwd",
+        "rick://open?path=/tmp",
+        "javascript:alert(1)",
+        "github.com/Open-Breach/rick",
+        "https://",
+    ] {
+        assert_eq!(page(bad), None, "{bad}");
+    }
+}
+
 #[test]
 fn the_platforms_are_named_as_the_release_archives_are() {
     assert_eq!(platform_name("linux", "x86_64"), "linux-x64");

@@ -20,7 +20,9 @@ cache, and `due` says whether the daily check is due (`due_after`
 for a check at another interval). `Index::offer` is
 the rule of what fits: a build is for one platform and one release of
 Rick, compared as whole strings, a pre-release Rick fits nothing, and
-neither does one older than the registry's oldest release. `download`
+neither does one older than the registry's oldest release.
+`Index::newer_than` is the update notice for Rick itself: the index names
+the newest release, and no request of its own is made for it. `download`
 fetches a package to a file, hashing it as it is written, and holds it
 against the size and the SHA-256 the index names: it stops as soon as more
 bytes arrive than were named, and a package that is another one is

@@ -4898,15 +4898,27 @@ mod registry {
         }
     }
 
-    /// Runs the loop for `long`, in which `server` is asked nothing new.
-    fn left_alone(h: &mut Harness, server: &Server, long: Duration) {
+    /// Runs the loop until `until`, in which `server` is asked nothing
+    /// new. What is seen after `until` proves nothing and is not held
+    /// against the application: a machine that is slow enough to be past
+    /// it already checks nothing here.
+    fn left_alone(h: &mut Harness, server: &Server, until: Instant) {
         let asked = server.requests().len();
-        let until = Instant::now() + long;
-        while Instant::now() < until {
+        loop {
             h.settle();
-            assert_eq!(server.requests().len(), asked, "asked in the meantime");
+            // The count first: what it holds happened before the clock
+            // is read.
+            let seen = server.requests().len();
+            if Instant::now() >= until {
+                break;
+            }
+            assert_eq!(seen, asked, "asked in the meantime");
         }
     }
+
+    /// What the clock of a file and the clock of a test may differ by:
+    /// a file's time is the system's coarse one, a tick or so behind.
+    const SLACK: Duration = Duration::from_millis(100);
 
     #[test]
     fn the_start_asks_nobody_and_the_background_check_comes_a_while_after_it() {
@@ -4925,8 +4937,9 @@ mod registry {
         let started = Instant::now();
         h.registry(RegistryCommand::Start);
         assert_eq!(h.git(), None);
+        let asked = server.requests();
         if started.elapsed() < after_start {
-            assert_eq!(server.requests(), [], "the start asks nobody");
+            assert_eq!(asked, [], "the start asks nobody");
         }
 
         // The check comes by itself, and not before its time.
@@ -4940,7 +4953,7 @@ mod registry {
         assert_eq!(h.git().as_deref(), Some("0.6.0"));
         assert_eq!(h.app.plugin_registry().problem, None);
         // And then the list is good for a day.
-        left_alone(&mut h, &server, 3 * after_start);
+        left_alone(&mut h, &server, Instant::now() + 3 * after_start);
     }
 
     #[test]
@@ -4961,11 +4974,9 @@ mod registry {
         server.publish(&signer, &index(1, "0.6.1"));
         let second = until_asked(&mut h, &server, 4);
         // The list arrived after the start, so a day after the start is
-        // the earliest; the clocks of the file and of the test may differ
-        // by a moment.
-        let slack = Duration::from_millis(50);
+        // the earliest.
         assert!(
-            second.duration_since(started) + slack >= day,
+            second.duration_since(started) + SLACK >= day,
             "fetched again after {:?}",
             second.duration_since(started)
         );
@@ -4977,7 +4988,7 @@ mod registry {
         server.publish(&signer, &index(1, "0.6.2"));
         let third = until_asked(&mut h, &server, 6);
         assert!(
-            third.duration_since(started) + slack >= 2 * day,
+            third.duration_since(started) + 2 * SLACK >= 2 * day,
             "fetched a third time after {:?}",
             third.duration_since(started)
         );
@@ -4990,7 +5001,7 @@ mod registry {
         let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
         server.publish(&signer, &index(1, "0.6.0"));
         let settings = table(&server, &signer, true);
-        let (after_start, day) = (Duration::from_millis(100), Duration::from_millis(2000));
+        let (after_start, day) = (Duration::from_millis(100), Duration::from_millis(3000));
 
         // A Rick that fetched the list, and was closed.
         let fetched = Instant::now();
@@ -5006,11 +5017,11 @@ mod registry {
         h.app.set_registry_schedule(after_start, day);
         h.registry(RegistryCommand::Start);
         assert_eq!(h.git().as_deref(), Some("0.6.0"));
-        left_alone(&mut h, &server, 4 * after_start);
+        // Well past its own first look, and well before the list's day.
+        left_alone(&mut h, &server, fetched + day / 2);
         let again = until_asked(&mut h, &server, 4);
-        let slack = Duration::from_millis(50);
         assert!(
-            again.duration_since(fetched) + slack >= day,
+            again.duration_since(fetched) + SLACK >= day,
             "fetched again after {:?}",
             again.duration_since(fetched)
         );
@@ -5021,7 +5032,7 @@ mod registry {
         assert_eq!(server.requests().len(), 6);
         let later = until_asked(&mut h, &server, 8);
         assert!(
-            later.duration_since(asked) + slack >= day,
+            later.duration_since(asked) + SLACK >= day,
             "fetched again after {:?}",
             later.duration_since(asked)
         );
@@ -5034,8 +5045,9 @@ mod registry {
         let mut h = start(&fake, &table(&server, &signer, true));
         let (after_start, day) = (Duration::from_millis(100), Duration::from_millis(1500));
         h.app.set_registry_schedule(after_start, day);
+        let started = Instant::now();
         h.registry(RegistryCommand::Start);
-        let first = until_asked(&mut h, &server, 1);
+        until_asked(&mut h, &server, 1);
         h.settle();
         assert_eq!(
             h.app.plugin_registry().problem,
@@ -5043,14 +5055,15 @@ mod registry {
         );
 
         // No second try for a day, however soon the list would be there.
+        // The first try was not before its time, so a day after that is
+        // the earliest for the second.
         server.publish(&signer, &index(1, "0.6.0"));
-        left_alone(&mut h, &server, day / 2);
+        left_alone(&mut h, &server, started + day);
         let second = until_asked(&mut h, &server, 3);
-        let slack = Duration::from_millis(50);
         assert!(
-            second.duration_since(first) + slack >= day,
+            second.duration_since(started) >= after_start + day,
             "tried again after {:?}",
-            second.duration_since(first)
+            second.duration_since(started)
         );
         h.settle();
         assert_eq!(h.git().as_deref(), Some("0.6.0"));
@@ -5066,11 +5079,204 @@ mod registry {
         h.app.set_registry_schedule(after_start, day);
         h.registry(RegistryCommand::Start);
         // A day and more: not at its start, and not when it comes round.
-        left_alone(&mut h, &server, 3 * day);
+        left_alone(&mut h, &server, Instant::now() + 3 * day);
         assert_eq!(server.requests(), []);
         // Check now still asks, whatever the switch says.
         h.registry(RegistryCommand::CheckNow);
         assert_eq!(server.requests().len(), 2);
+    }
+
+    /// [`index`] with `latest` as the newest release of Rick.
+    fn released(latest: &serde_json::Value) -> serde_json::Value {
+        let mut index = index(1, "0.6.0");
+        index["apps"]["rick"]["latest"] = latest.clone();
+        index
+    }
+
+    /// The releases of Rick `events` say are available, in their order.
+    fn told(events: &[Event]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::RickUpdate { version } => Some(version.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    const PAGE: &str = "https://github.com/Open-Breach/rick/releases/tag/v0.7.0";
+
+    #[test]
+    fn a_newer_rick_in_the_list_is_said_once_for_a_release_and_remembered() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(
+            &signer,
+            &released(&json!({ "version": "0.7.0", "url": PAGE })),
+        );
+        let settings = table(&server, &signer, true);
+        let mut h = start(&fake, &settings);
+        assert_eq!(h.app.rick_update(), None, "nothing is known before a list");
+
+        // The list arrives with the background check: it names a newer
+        // Rick, and that is said. No request was made for it.
+        h.begin();
+        assert_eq!(told(&h.take_events()), ["0.7.0"]);
+        assert_eq!(server.requests().len(), 2, "the two files of the list");
+        let update = crate::RickUpdate {
+            version: "0.7.0".to_owned(),
+            page: Some(PAGE.to_owned()),
+            packaged: false,
+        };
+        assert_eq!(h.app.rick_update(), Some(update.clone()));
+
+        // Once: the list fetched again says nothing new.
+        h.registry(RegistryCommand::CheckNow);
+        h.registry(RegistryCommand::Opened);
+        assert_eq!(told(&h.take_events()), [] as [&str; 0]);
+        assert_eq!(h.app.rick_update(), Some(update.clone()));
+        drop(h);
+
+        // And remembered: the next start reads the same list from the
+        // cache and knows of the release, without a word.
+        let mut again = start(&fake, &settings);
+        again.begin();
+        assert_eq!(told(&again.take_events()), [] as [&str; 0]);
+        assert_eq!(again.app.rick_update(), Some(update));
+        let remembered = fake
+            .config_dir()
+            .join(CACHE_DIR)
+            .join(plugins_registry::CACHE_DIR)
+            .join("release-announced");
+        assert_eq!(
+            fs::read_to_string(&remembered).ok().as_deref(),
+            Some("0.7.0")
+        );
+
+        // A release after that one is new again.
+        let next = "https://github.com/Open-Breach/rick/releases/tag/v0.7.1";
+        server.publish(
+            &signer,
+            &released(&json!({ "version": "0.7.1", "url": next })),
+        );
+        again.registry(RegistryCommand::CheckNow);
+        assert_eq!(told(&again.take_events()), ["0.7.1"]);
+        again.registry(RegistryCommand::CheckNow);
+        assert_eq!(told(&again.take_events()), [] as [&str; 0]);
+        again.settle();
+        assert_eq!(
+            fs::read_to_string(&remembered).ok().as_deref(),
+            Some("0.7.1")
+        );
+        drop(again);
+
+        // Until Rick is that release or a newer one: then there is no
+        // update, and nothing to say.
+        for rick in ["0.7.1", "0.8.0"] {
+            let mut updated = start(&fake, &settings);
+            updated.app.set_rick_version(rick);
+            updated.begin();
+            assert_eq!(updated.app.rick_update(), None, "{rick}");
+            assert_eq!(told(&updated.take_events()), [] as [&str; 0], "{rick}");
+        }
+    }
+
+    #[test]
+    fn the_update_is_said_whenever_the_list_first_names_it() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(
+            &signer,
+            &released(&json!({ "version": "0.7.0", "url": PAGE })),
+        );
+        let mut h = start(&fake, &table(&server, &signer, true));
+        // The first frame: nothing is cached, and nobody is asked.
+        h.registry(RegistryCommand::Start);
+        assert_eq!(told(&h.take_events()), [] as [&str; 0]);
+        // The Available list is opened before the background check came.
+        h.registry(RegistryCommand::Opened);
+        assert_eq!(told(&h.take_events()), ["0.7.0"]);
+        h.registry(RegistryCommand::Daily);
+        assert_eq!(told(&h.take_events()), [] as [&str; 0]);
+    }
+
+    #[test]
+    fn no_update_is_said_with_the_switch_off_for_a_pre_release_or_without_a_newer_one() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        let newer = json!({ "version": "0.7.0", "url": PAGE });
+        server.publish(&signer, &released(&newer));
+
+        // The switch off: the list Check now fetched names the release,
+        // and Rick does not look at that.
+        let mut off = start(&fake(), &table(&server, &signer, false));
+        off.begin();
+        off.registry(RegistryCommand::CheckNow);
+        assert_eq!(off.git().as_deref(), Some("0.6.0"), "the list is there");
+        assert_eq!(off.app.rick_update(), None);
+        assert_eq!(told(&off.take_events()), [] as [&str; 0]);
+
+        // A pre-release Rick asks for nothing and is told of nothing.
+        let mut dev = start(&fake(), &table(&server, &signer, true));
+        dev.app.set_rick_version("0.7.0-dev");
+        dev.begin();
+        dev.registry(RegistryCommand::CheckNow);
+        assert_eq!(dev.app.rick_update(), None);
+        assert_eq!(told(&dev.take_events()), [] as [&str; 0]);
+
+        // The same release, an older one, a pre-release, no entry and an
+        // entry that is none: nothing is newer.
+        for latest in [
+            json!({ "version": "0.6.0", "url": PAGE }),
+            json!({ "version": "0.5.0", "url": PAGE }),
+            json!({ "version": "0.7.0-rc1", "url": PAGE }),
+            json!(null),
+            json!("0.7.0"),
+        ] {
+            server.publish(&signer, &released(&latest));
+            let mut h = start(&fake(), &table(&server, &signer, true));
+            h.begin();
+            assert_eq!(h.git().as_deref(), Some("0.6.0"), "{latest}: the list");
+            assert_eq!(h.app.rick_update(), None, "{latest}");
+            assert_eq!(told(&h.take_events()), [] as [&str; 0], "{latest}");
+        }
+
+        // A release whose address is not one to open is a release all the
+        // same, without a page.
+        for url in ["http://example.org/v0.7.0", "file:///tmp/v0.7.0", ""] {
+            server.publish(
+                &signer,
+                &released(&json!({ "version": "0.7.0", "url": url })),
+            );
+            let mut h = start(&fake(), &table(&server, &signer, true));
+            h.begin();
+            let update = h.app.rick_update();
+            assert_eq!(update.as_ref().map(|u| u.version.as_str()), Some("0.7.0"));
+            assert_eq!(update.and_then(|u| u.page), None, "{url}");
+            assert_eq!(told(&h.take_events()), ["0.7.0"], "{url}");
+        }
+    }
+
+    #[test]
+    fn a_packaged_rick_is_updated_by_its_package_manager_and_has_no_page() {
+        use crate::plugins::Packaging;
+        let (server, signer) = (Server::start(), Signer::new(1));
+        server.publish(
+            &signer,
+            &released(&json!({ "version": "0.7.0", "url": PAGE })),
+        );
+        for packaging in [Packaging::Deb, Packaging::Rpm] {
+            let mut h = start(&fake(), &table(&server, &signer, true));
+            h.app.set_packaging(Some(packaging));
+            h.begin();
+            assert_eq!(told(&h.take_events()), ["0.7.0"], "{packaging:?}");
+            assert_eq!(
+                h.app.rick_update(),
+                Some(crate::RickUpdate {
+                    version: "0.7.0".to_owned(),
+                    page: None,
+                    packaged: true,
+                }),
+                "{packaging:?}"
+            );
+        }
     }
 
     #[test]

@@ -100,7 +100,7 @@ pub use ops::{PermissionRequest, Recursion};
 pub use places::{PLACES_FILE, defaults as default_places, virtual_icon};
 pub use registry::{
     Available, CACHE_DIR, Offering, PluginRegistry, REGISTRY_AFTER_START, RegistryCommand,
-    RegistryProblem, Update,
+    RegistryProblem, RickUpdate, Update,
 };
 pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
 pub use settings::SETTINGS_FILE;
@@ -367,7 +367,7 @@ enum Msg {
     RegistryDone {
         fetched: Option<Result<plugins_registry::Cached, plugins_registry::Error>>,
         command: RegistryCommand,
-        announced: Option<String>,
+        announced: registry::Announced,
     },
     /// The timer of the plugin list's background check has run out.
     RegistryDue,
@@ -4795,7 +4795,7 @@ impl App {
                 fetched,
                 command,
                 announced,
-            } => self.registry_done(fetched, command, announced.as_deref(), events),
+            } => self.registry_done(fetched, command, announced, events),
             Msg::RegistryDue => self.registry_command(RegistryCommand::Daily),
             Msg::PluginInstalled(Err(text))
             | Msg::PluginRemoved {

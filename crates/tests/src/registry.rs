@@ -83,6 +83,15 @@ pub fn index(plugins: &[Value]) -> Value {
     })
 }
 
+/// [`index`] that names `version` as the newest release of Rick, with
+/// `url` as its release page (`apps.rick.latest`).
+#[must_use]
+pub fn index_with_latest(plugins: &[Value], version: &str, url: &str) -> Value {
+    let mut index = index(plugins);
+    index["apps"]["rick"]["latest"] = json!({ "version": version, "url": url });
+    index
+}
+
 /// The background check of the plugin list, as the application's timer
 /// brings it a minute after the start and whenever the list is a day old
 /// (specs/plugin-distribution.md §6): a test does not wait the minute.
