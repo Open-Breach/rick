@@ -31,6 +31,21 @@ Release archives are built for Linux (x64 and arm64), macOS (Apple silicon) and 
 
 The archives are not signed or notarised yet: macOS may refuse an app downloaded through a browser until you allow it under System Settings → Privacy & Security, or clear the quarantine flag with `xattr -dr com.apple.quarantine <folder>/Rick.app`; Windows SmartScreen may warn the first time.
 
+## Linux packages
+
+A release also makes a deb for each supported Debian and Ubuntu release and an rpm for each supported Fedora release, for x64 and arm64. They are built by Trebuchet's reusable workflow `linux-packages.yml` ([Open-Breach/trebuchet](https://github.com/Open-Breach/trebuchet), `docs/linux-packages.md`), which the release workflow calls. That workflow owns the list of releases; for each one it runs `.github/scripts/linux-package.sh` inside that release's container, packages the result with the metadata in `crates/rick/Cargo.toml`, installs the package in a fresh container and runs `rick --version` there. One build per architecture is also the Linux archive, with the plugin packages that fit it.
+
+What a package installs:
+
+- `/usr/lib/rick/`: the binary with everything beside it, as in an archive: the shared libraries, `plugins/` with the default set, `third-party.json`, and `package`, a file holding `deb` or `rpm`, which tells Rick that its separate plugins come from the package manager;
+- `/usr/bin/rick`: a script that starts the binary there;
+- `/usr/share/applications/rick.desktop` and the icons under `/usr/share/icons/hicolor/`;
+- the licence: `/usr/share/doc/rick/copyright` and `THIRD-PARTY-LICENSES.md` beside it in a deb, both under `/usr/share/licenses/rick/` in an rpm.
+
+A package names every package it depends on, per distribution, in the workflow's call. The packaging tools' own search for the libraries a binary links is off: Rick's binaries link the kernel libraries and the standard library that sit beside them, and that search does not get past them.
+
+The separate plugins are not packaged yet; `rick-plugin-<id>` packages are Trebuchet's next step. After a published release the workflow tells Trebuchet's publisher, which puts the packages into the apt and dnf repositories on `get.openbreach.dev`.
+
 ## The separate plugins and their packages
 
 Ten plugins are not in the archives: Git, SVN, ZFS (Linux), SSH, S3, Azure Blob, Google Cloud Storage, the Office and 3D previewers and, on macOS and Windows, the media previewer with its GStreamer runtime. That is nine on each platform. A release publishes each as a package of its own, `<id>-<version>-<platform>.rkp` (`git-0.6.0-linux-x64.rkp`), and one `plugins-<platform>.json` per platform that lists them for the plugin registry (specs/plugin-distribution.md §4). A package is a zip archive of the plugin's folder; *Install from file…* in the Extensions dialogue unpacks it into the per-user plugins folder, and the plugin loads at the next start. A package fits the Rick release it was built with and no other.
