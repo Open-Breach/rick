@@ -3,8 +3,9 @@
 //! Fixture plugins with a wrong API version, a wrong toolchain, another
 //! platform and a panicking entry point are refused or caught, listed with
 //! their reason, and the host keeps running; a plugin built for another
-//! Rick is refused for that before its library is opened (issue 250); a
-//! per-user plugin wins over
+//! Rick is refused for that before its library is opened, and the manifest
+//! file says what each plugin is for (issue 250); a per-user plugin wins
+//! over
 //! the one beside the binary; disabling a plugin writes `rick.toml` and the
 //! next start lists it disabled; a job spawned inside a plugin shows in the
 //! job table and cancels from it; the Git plugin decorates a work tree and
@@ -99,11 +100,11 @@ fn fixture_plugins_are_refused_or_caught_and_the_host_keeps_running() {
         t.id = "probe-api".into();
         t.api_version = API_VERSION + 1;
     });
-    // Built against the contract before a form field could take its value
-    // from the clipboard (issue 221): API 21.
+    // Built against the contract before a manifest said what the plugin
+    // is for (issue 250): API 22.
     install(&plugins, "plugin_probe", |t| {
-        t.id = "probe-api-21".into();
-        t.api_version = 21;
+        t.id = "probe-api-22".into();
+        t.api_version = 22;
     });
     install(&plugins, "plugin_probe", |t| {
         t.id = "probe-toolchain".into();
@@ -127,8 +128,8 @@ fn fixture_plugins_are_refused_or_caught_and_the_host_keeps_running() {
 
     let host = Host::load(&options(vec![(Source::BesideBinary, plugins)]));
     refused_with(&host, "probe-api", "API version");
-    assert_eq!(API_VERSION, 22, "the contract of the clipboard rule");
-    refused_with(&host, "probe-api-21", "API version");
+    assert_eq!(API_VERSION, 23, "the contract of the triggers");
+    refused_with(&host, "probe-api-22", "API version");
     refused_with(&host, "probe-toolchain", "built with");
     refused_with(&host, "probe-platform", "built for");
     refused_with(&host, "panic", "panicked during registration");
@@ -243,6 +244,92 @@ fn a_plugin_built_for_another_rick_is_refused_and_its_library_never_opened() {
         }
     }
     drop(host);
+}
+
+/// Issue 250, item 3: a manifest says what the plugin is for, and
+/// `plugin.toml` carries it (specs/plugin-distribution.md §5). Git and
+/// Subversion name the entry that marks their folders, SSH and the three
+/// object stores the kind of connection they add, titled as its entry of
+/// *Add…* is; a plugin with neither has two empty lists.
+#[test]
+fn plugin_toml_carries_what_each_plugin_is_for() {
+    let triggers = |stem: &str| {
+        let toml = plugins_native::describe(&library_of(stem)).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(toml.api_version, API_VERSION, "{stem}");
+        let connections: Vec<(String, String)> = toml
+            .connections
+            .into_iter()
+            .map(|c| (c.section, c.title))
+            .collect();
+        (toml.markers, connections)
+    };
+    let marker = |name: &str| (vec![name.to_owned()], Vec::new());
+    let connection = |section: &str, title: &str| {
+        (
+            Vec::<String>::new(),
+            vec![(section.to_owned(), title.to_owned())],
+        )
+    };
+    assert_eq!(triggers("ext_git"), marker(".git"));
+    assert_eq!(triggers("ext_svn"), marker(".svn"));
+    assert_eq!(triggers("ext_ssh"), connection("network", "SSH"));
+    assert_eq!(triggers("ext_vfs_s3"), connection("cloud", "S3"));
+    assert_eq!(triggers("ext_vfs_azure"), connection("cloud", "Azure Blob"));
+    assert_eq!(
+        triggers("ext_vfs_gcs"),
+        connection("cloud", "Google Cloud Storage")
+    );
+    for stem in ["ext_vfs_trash", "ext_preview_hex", "plugin_probe"] {
+        assert_eq!(triggers(stem), (Vec::new(), Vec::new()), "{stem}");
+    }
+
+    // The titles are those of the entries of *Add…*: the English of each
+    // dialogue's title.
+    for (english, key, title) in [
+        (
+            include_str!("../../ext-ssh/locales/en.ftl"),
+            "ssh-ssh",
+            "SSH",
+        ),
+        (
+            include_str!("../../ext-vfs-s3/locales/en.ftl"),
+            ext_vfs_s3::schema().title.0,
+            "S3",
+        ),
+        (
+            include_str!("../../ext-vfs-azure/locales/en.ftl"),
+            ext_vfs_azure::schema().title.0,
+            "Azure Blob",
+        ),
+        (
+            include_str!("../../ext-vfs-gcs/locales/en.ftl"),
+            ext_vfs_gcs::schema().title.0,
+            "Google Cloud Storage",
+        ),
+    ] {
+        assert!(
+            english
+                .lines()
+                .any(|line| line == format!("{key} = {title}")),
+            "{key} is not titled {title}"
+        );
+    }
+
+    // The file as the bundler writes it, for Git and for S3.
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let written = |stem: &str| {
+        let folder = install(dir.path(), stem, |_| {});
+        fs::read_to_string(folder.join(MANIFEST_FILE)).unwrap_or_else(|e| panic!("{e}"))
+    };
+    let git = written("ext_git");
+    assert!(git.contains("\nmarkers = [\".git\"]\n"), "{git}");
+    assert!(!git.contains("[[connections]]"), "{git}");
+    let s3 = written("ext_vfs_s3");
+    assert!(s3.contains("\nmarkers = []\n"), "{s3}");
+    assert!(
+        s3.contains("\n[[connections]]\nsection = \"cloud\"\ntitle = \"S3\"\n"),
+        "{s3}"
+    );
 }
 
 #[test]
