@@ -50,10 +50,28 @@ fn present() -> (Arc<Fake>, BalooIndex) {
     (fake, index)
 }
 
+/// Waits for the answer of the loop's first probe, which starts with the
+/// index. Until it is in, a probe the test asks for runs beside it, and
+/// the two record their answers as they come back: one from before the
+/// test changed the service can then land after the test's own. Rick has
+/// the loop alone and no second prober. Once the first answer is in, the
+/// loop asks again [`PROBE_EVERY`] later, long after the test.
+fn after_the_first_probe(index: &BalooIndex) {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !index.state().probed() {
+        assert!(
+            std::time::Instant::now() < until,
+            "the loop's first probe did not answer"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 #[test]
 fn the_probe_decides_availability_and_follows_the_service() {
     let fake = Fake::new();
     let index = BalooIndex::new(Arc::clone(&fake) as Arc<dyn Service>);
+    after_the_first_probe(&index);
     // Nothing answers: not available, and said so once the probe ran.
     assert!(!ext::runtime::block_on(index.probe()));
     assert!(matches!(index.availability(), Availability::Disabled(_)));
