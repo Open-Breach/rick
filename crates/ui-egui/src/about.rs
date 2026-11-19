@@ -1547,6 +1547,7 @@ mod tests {
                 "pdfium",
                 "GStreamer",
                 "7-Zip",
+                "Rust standard library",
                 "Ubuntu Light",
                 "Hack",
                 "Noto Emoji",
@@ -1565,6 +1566,21 @@ mod tests {
             assert!(component.text.len() > 500, "{}", component.name);
         }
 
+        // The standard library is the toolchain's: its entry names the
+        // version rust-toolchain.toml pins, and changes with it.
+        let pin: toml::Value = toml::from_str(include_str!("../../../rust-toolchain.toml"))
+            .unwrap_or_else(|e| panic!("rust-toolchain.toml: {e}"));
+        let channel = pin
+            .get("toolchain")
+            .and_then(|toolchain| toolchain.get("channel"))
+            .and_then(toml::Value::as_str)
+            .unwrap_or_else(|| panic!("rust-toolchain.toml names no channel"));
+        let std = bundled
+            .iter()
+            .find(|c| c.name == "Rust standard library")
+            .unwrap_or_else(|| panic!("no entry for the standard library"));
+        assert_eq!(std.version, channel);
+
         let mut dialog = AboutDialog::default();
         assert_eq!(dialog.component_count(), None);
         dialog.set_build(Build {
@@ -1582,7 +1598,7 @@ mod tests {
             }],
             ..build()
         });
-        assert_eq!(dialog.component_count(), Some(2 + 8 + 1));
+        assert_eq!(dialog.component_count(), Some(2 + 9 + 1));
     }
 
     /// A plugin from outside the release's folder contributes the entries

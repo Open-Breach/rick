@@ -5,7 +5,11 @@
 //! lays out `target/<profile>/bundle/` (QUESTIONS.md 84): the `rick`
 //! binary, the kernel dylibs and the `libstd` they need beside it, pdfium
 //! when the PDF previewer's `library` setting (`preview-pdf.toml` in the
-//! config directory) names it, the Visual
+//! config directory) names it, `licenses/` with the licence texts of the
+//! two that come with them (`licenses/pdfium/`, the texts a pdfium build
+//! carries beside its library, and `licenses/rust/`, the standard
+//! library's notices from the toolchain; see [`pdfium_licenses`] and
+//! [`std_notices`]), the Visual
 //! C++ runtime's libraries beside the binary when `RICK_VCRUNTIME_DIR`
 //! names the toolset's redistributable folder (Windows: every module of
 //! the bundle imports them, and a machine without the Visual C++
@@ -69,6 +73,13 @@ const GSTREAMER_PLUGIN: &str = "preview-media";
 /// The licence file beside the library in `RICK_SEVENZIP_DIR`, and its
 /// name in the bundle.
 const SEVENZIP_LICENSE: (&str, &str) = ("License.txt", "7-Zip-License.txt");
+/// The bundle's folder for the licence texts of what it ships that Cargo
+/// does not know and that brings its own: `licenses/pdfium/` and
+/// `licenses/rust/`.
+const LICENSES_DIR: &str = "licenses";
+/// The standard library's notices in a toolchain, below its sysroot: the
+/// library's own licence and those of the crates it is built from.
+const STD_NOTICES: &str = "share/doc/rust/COPYRIGHT-library.html";
 /// How the names of the Visual C++ runtime's libraries start: the C and
 /// C++ runtimes (`vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll`),
 /// the concurrency runtime, OpenMP and C++/CX.
@@ -164,6 +175,7 @@ fn bundle(args: &[String]) -> Result<()> {
     for lib in &std_libs {
         copy(lib, &out)?;
     }
+    std_notices(&rustc_print(&cargo, "sysroot")?, &out)?;
     pdfium(&out)?;
     if let Some(dir) = std::env::var_os("RICK_VCRUNTIME_DIR") {
         vcruntime(Path::new(&dir), &out)?;
@@ -357,7 +369,13 @@ fn sevenzip(dir: &Path, plugins_dir: &Path) -> Result<()> {
 /// nothing that is there.
 fn pdfium(out: &Path) -> Result<()> {
     match pdfium_setting() {
-        Some(path) if path.is_file() => copy(&path, out),
+        Some(path) if path.is_file() => {
+            copy(&path, out)?;
+            match path.parent() {
+                Some(dir) => pdfium_licenses(dir, out),
+                None => Ok(()),
+            }
+        }
         Some(path) if path.is_dir() => {
             for file in PDFIUM_FILES {
                 let candidate = path.join(file);
@@ -365,7 +383,7 @@ fn pdfium(out: &Path) -> Result<()> {
                     copy(&candidate, out)?;
                 }
             }
-            Ok(())
+            pdfium_licenses(&path, out)
         }
         Some(path) => {
             println!(
@@ -383,6 +401,61 @@ fn pdfium(out: &Path) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Copies the licence texts a pdfium build carries into the bundle's
+/// `licenses/pdfium/`. A build of `bblanchon/pdfium-binaries`, the one the
+/// release downloads, has them beside the folder that holds the library
+/// (`lib/`, on Windows `bin/`): `LICENSE`, pdfium's own, and `licenses/`
+/// with one text for each library built into it: the font, image and
+/// Unicode libraries among them. They are copied from the build the
+/// library came from, so the texts are those of the binary that ships. A
+/// library with no `LICENSE` there, the system's or one built by hand, is
+/// bundled without them, and the task says so.
+fn pdfium_licenses(library_dir: &Path, out: &Path) -> Result<()> {
+    let root = library_dir.parent().unwrap_or(library_dir);
+    let license = root.join("LICENSE");
+    if !license.is_file() {
+        println!(
+            "pdfium: no LICENSE beside {}; its licence texts are not bundled",
+            library_dir.display()
+        );
+        return Ok(());
+    }
+    let target = out.join(LICENSES_DIR).join("pdfium");
+    std::fs::create_dir_all(&target)?;
+    copy(&license, &target)?;
+    let libraries = root.join("licenses");
+    let count = if libraries.is_dir() {
+        copy_matching(&libraries, &target, |_| true)?
+    } else {
+        0
+    };
+    println!(
+        "pdfium: its licence and those of {count} libraries built into it, into {}",
+        target.display()
+    );
+    Ok(())
+}
+
+/// Copies the notices of the standard library into the bundle's
+/// `licenses/rust/`. The bundle ships that library as `libstd`, and the
+/// toolchain that built it carries its notices below `sysroot` as
+/// [`STD_NOTICES`]: the library's own licence and those of the crates it
+/// is built from, written by the Rust project for that very release. A
+/// toolchain without the file is said so and the bundle has none.
+fn std_notices(sysroot: &Path, out: &Path) -> Result<()> {
+    let notices = sysroot.join(STD_NOTICES);
+    if !notices.is_file() {
+        println!(
+            "libstd: no {} in the toolchain; its notices are not bundled",
+            notices.display()
+        );
+        return Ok(());
+    }
+    let target = out.join(LICENSES_DIR).join("rust");
+    std::fs::create_dir_all(&target)?;
+    copy(&notices, &target)
 }
 
 /// Rick's config directory on this machine, as `platform::ConfigDir`
@@ -624,9 +697,9 @@ fn metadata(cargo: &std::ffi::OsStr) -> Result<Metadata> {
     })
 }
 
-/// The `libstd` the build links dynamically, from the toolchain cargo
-/// belongs to.
-fn libstd(cargo: &std::ffi::OsStr) -> Result<Vec<PathBuf>> {
+/// A directory the compiler of the build names with `--print <what>`:
+/// `target-libdir`, `sysroot`.
+fn rustc_print(cargo: &std::ffi::OsStr, what: &str) -> Result<PathBuf> {
     // `CARGO` is the real binary inside the toolchain; its sibling `rustc`
     // is the compiler the build used. Fall back to the one on the path.
     let rustc = Path::new(cargo)
@@ -634,13 +707,19 @@ fn libstd(cargo: &std::ffi::OsStr) -> Result<Vec<PathBuf>> {
         .map(|dir| dir.join(exe("rustc")))
         .filter(|path| path.is_file())
         .unwrap_or_else(|| PathBuf::from(exe("rustc")));
-    let output = Command::new(&rustc)
-        .args(["--print", "target-libdir"])
-        .output()?;
+    let output = Command::new(&rustc).args(["--print", what]).output()?;
     if !output.status.success() {
-        return Err(format!("{} --print target-libdir failed", rustc.display()).into());
+        return Err(format!("{} --print {what} failed", rustc.display()).into());
     }
-    let libdir = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    Ok(PathBuf::from(
+        String::from_utf8_lossy(&output.stdout).trim(),
+    ))
+}
+
+/// The `libstd` the build links dynamically, from the toolchain cargo
+/// belongs to.
+fn libstd(cargo: &std::ffi::OsStr) -> Result<Vec<PathBuf>> {
+    let libdir = rustc_print(cargo, "target-libdir")?;
     let prefix = format!("{}std-", std::env::consts::DLL_PREFIX);
     let mut found: Vec<PathBuf> = std::fs::read_dir(&libdir)?
         .filter_map(std::result::Result::ok)
@@ -839,6 +918,95 @@ mod tests {
         walk(dir, "", &mut out);
         out.sort();
         out
+    }
+
+    /// A file at `path` below `root`, its folders made on the way.
+    fn put(root: &Path, path: &str) {
+        let file = root.join(path);
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("{e}"));
+        }
+        std::fs::write(&file, path).unwrap_or_else(|e| panic!("{e}"));
+    }
+
+    /// The licence texts a pdfium build carries beside its library go into
+    /// the bundle with it: pdfium's own and one per library built into it,
+    /// from the layout of the build the release downloads, whether the
+    /// library sits in `lib/` or, as on Windows, in `bin/`.
+    #[test]
+    fn pdfium_s_licence_texts_go_into_the_bundle_with_its_library() {
+        for folder in ["lib", "bin"] {
+            let build = Scratch::new(&format!("pdfium-build-{folder}"));
+            let out = Scratch::new(&format!("pdfium-out-{folder}"));
+            put(&build.0, &format!("{folder}/libpdfium.so"));
+            put(&build.0, "LICENSE");
+            put(&build.0, "licenses/freetype.txt");
+            put(&build.0, "licenses/libjpeg_turbo.md");
+            put(&build.0, "include/fpdfview.h");
+
+            pdfium_licenses(&build.0.join(folder), &out.0).unwrap_or_else(|e| panic!("{e}"));
+
+            assert_eq!(
+                tree(&out.0),
+                [
+                    "licenses/pdfium/LICENSE",
+                    "licenses/pdfium/freetype.txt",
+                    "licenses/pdfium/libjpeg_turbo.md",
+                ],
+                "{folder}"
+            );
+            let text = std::fs::read_to_string(out.0.join("licenses/pdfium/freetype.txt"))
+                .unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(text, "licenses/freetype.txt", "the build's own text");
+        }
+    }
+
+    /// A pdfium with no `LICENSE` beside its folder, the system's or one
+    /// built by hand, is bundled as before and brings no `licenses/`; a
+    /// build with the licence and no folder of others brings the one text.
+    #[test]
+    fn a_pdfium_without_licence_texts_is_bundled_without_them() {
+        let build = Scratch::new("pdfium-bare");
+        let out = Scratch::new("pdfium-bare-out");
+        put(&build.0, "lib/libpdfium.so");
+        pdfium_licenses(&build.0.join("lib"), &out.0).unwrap_or_else(|e| panic!("{e}"));
+        assert!(tree(&out.0).is_empty(), "{:?}", tree(&out.0));
+
+        put(&build.0, "LICENSE");
+        pdfium_licenses(&build.0.join("lib"), &out.0).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(tree(&out.0), ["licenses/pdfium/LICENSE"]);
+    }
+
+    /// The standard library's notices go into the bundle from the
+    /// toolchain that built it, and a toolchain without them leaves the
+    /// bundle as it is.
+    #[test]
+    fn the_standard_library_s_notices_come_from_the_toolchain() {
+        let sysroot = Scratch::new("sysroot");
+        let out = Scratch::new("sysroot-out");
+        std_notices(&sysroot.0, &out.0).unwrap_or_else(|e| panic!("{e}"));
+        assert!(tree(&out.0).is_empty(), "{:?}", tree(&out.0));
+
+        put(&sysroot.0, STD_NOTICES);
+        put(&sysroot.0, "share/doc/rust/COPYRIGHT.html");
+        std_notices(&sysroot.0, &out.0).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(tree(&out.0), ["licenses/rust/COPYRIGHT-library.html"]);
+    }
+
+    /// The toolchain this workspace pins has the notices where the task
+    /// looks for them: a release would otherwise ship `libstd` without.
+    #[test]
+    fn the_pinned_toolchain_carries_the_standard_library_s_notices() {
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let sysroot = rustc_print(&cargo, "sysroot").unwrap_or_else(|e| panic!("{e}"));
+        let notices = sysroot.join(STD_NOTICES);
+        let text = std::fs::read_to_string(&notices)
+            .unwrap_or_else(|e| panic!("{}: {e}", notices.display()));
+        assert!(
+            text.contains("Rust Standard Library"),
+            "{}",
+            notices.display()
+        );
     }
 
     /// Issue 250, item 5: the GStreamer runtime lies in the media plugin's
