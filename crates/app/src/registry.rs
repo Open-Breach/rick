@@ -74,6 +74,23 @@ const DOWNLOADS_DIR: &str = "downloads";
 /// finds any is shown once for a release of Rick, not at every start.
 const ANNOUNCED_FILE: &str = "updates-announced";
 
+/// The file beside the cached plugin list that holds the version of the
+/// newest release of Rick the user was told of: the toast that says a
+/// newer Rick is available is shown once for a release, not at every
+/// start.
+const RELEASE_FILE: &str = "release-announced";
+
+/// What the files of the cache say was announced before this run.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Announced {
+    /// The release of Rick whose plugin updates were said
+    /// ([`ANNOUNCED_FILE`]).
+    updates: Option<String>,
+    /// The newest release of Rick that was said to be available
+    /// ([`RELEASE_FILE`]).
+    release: Option<String>,
+}
+
 /// How long after the start the background check first looks whether the
 /// plugin list is a day old: not at the start itself, which has enough
 /// to do and asks nobody.
@@ -180,6 +197,20 @@ impl From<&plugins_registry::Error> for RegistryProblem {
             | Error::Io { .. } => Self::Unreadable,
         }
     }
+}
+
+/// A release of Rick newer than the one that runs, as the plugin list
+/// names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RickUpdate {
+    /// Its version, `0.7.0`.
+    pub version: String,
+    /// The address of its release page, for the browser. `None` for a
+    /// Rick a package manager installed, which is updated there, and
+    /// when the list names no `https://` address.
+    pub page: Option<String>,
+    /// A package manager installed this Rick and updates it.
+    pub packaged: bool,
 }
 
 /// What the application knows of the plugin registry.
@@ -303,6 +334,9 @@ pub(crate) struct RegistryRun {
     /// The updates were said in this run of Rick, whatever the file of
     /// the cache says by now.
     said: bool,
+    /// The newest release of Rick the user was told of, in this run or
+    /// in one before it.
+    release_said: Option<String>,
 }
 
 impl RegistryRun {
@@ -339,6 +373,7 @@ impl RegistryRun {
             },
             timer: CancelToken::new(),
             said: false,
+            release_said: None,
         }
     }
 
@@ -451,15 +486,23 @@ impl App {
             // In the background: the release of Rick whose updates were
             // said.
             let announced = if background {
-                let file = cache.dir().join(ANNOUNCED_FILE);
+                let folder = cache.dir().to_owned();
                 runtime::handle()
-                    .spawn_blocking(move || std::fs::read_to_string(file).ok())
+                    .spawn_blocking(move || {
+                        let said = |file: &str| {
+                            std::fs::read_to_string(folder.join(file))
+                                .ok()
+                                .map(|text| text.trim().to_owned())
+                        };
+                        Announced {
+                            updates: said(ANNOUNCED_FILE),
+                            release: said(RELEASE_FILE),
+                        }
+                    })
                     .await
-                    .ok()
-                    .flatten()
-                    .map(|text| text.trim().to_owned())
+                    .unwrap_or_default()
             } else {
-                None
+                Announced::default()
             };
             // Fresh is an index that can be used and is not a day old: a
             // cached one that does not verify is no reason to wait.
@@ -525,13 +568,14 @@ impl App {
     /// A job ended, with the answer of its fetch when it made one. The
     /// start and the background check set the timer of the next look,
     /// and the first of them that finds updates says so, once for a
-    /// release of Rick: `announced` is the release they were last said
-    /// for.
+    /// release of Rick. Whatever asked, a list that names a newer Rick
+    /// than this one says so, once for that release. `announced` is what
+    /// was said before this run.
     pub(crate) fn registry_done(
         &mut self,
         fetched: Option<Result<Cached, plugins_registry::Error>>,
         command: RegistryCommand,
-        announced: Option<&str>,
+        announced: Announced,
         events: &mut Vec<Event>,
     ) {
         self.plugin_registry.job = None;
@@ -553,11 +597,23 @@ impl App {
                 self.registry_arm(self.plugin_registry.schedule.after_start);
             }
             RegistryCommand::Daily => self.registry_arm(self.registry_next()),
-            RegistryCommand::Opened | RegistryCommand::CheckNow => return,
+            RegistryCommand::Opened | RegistryCommand::CheckNow => {}
+        }
+        // What an earlier run said of a newer Rick, where this run has
+        // said nothing yet.
+        if self.plugin_registry.release_said.is_none() {
+            self.plugin_registry.release_said = announced.release;
+        }
+        self.announce_release(events);
+        if !matches!(command, RegistryCommand::Start | RegistryCommand::Daily) {
+            return;
         }
         let count = self.updates().len();
         let rick = self.plugin_registry.view.rick.clone();
-        if count == 0 || self.plugin_registry.said || announced == Some(rick.as_str()) {
+        if count == 0
+            || self.plugin_registry.said
+            || announced.updates.as_deref() == Some(rick.as_str())
+        {
             return;
         }
         self.plugin_registry.said = true;
@@ -840,6 +896,52 @@ impl App {
     #[must_use]
     pub fn packaging(&self) -> Option<plugins::Packaging> {
         self.plugin_registry.packaging
+    }
+
+    /// The release of Rick that is newer than this one, when the plugin
+    /// list names one (specs/plugin-distribution.md §6, *The update
+    /// notice*): what the toast, the menu and the About dialog say. It is
+    /// read from the list Rick holds and asks nobody. `None` with *Look
+    /// for plugins and updates online* off, without a list, and while
+    /// this Rick is that release or a newer one.
+    #[must_use]
+    pub fn rick_update(&self) -> Option<RickUpdate> {
+        if !self.model.settings.registry.check {
+            return None;
+        }
+        let run = &self.plugin_registry;
+        let latest = run.view.index.as_ref()?.newer_than(&run.view.rick)?;
+        let packaged = run.packaging.is_some();
+        Some(RickUpdate {
+            version: latest.version.clone(),
+            // A packaged Rick is updated where it was installed.
+            page: latest.page().filter(|_| !packaged).map(str::to_owned),
+            packaged,
+        })
+    }
+
+    /// Says that a newer Rick is available, once for a release: the
+    /// release is remembered in the cache, beside the plugin list.
+    fn announce_release(&mut self, events: &mut Vec<Event>) {
+        let Some(update) = self.rick_update() else {
+            return;
+        };
+        if self.plugin_registry.release_said.as_deref() == Some(update.version.as_str()) {
+            return;
+        }
+        self.plugin_registry.release_said = Some(update.version.clone());
+        let version = update.version;
+        events.push(Event::RickUpdate {
+            version: version.clone(),
+        });
+        let folder = Cache::new(&self.plugin_registry.cache_dir).dir().to_owned();
+        runtime::handle().spawn_blocking(move || {
+            let written = std::fs::create_dir_all(&folder)
+                .and_then(|()| std::fs::write(folder.join(RELEASE_FILE), version));
+            if let Err(error) = written {
+                tracing::warn!(%error, "the announced release is not remembered");
+            }
+        });
     }
 
     /// How long until the background check is due again: until the list

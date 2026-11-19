@@ -5073,6 +5073,199 @@ mod registry {
         assert_eq!(server.requests().len(), 2);
     }
 
+    /// [`index`] with `latest` as the newest release of Rick.
+    fn released(latest: &serde_json::Value) -> serde_json::Value {
+        let mut index = index(1, "0.6.0");
+        index["apps"]["rick"]["latest"] = latest.clone();
+        index
+    }
+
+    /// The releases of Rick `events` say are available, in their order.
+    fn told(events: &[Event]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::RickUpdate { version } => Some(version.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    const PAGE: &str = "https://github.com/Open-Breach/rick/releases/tag/v0.7.0";
+
+    #[test]
+    fn a_newer_rick_in_the_list_is_said_once_for_a_release_and_remembered() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(
+            &signer,
+            &released(&json!({ "version": "0.7.0", "url": PAGE })),
+        );
+        let settings = table(&server, &signer, true);
+        let mut h = start(&fake, &settings);
+        assert_eq!(h.app.rick_update(), None, "nothing is known before a list");
+
+        // The list arrives with the background check: it names a newer
+        // Rick, and that is said. No request was made for it.
+        h.begin();
+        assert_eq!(told(&h.take_events()), ["0.7.0"]);
+        assert_eq!(server.requests().len(), 2, "the two files of the list");
+        let update = crate::RickUpdate {
+            version: "0.7.0".to_owned(),
+            page: Some(PAGE.to_owned()),
+            packaged: false,
+        };
+        assert_eq!(h.app.rick_update(), Some(update.clone()));
+
+        // Once: the list fetched again says nothing new.
+        h.registry(RegistryCommand::CheckNow);
+        h.registry(RegistryCommand::Opened);
+        assert_eq!(told(&h.take_events()), [] as [&str; 0]);
+        assert_eq!(h.app.rick_update(), Some(update.clone()));
+        drop(h);
+
+        // And remembered: the next start reads the same list from the
+        // cache and knows of the release, without a word.
+        let mut again = start(&fake, &settings);
+        again.begin();
+        assert_eq!(told(&again.take_events()), [] as [&str; 0]);
+        assert_eq!(again.app.rick_update(), Some(update));
+        let remembered = fake
+            .config_dir()
+            .join(CACHE_DIR)
+            .join(plugins_registry::CACHE_DIR)
+            .join("release-announced");
+        assert_eq!(
+            fs::read_to_string(&remembered).ok().as_deref(),
+            Some("0.7.0")
+        );
+
+        // A release after that one is new again.
+        let next = "https://github.com/Open-Breach/rick/releases/tag/v0.7.1";
+        server.publish(
+            &signer,
+            &released(&json!({ "version": "0.7.1", "url": next })),
+        );
+        again.registry(RegistryCommand::CheckNow);
+        assert_eq!(told(&again.take_events()), ["0.7.1"]);
+        again.registry(RegistryCommand::CheckNow);
+        assert_eq!(told(&again.take_events()), [] as [&str; 0]);
+        again.settle();
+        assert_eq!(
+            fs::read_to_string(&remembered).ok().as_deref(),
+            Some("0.7.1")
+        );
+        drop(again);
+
+        // Until Rick is that release or a newer one: then there is no
+        // update, and nothing to say.
+        for rick in ["0.7.1", "0.8.0"] {
+            let mut updated = start(&fake, &settings);
+            updated.app.set_rick_version(rick);
+            updated.begin();
+            assert_eq!(updated.app.rick_update(), None, "{rick}");
+            assert_eq!(told(&updated.take_events()), [] as [&str; 0], "{rick}");
+        }
+    }
+
+    #[test]
+    fn the_update_is_said_whenever_the_list_first_names_it() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(
+            &signer,
+            &released(&json!({ "version": "0.7.0", "url": PAGE })),
+        );
+        let mut h = start(&fake, &table(&server, &signer, true));
+        // The first frame: nothing is cached, and nobody is asked.
+        h.registry(RegistryCommand::Start);
+        assert_eq!(told(&h.take_events()), [] as [&str; 0]);
+        // The Available list is opened before the background check came.
+        h.registry(RegistryCommand::Opened);
+        assert_eq!(told(&h.take_events()), ["0.7.0"]);
+        h.registry(RegistryCommand::Daily);
+        assert_eq!(told(&h.take_events()), [] as [&str; 0]);
+    }
+
+    #[test]
+    fn no_update_is_said_with_the_switch_off_for_a_pre_release_or_without_a_newer_one() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        let newer = json!({ "version": "0.7.0", "url": PAGE });
+        server.publish(&signer, &released(&newer));
+
+        // The switch off: the list Check now fetched names the release,
+        // and Rick does not look at that.
+        let mut off = start(&fake(), &table(&server, &signer, false));
+        off.begin();
+        off.registry(RegistryCommand::CheckNow);
+        assert_eq!(off.git().as_deref(), Some("0.6.0"), "the list is there");
+        assert_eq!(off.app.rick_update(), None);
+        assert_eq!(told(&off.take_events()), [] as [&str; 0]);
+
+        // A pre-release Rick asks for nothing and is told of nothing.
+        let mut dev = start(&fake(), &table(&server, &signer, true));
+        dev.app.set_rick_version("0.7.0-dev");
+        dev.begin();
+        dev.registry(RegistryCommand::CheckNow);
+        assert_eq!(dev.app.rick_update(), None);
+        assert_eq!(told(&dev.take_events()), [] as [&str; 0]);
+
+        // The same release, an older one, a pre-release, no entry and an
+        // entry that is none: nothing is newer.
+        for latest in [
+            json!({ "version": "0.6.0", "url": PAGE }),
+            json!({ "version": "0.5.0", "url": PAGE }),
+            json!({ "version": "0.7.0-rc1", "url": PAGE }),
+            json!(null),
+            json!("0.7.0"),
+        ] {
+            server.publish(&signer, &released(&latest));
+            let mut h = start(&fake(), &table(&server, &signer, true));
+            h.begin();
+            assert_eq!(h.git().as_deref(), Some("0.6.0"), "{latest}: the list");
+            assert_eq!(h.app.rick_update(), None, "{latest}");
+            assert_eq!(told(&h.take_events()), [] as [&str; 0], "{latest}");
+        }
+
+        // A release whose address is not one to open is a release all the
+        // same, without a page.
+        for url in ["http://example.org/v0.7.0", "file:///tmp/v0.7.0", ""] {
+            server.publish(
+                &signer,
+                &released(&json!({ "version": "0.7.0", "url": url })),
+            );
+            let mut h = start(&fake(), &table(&server, &signer, true));
+            h.begin();
+            let update = h.app.rick_update();
+            assert_eq!(update.as_ref().map(|u| u.version.as_str()), Some("0.7.0"));
+            assert_eq!(update.and_then(|u| u.page), None, "{url}");
+            assert_eq!(told(&h.take_events()), ["0.7.0"], "{url}");
+        }
+    }
+
+    #[test]
+    fn a_packaged_rick_is_updated_by_its_package_manager_and_has_no_page() {
+        use crate::plugins::Packaging;
+        let (server, signer) = (Server::start(), Signer::new(1));
+        server.publish(
+            &signer,
+            &released(&json!({ "version": "0.7.0", "url": PAGE })),
+        );
+        for packaging in [Packaging::Deb, Packaging::Rpm] {
+            let mut h = start(&fake(), &table(&server, &signer, true));
+            h.app.set_packaging(Some(packaging));
+            h.begin();
+            assert_eq!(told(&h.take_events()), ["0.7.0"], "{packaging:?}");
+            assert_eq!(
+                h.app.rick_update(),
+                Some(crate::RickUpdate {
+                    version: "0.7.0".to_owned(),
+                    page: None,
+                    packaged: true,
+                }),
+                "{packaging:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_start_fetches_the_list_and_the_next_start_reads_it_from_the_cache() {
         let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
