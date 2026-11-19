@@ -21,7 +21,9 @@ and a `rick:///<path>` URL (the scheme the desktop entry and `Info.plist`
 register) opens an existing folder, reveals an existing file and is an
 error toast otherwise.
 One Rick runs per user session and config directory (`--config-dir <dir>`
-picks another): a launch first hands its command line to the running
+picks another, and keeps its cache in `cache/` inside it, where a Rick on
+the platform's config directory uses the platform's cache directory,
+`platform::cache_dir`): a launch first hands its command line to the running
 instance over the platform's single-instance endpoint, prints the reply
 and exits with the instance's status within a second, and only binds the
 endpoint and opens the window itself when nothing listens; the instance

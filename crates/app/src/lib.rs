@@ -81,6 +81,7 @@ mod external;
 mod integration;
 mod places;
 pub mod plugins;
+mod registry;
 mod session;
 pub mod settings;
 mod timeline;
@@ -97,6 +98,7 @@ pub use ops::hash;
 /// What a `Command::SetPermissions` carries, re-exported for the UI.
 pub use ops::{PermissionRequest, Recursion};
 pub use places::{PLACES_FILE, defaults as default_places, virtual_icon};
+pub use registry::{CACHE_DIR, PluginRegistry, RegistryCommand, RegistryProblem};
 pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
 pub use settings::SETTINGS_FILE;
 
@@ -350,6 +352,12 @@ enum Msg {
         path: PathBuf,
         result: Result<(), String>,
     },
+    /// The cached plugin list was read, or could not be used.
+    RegistryCached(Result<Option<plugins_registry::Cached>, plugins_registry::Error>),
+    /// The registry job began to fetch the plugin list.
+    RegistryChecking,
+    /// The registry job ended, with its fetch's answer when it made one.
+    RegistryDone(Option<Result<plugins_registry::Cached, plugins_registry::Error>>),
     /// A job started waiting for its volume, or stopped.
     Schedule,
     /// The mounted volumes were enumerated.
@@ -832,6 +840,8 @@ pub struct App {
     index_generation: u64,
     /// The integration check or apply in flight.
     integration: integration::IntegrationRun,
+    /// The plugin registry: what is known of it, and the job that asks.
+    plugin_registry: registry::RegistryRun,
 }
 
 impl App {
@@ -1102,6 +1112,10 @@ impl App {
                 tx.send(Msg::Prompts);
             }));
         }
+        let plugin_registry = registry::RegistryRun::new(
+            &model.settings.registry,
+            config_dir.join(registry::CACHE_DIR),
+        );
         let mut app = Self {
             model,
             mounts,
@@ -1166,6 +1180,7 @@ impl App {
             properties_waiting: None,
             index_generation: 0,
             integration: integration::IntegrationRun::default(),
+            plugin_registry,
         };
         app.watch_settings();
         if seeded {
@@ -2108,6 +2123,7 @@ impl App {
             Command::DeleteLayout(name) => self.delete_layout(&name, events),
             Command::RenameLayout { from, to } => self.rename_layout(&from, &to, events),
             Command::Integration(command) => self.integration(command, events),
+            Command::Registry(command) => self.registry_command(command),
         }
         self.sync_panes(events);
         self.sync_preview();
@@ -4726,6 +4742,9 @@ impl App {
                     row.removed = true;
                 }
             }
+            Msg::RegistryCached(cached) => self.registry_cached(cached),
+            Msg::RegistryChecking => self.registry_checking(),
+            Msg::RegistryDone(fetched) => self.registry_done(fetched),
             Msg::PluginInstalled(Err(text))
             | Msg::PluginRemoved {
                 result: Err(text), ..

@@ -617,6 +617,11 @@ pub enum Command {
     /// check, apply the dialog's rows, add or restore one item from
     /// Settings → Integration, reset the choices.
     Integration(crate::IntegrationCommand),
+    /// The plugin registry (specs/plugin-distribution.md §6): an occasion
+    /// to read the plugin list — the start, the *Available* view opened,
+    /// *Check now*. What came of it is in
+    /// [`App::plugin_registry`](crate::App::plugin_registry).
+    Registry(crate::RegistryCommand),
 }
 
 /// What the application tells the UI happened. The model already reflects

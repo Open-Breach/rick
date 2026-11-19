@@ -359,6 +359,12 @@ fn run() -> anyhow::Result<ExitCode> {
         ext_settings,
     );
     app.set_plugins(rows);
+    // The cache is the platform's own for a Rick on the platform's config
+    // directory, and stays inside the config directory `--config-dir`
+    // names, so that such a Rick shares nothing with the user's own.
+    if launch.config_dir.is_none() {
+        app.set_cache_dir(platform::cache_dir());
+    }
     // The rest of the command line before the first frame; a new tab
     // reports nothing the UI would miss (its listing arrives through the
     // app's polling like the start location's), and a plugin command's
