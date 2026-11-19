@@ -71,6 +71,8 @@ impl HexPreview {
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
                 previews: &[],
+                markers: &[],
+                connections: &[],
                 commands: &[],
             },
         }

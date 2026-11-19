@@ -85,6 +85,60 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use types::{Error, ProviderId};
 
+/// The section of the side panel a kind of connection is added in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConnectionSection {
+    /// Network: hosts reached over a network protocol, such as SSH.
+    Network,
+    /// Cloud: accounts of an object store.
+    Cloud,
+}
+
+impl ConnectionSection {
+    /// Both sections, in the side panel's order.
+    pub const ALL: [Self; 2] = [Self::Network, Self::Cloud];
+
+    /// The section's name in `plugin.toml`: `network` or `cloud`.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Network => "network",
+            Self::Cloud => "cloud",
+        }
+    }
+
+    /// The section `name` spells; `None` for anything else.
+    #[must_use]
+    pub fn named(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|section| section.name() == name)
+    }
+}
+
+/// A kind of connection an extension adds to *Add…* in the side panel, as
+/// its manifest declares it: one of the triggers by which Rick can say
+/// what a plugin is for without having it (specs/plugin-distribution.md
+/// §5). `plugin.toml` carries each as a `[[connections]]` table.
+///
+/// ```
+/// use ext::{ConnectionSection, ConnectionSpec};
+///
+/// const S3: ConnectionSpec = ConnectionSpec {
+///     section: ConnectionSection::Cloud,
+///     title: "S3",
+/// };
+/// assert_eq!(S3.section.name(), "cloud");
+/// assert_eq!(ConnectionSection::named("network"), Some(ConnectionSection::Network));
+/// assert_eq!(ConnectionSection::named("usb"), None);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConnectionSpec {
+    /// The section whose *Add…* lists the kind.
+    pub section: ConnectionSection,
+    /// The kind's title there, in English: what the entry reads once the
+    /// plugin is loaded (the English of its [`ConnectionSchema::title`]).
+    pub title: &'static str,
+}
+
 /// How a field of the *Add connection…* dialogue is edited and stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionFieldKind {

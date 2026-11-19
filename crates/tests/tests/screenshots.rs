@@ -3533,6 +3533,8 @@ fn screenshots_of_the_small_items() {
                 points: Points::ACTION,
                 platforms: Platforms::ALL,
                 previews: &[],
+                markers: &[],
+                connections: &[],
                 commands: &[],
             })),
         ],

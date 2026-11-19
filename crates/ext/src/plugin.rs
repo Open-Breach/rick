@@ -42,6 +42,8 @@
 //!             points: Points::empty(),
 //!             platforms: Platforms::ALL,
 //!             previews: &[],
+//!             markers: &[],
+//!             connections: &[],
 //!             commands: &[],
 //!         })
 //!     }
@@ -206,6 +208,8 @@ mod tests {
             points: Points::empty(),
             platforms: Platforms::ALL,
             previews: &[],
+            markers: &[],
+            connections: &[],
             commands: &[],
         }
     }

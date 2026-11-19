@@ -591,6 +591,8 @@ mod tests {
             points: Points::empty(),
             platforms: Platforms::ALL,
             previews: &[],
+            markers: &[],
+            connections: &[],
             commands: SPECS,
         }))
     }

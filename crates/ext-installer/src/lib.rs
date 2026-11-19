@@ -135,6 +135,8 @@ impl InstallerExtension {
                 points: Points::PROVIDER | Points::DECORATOR | Points::ACTION,
                 platforms: Platforms::ALL,
                 previews: &[],
+                markers: &[],
+                connections: &[],
                 commands: actions::COMMANDS,
             },
             libraries: None,

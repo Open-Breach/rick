@@ -231,6 +231,8 @@ impl Core {
                 points: Points::ACTION,
                 platforms: Platforms::ALL,
                 previews: &[],
+                markers: &[],
+                connections: &[],
                 commands: &[],
             },
             state: Arc::new(State {

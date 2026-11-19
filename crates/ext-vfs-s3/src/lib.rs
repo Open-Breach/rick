@@ -41,8 +41,8 @@ mod provider;
 use std::sync::Arc;
 
 use ext::{
-    API_VERSION, Capabilities, Connector, Extension, Manifest, Platforms, Points, Provider,
-    Registry, Version,
+    API_VERSION, Capabilities, ConnectionSection, ConnectionSpec, Connector, Extension, Manifest,
+    Platforms, Points, Provider, Registry, Version,
 };
 use types::{Error, ExtId, Location, ProviderId};
 
@@ -167,6 +167,11 @@ impl S3Extension {
                 points: Points::PROVIDER,
                 platforms: Platforms::ALL,
                 previews: &[],
+                markers: &[],
+                connections: &[ConnectionSpec {
+                    section: ConnectionSection::Cloud,
+                    title: "S3",
+                }],
                 commands: &[],
             },
         }

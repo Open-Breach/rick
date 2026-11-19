@@ -90,6 +90,8 @@ impl Snapshots {
                 points: Points::DECORATOR,
                 platforms: Platforms::ALL,
                 previews: &[],
+                markers: &[],
+                connections: &[],
                 commands: &[],
             },
             source: Arc::clone(self),
