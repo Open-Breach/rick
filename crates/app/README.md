@@ -57,7 +57,14 @@ that fit this Rick and are in neither plugins folder. Every unpack is
 noted in `installed.toml` in the per-user plugins folder (`plugins::Record`:
 per folder the origin — `registry`, `file` or `url` — the version and the
 package's SHA-256); *Remove* drops the entry, and a start drops the
-entries whose folder is gone. The extension settings store is shared with the plugins through the
+entries whose folder is gone. `App::updates` lists the plugins of the
+per-user folder that the record marks as the registry's, that the plugin
+list has this Rick's build of, and that the host refused — built for the
+Rick before — or that the list has a higher version of; **Update** is an
+install over the old folder and `Command::UpdateAll` one for each. The
+start that first finds any for a release of Rick says so
+(`Event::PluginUpdates`) and remembers the release in
+`registry/updates-announced` of the cache. The extension settings store is shared with the plugins through the
 registry, so a plugin that found its third-party library writes the path
 into its own setting. The pinned list lives in its settings, and the pin actions
 in `ops` see it through the `PinStore` bridge it hands them. It feeds the

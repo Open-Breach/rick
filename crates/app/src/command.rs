@@ -402,6 +402,10 @@ pub enum Command {
     /// §7). Answered by `Event::PluginInstalled`; a package that is not
     /// the one the list describes is deleted and the job fails.
     InstallAvailable(String),
+    /// **Update all** of the Extensions dialogue and of the toast: every
+    /// plugin [`App::updates`](crate::App::updates) lists is installed
+    /// over its folder, each as a job of its own.
+    UpdateAll,
     /// Show the pane's file through one previewer whatever the scores
     /// say. It holds for this file only, until the selection moves on.
     /// The card of a file no previewer claims sent it for *Open as hex*
@@ -838,6 +842,13 @@ pub enum Event {
         /// The plugin's folder.
         path: PathBuf,
     },
+    /// The start found plugins that need the build for this Rick, for
+    /// the first time for this release (specs/plugin-distribution.md §7,
+    /// *Updates*): the UI says so in a toast with **Update all**.
+    PluginUpdates {
+        /// How many plugins have an update.
+        count: usize,
+    },
     /// What `Command::ShowProperties` found: the dialogue's contents.
     Properties(Box<PropertiesInfo>),
     /// The count of the folder the Properties dialogue shows is in.
@@ -1049,6 +1060,10 @@ impl fmt::Debug for Event {
             Self::PluginInstalled { path } => f
                 .debug_struct("PluginInstalled")
                 .field("path", path)
+                .finish(),
+            Self::PluginUpdates { count } => f
+                .debug_struct("PluginUpdates")
+                .field("count", count)
                 .finish(),
             Self::Properties(info) => f
                 .debug_struct("Properties")
