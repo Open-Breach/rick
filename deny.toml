@@ -141,6 +141,7 @@ ignore = [
     # newest release (0.9.5) depends on it unconditionally, for the dates
     # it stamps on the annotations and form fields it writes, which the
     # previewers never do. Remove the entry when pdfium-render drops chrono
-    # or makes it optional.
-    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, not vulnerable; transitive via pdfium-render alone, which has no release or feature without it" },
+    # or makes it optional: its pull request 287 replaces chrono and offers
+    # an optional feature instead, open and unanswered on 2026-11-19.
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, not vulnerable; transitive via pdfium-render alone, which has no release or feature without it; upstream: https://github.com/ajrcarey/pdfium-render/pull/287" },
 ]
