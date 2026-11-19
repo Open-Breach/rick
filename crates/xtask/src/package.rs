@@ -31,7 +31,9 @@ const APP: &str = "rick";
 const MANIFEST_FILE: &str = "plugin.toml";
 /// The mode every entry of a package is written with. A plugin's folder
 /// holds libraries and data, which need no more; a fixed one keeps the
-/// archive the same wherever the bundle was made.
+/// archive the same wherever the bundle was made. It is recorded as a Unix
+/// mode on every platform: left to itself the zip writer marks an entry
+/// made on Windows as made by DOS, which has no modes.
 const ENTRY_MODE: u32 = 0o644;
 
 /// The release's name for the platform a build of `os` and `arch` (as
@@ -208,6 +210,7 @@ fn pack(dir: &Path, id: &str, target: &Path) -> Result<(u64, String)> {
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
         .last_modified_time(zip::DateTime::DEFAULT)
+        .system(zip::System::Unix)
         .unix_permissions(ENTRY_MODE);
     let mut archive = zip::ZipWriter::new(File::create(target)?);
     for (inside, path) in files(dir)? {
