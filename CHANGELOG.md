@@ -99,9 +99,10 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
 - ***Look for plugins and updates online*** on the Behaviour page of the
   settings, on by default; `[registry] check` in `rick.toml`. On, Rick
   fetches the plugin list when the *Available* list is opened and, in the
-  background, at most once a day, after the first frame is drawn. Off, it
-  fetches nothing by itself and shows what it has; **Check now** still
-  asks (#271).
+  background, once a day: one minute after the start when the list it
+  has is more than a day old, and again every 24 hours while it stays
+  open. The start itself asks nobody. Off, it fetches nothing by itself
+  and shows what it has; **Check now** still asks (#271, #280).
 - **The plugin list and what Rick sends for it.** The list is
   `https://get.openbreach.dev/registry/index.json` with a minisign
   signature beside it. Rick makes one request for each of the two files,
