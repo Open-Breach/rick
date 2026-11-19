@@ -1168,6 +1168,399 @@ fn subtree_search_streams_matches_as_a_job_and_a_new_text_supersedes_it() {
     assert_eq!(h.names().len(), 4);
 }
 
+/// A walk whose stream holds one of its polls open, as the real walk's
+/// set-up holds its first: asked for `held`, the stream answers `before`
+/// batches that are ready at once, then says on `entered` that it is inside
+/// a poll and waits there, on the thread that polls it, for `release`. Only
+/// then does it look at its token, and it ends as the spec has a stream end:
+/// quietly when the token is cancelled, after one more batch otherwise. Any
+/// other text is answered at once.
+///
+/// The wait is on the polling thread on purpose. A stream that returned
+/// `Pending` would hand the poll back to the job runner, which looks at the
+/// token before it polls the job again; held open, the poll is one in which
+/// the runner has already looked.
+struct GatedWalk {
+    held: &'static str,
+    before: u64,
+    entered: std::sync::mpsc::Sender<()>,
+    release: Arc<Mutex<std::sync::mpsc::Receiver<()>>>,
+}
+
+impl SearchIndex for GatedWalk {
+    fn id(&self) -> ExtId {
+        ExtId("gated-walk")
+    }
+    fn availability(&self) -> Availability {
+        Availability::Enabled
+    }
+    fn scope(&self) -> SearchScope {
+        SearchScope::Under(Location::new(vfs_local::PROVIDER_ID, VPath::new()))
+    }
+    fn query(
+        &self,
+        q: &Query,
+        cancel: CancelToken,
+    ) -> ext::BoxStream<'static, Result<Vec<SearchHit>, Error>> {
+        let text = q.text.clone();
+        let held = text == self.held;
+        let batch = move |n: u64| {
+            let id = u128::from(n) + if held { 100 } else { 1 };
+            Ok(vec![SearchHit {
+                entry: hit(id, &format!("/{text}-{n}.txt")),
+                snippet: None,
+            }])
+        };
+        if !held {
+            return stream::iter(vec![batch(0)]).boxed();
+        }
+        let before = self.before;
+        let entered = self.entered.clone();
+        let release = Arc::clone(&self.release);
+        stream::unfold(0u64, move |sent| {
+            let entered = entered.clone();
+            let release = Arc::clone(&release);
+            let cancel = cancel.clone();
+            let batch = batch.clone();
+            async move {
+                if sent < before {
+                    return Some((batch(sent), sent + 1));
+                }
+                if sent > before {
+                    return None;
+                }
+                let _ = entered.send(());
+                let _ = release
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .recv_timeout(Duration::from_secs(10));
+                if cancel.is_cancelled() {
+                    return None;
+                }
+                Some((batch(sent), sent + 1))
+            }
+        })
+        .boxed()
+    }
+}
+
+/// The states of the search jobs in the job table, oldest first.
+fn search_states(h: &Harness) -> Vec<model::JobState> {
+    h.app
+        .model()
+        .jobs
+        .values()
+        .filter(|j| j.name.starts_with("Search"))
+        .map(|j| j.state.clone())
+        .collect()
+}
+
+/// Searches for `held` on a [`GatedWalk`] that answers `before` batches
+/// first and returns once the search job is inside the poll the walk holds
+/// open, with what lets the walk go. The batches before that poll are in
+/// the listing by then. Nothing in a test that goes on from here depends on
+/// how fast anything runs: it cancels after the poll began, and the poll
+/// ends after it let the walk go.
+fn search_held_inside_a_poll(before: u64) -> (Harness, std::sync::mpsc::Sender<()>) {
+    let (entered, has_entered) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let mut h = harness_with(vec![IndexExtension::around(
+        "gated-walk",
+        Arc::new(GatedWalk {
+            held: "held",
+            before,
+            entered,
+            release: Arc::new(Mutex::new(released)),
+        }),
+    )]);
+    h.settle();
+    let pane = h.app.model().focused;
+    h.send(Command::Subtree { pane, on: true });
+    h.send(Command::Filter {
+        pane,
+        text: "held".into(),
+    });
+    assert!(
+        has_entered.recv_timeout(Duration::from_secs(10)).is_ok(),
+        "the search never reached the poll the walk holds open"
+    );
+    let shown = usize::try_from(before).unwrap_or(usize::MAX);
+    let all_shown = wait_until(&mut h, Duration::from_secs(10), |h| {
+        h.names().len() == shown
+    });
+    assert!(
+        all_shown,
+        "the batches before the held poll never showed: {:?}",
+        h.names()
+    );
+    (h, release)
+}
+
+/// A second text cancels the search held inside a poll, and only then is
+/// the walk let go.
+fn supersede_inside_a_poll(before: u64) -> Harness {
+    let (mut h, release) = search_held_inside_a_poll(before);
+    let pane = h.app.model().focused;
+    h.send(Command::Filter {
+        pane,
+        text: "next".into(),
+    });
+    assert!(release.send(()).is_ok(), "the walk is gone");
+    h.settle();
+    h
+}
+
+/// The cancel lands inside the first poll of the search job, after the job
+/// runner looked at the token and before the walk's stream does: the stream
+/// ends quietly, and the job must not take that for the end of the search
+/// (the comment of 2026-11-19 on issue 263). The search that replaced it
+/// really finishes and stays Done.
+#[test]
+fn a_search_cancelled_inside_its_first_poll_ends_cancelled() {
+    let h = supersede_inside_a_poll(0);
+    assert_eq!(
+        search_states(&h),
+        [model::JobState::Cancelled, model::JobState::Done],
+        "the first search was cancelled, the second ran through"
+    );
+    assert_eq!(h.names(), ["next-0.txt"], "only the second text's match");
+}
+
+/// The same for a cancel that lands after the first batch: the search job
+/// works through a batch that was ready and asks for the next in the same
+/// poll, and the cancel lands there.
+#[test]
+fn a_search_cancelled_inside_a_poll_after_its_first_batch_ends_cancelled() {
+    let h = supersede_inside_a_poll(1);
+    assert_eq!(
+        search_states(&h),
+        [model::JobState::Cancelled, model::JobState::Done],
+        "the first search was cancelled, the second ran through"
+    );
+    assert_eq!(h.names(), ["next-0.txt"], "only the second text's match");
+}
+
+/// `ListDone` carries the job's result: a search cancelled from the
+/// operations area, the cancel landing inside a poll, reaches its pane as
+/// cancelled and not as complete. The pane keeps the matches it has and
+/// says that the listing did not end, as it does for any listing that
+/// failed.
+#[test]
+fn a_search_cancelled_from_the_operations_area_inside_a_poll_is_not_complete_for_its_pane() {
+    let (mut h, release) = search_held_inside_a_poll(1);
+    let pane = h.app.model().focused;
+    let search = h
+        .app
+        .model()
+        .jobs
+        .iter()
+        .find(|(_, job)| job.name.starts_with("Search"))
+        .map_or_else(|| panic!("the search is in the job table"), |(id, _)| *id);
+    h.send(Command::CancelJob(search));
+    assert!(release.send(()).is_ok(), "the walk is gone");
+    h.settle();
+    assert_eq!(search_states(&h), [model::JobState::Cancelled]);
+    assert_eq!(h.names(), ["held-0.txt"], "the match it had stays");
+    let failure = h.tab(pane).failure.clone().unwrap_or_default();
+    assert!(
+        failure.ends_with("could not be listed: cancelled"),
+        "the pane says the search did not end: {failure:?}"
+    );
+}
+
+/// A folder's listing in Tree view, cancelled inside a poll.
+mod held_folder {
+    use std::sync::mpsc::{Receiver, Sender, channel};
+
+    use ext::{
+        ChangeStream, CopyOptions, EntryStream, LinkKind, ListOptions, Provider, ReadHandle,
+        RemoveMode, WriteHandle, WriteOptions, async_trait,
+    };
+    use runtime::ProgressSink;
+    use types::ProviderId;
+
+    use super::*;
+
+    const ID: ProviderId = ProviderId("held");
+
+    /// A provider of one folder, `/folder`, whose listing holds a poll open
+    /// as [`GatedWalk`]'s stream does: it says on `entered` that it is
+    /// inside a poll and waits there for `release`, then ends quietly when
+    /// its token is cancelled and after one file otherwise.
+    struct Held {
+        entered: Sender<()>,
+        release: Arc<Mutex<Receiver<()>>>,
+    }
+
+    fn entry(key: u128, path: &str, kind: EntryKind) -> Entry {
+        Entry {
+            id: EntryId::new(ID, key),
+            kind,
+            ..hit(key, path)
+        }
+    }
+
+    #[async_trait]
+    impl Provider for Held {
+        fn id(&self) -> ProviderId {
+            ID
+        }
+        fn capabilities(&self, _loc: &Location) -> Capabilities {
+            Capabilities::empty()
+        }
+        fn list(&self, loc: &Location, _opts: ListOptions, cancel: CancelToken) -> EntryStream {
+            if loc.path.as_bytes() == b"/" {
+                return stream::once(async { Ok(vec![entry(1, "/folder", EntryKind::Dir)]) })
+                    .boxed();
+            }
+            let entered = self.entered.clone();
+            let release = Arc::clone(&self.release);
+            stream::unfold(false, move |answered| {
+                let entered = entered.clone();
+                let release = Arc::clone(&release);
+                let cancel = cancel.clone();
+                async move {
+                    if answered {
+                        return None;
+                    }
+                    let _ = entered.send(());
+                    let _ = release
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .recv_timeout(Duration::from_secs(10));
+                    if cancel.is_cancelled() {
+                        return None;
+                    }
+                    let file = entry(2, "/folder/file.txt", EntryKind::File);
+                    Some((Ok(vec![file]), true))
+                }
+            })
+            .boxed()
+        }
+        async fn stat(&self, _loc: &Location) -> Result<Entry, Error> {
+            Err(Error::NotFound)
+        }
+        async fn open_read(&self, _loc: &Location) -> Result<ReadHandle, Error> {
+            Err(Error::Unsupported("held"))
+        }
+        async fn open_write(&self, _l: &Location, _o: WriteOptions) -> Result<WriteHandle, Error> {
+            Err(Error::Unsupported("held"))
+        }
+        async fn create_dir(&self, _loc: &Location) -> Result<Entry, Error> {
+            Err(Error::Unsupported("held"))
+        }
+        async fn rename(&self, _f: &Location, _t: &Location) -> Result<Entry, Error> {
+            Err(Error::Unsupported("held"))
+        }
+        async fn remove(&self, _loc: &Location, _mode: RemoveMode) -> Result<(), Error> {
+            Err(Error::Unsupported("held"))
+        }
+        async fn link(&self, _t: &Location, _a: &Location, _k: LinkKind) -> Result<Entry, Error> {
+            Err(Error::Unsupported("held"))
+        }
+        async fn copy(
+            &self,
+            _f: &Location,
+            _t: &Location,
+            _o: CopyOptions,
+            _p: ProgressSink,
+            _c: CancelToken,
+        ) -> Result<(), Error> {
+            Err(Error::Unsupported("held"))
+        }
+        fn watch(&self, _loc: &Location) -> Result<ChangeStream, Error> {
+            Err(Error::Unsupported("held"))
+        }
+    }
+
+    struct HeldExtension {
+        manifest: Manifest,
+        provider: Arc<Held>,
+    }
+
+    impl Extension for HeldExtension {
+        fn manifest(&self) -> &Manifest {
+            &self.manifest
+        }
+        fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+            reg.provider(Arc::clone(&self.provider) as Arc<dyn Provider>);
+            Ok(())
+        }
+    }
+
+    /// A folder collapsed while its children are being listed, the cancel
+    /// landing inside a poll of that listing: the listing ends cancelled
+    /// and tells the pane nothing, as when the runner sees the cancel
+    /// first. Told that it was cancelled, the pane would warn *Listing
+    /// folder: cancelled* about a folder the user merely collapsed. Expanded
+    /// again, the folder lists.
+    #[test]
+    fn a_folder_collapsed_inside_a_poll_of_its_listing_says_nothing() {
+        let (entered, has_entered) = channel();
+        let (release, released) = channel();
+        let mut h = harness_with(vec![Arc::new(HeldExtension {
+            manifest: Manifest {
+                id: ExtId("held"),
+                name: "Held folder",
+                description: "",
+                version: Version::new(0, 1, 0),
+                api_version: API_VERSION,
+                requires: Capabilities::empty(),
+                points: Points::PROVIDER,
+                platforms: Platforms::ALL,
+                previews: &[],
+                markers: &[],
+                connections: &[],
+                commands: &[],
+            },
+            provider: Arc::new(Held {
+                entered,
+                release: Arc::new(Mutex::new(released)),
+            }),
+        })]);
+        h.settle();
+        let pane = h.app.model().focused;
+        h.send(Command::Navigate {
+            pane,
+            to: Location::new(ID, "/"),
+        });
+        h.send(Command::SetView {
+            pane,
+            mode: model::ViewMode::Tree,
+        });
+        h.settle();
+        let folder = id_of(&h, "folder");
+        h.take_events();
+
+        h.send(Command::TreeExpand { pane, id: folder });
+        assert!(
+            has_entered.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "the folder's listing never reached the poll it holds open"
+        );
+        h.send(Command::TreeCollapse { pane, id: folder });
+        assert!(release.send(()).is_ok(), "the listing is gone");
+        h.settle();
+        let events = h.take_events();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, Event::Notify { level, .. } if *level != Level::Info)),
+            "a collapsed folder is no warning: {events:?}"
+        );
+        assert_eq!(h.names(), ["folder"]);
+
+        h.send(Command::TreeExpand { pane, id: folder });
+        assert!(has_entered.recv_timeout(Duration::from_secs(10)).is_ok());
+        assert!(release.send(()).is_ok(), "the listing is gone");
+        h.settle();
+        let tab = h.tab(pane);
+        let rows: Vec<String> = (0..tab.row_count())
+            .filter_map(|i| tab.row(i).map(|e| e.name.clone()))
+            .collect();
+        assert_eq!(rows, ["folder", "file.txt"], "a listing that ends is told");
+    }
+}
+
 #[test]
 fn paste_conflicts_reach_the_model_and_the_answer_reaches_the_job() {
     let mut h = harness();

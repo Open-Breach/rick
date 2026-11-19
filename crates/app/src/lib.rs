@@ -2544,6 +2544,9 @@ impl App {
                             }
                         }
                     }
+                    // A cancelled listing has not seen every root: the rows
+                    // stay as they are.
+                    drained(&job.cancel)?;
                     tx.send(match which {
                         Virtual::Network => Msg::Network(provider_rows(entries)),
                         _ => Msg::Cloud(entries),
@@ -3000,15 +3003,20 @@ impl App {
                             break;
                         }
                     }
-                    Ok(())
+                    drained(&job.cancel)
                 }
                 .await;
-                tx.send(Msg::TreeDone {
-                    pane,
-                    generation,
-                    folder,
-                    result: result.as_ref().copied().map_err(Error::replicate),
-                });
+                // Whoever cancelled this listing collapsed the folder or
+                // lists it again: its end says nothing about the folder, as
+                // nothing is said when the runner sees the cancel first.
+                if !job.cancel.is_cancelled() {
+                    tx.send(Msg::TreeDone {
+                        pane,
+                        generation,
+                        folder,
+                        result: result.as_ref().copied().map_err(Error::replicate),
+                    });
+                }
                 result
             });
         self.internal.insert(handle.id);
@@ -4011,7 +4019,7 @@ impl App {
                             break;
                         }
                     }
-                    Ok(())
+                    drained(&job.cancel)
                 }
                 .await;
                 tx.send(Msg::ListDone {
@@ -4137,7 +4145,7 @@ impl App {
                             break;
                         }
                     }
-                    Ok(())
+                    drained(&job.cancel)
                 }
                 .await;
                 tx.send(Msg::ListDone {
@@ -4233,7 +4241,7 @@ impl App {
                             break;
                         }
                     }
-                    Ok(())
+                    drained(&job.cancel)
                 }
                 .await;
                 tx.send(Msg::ListDone {
@@ -4353,7 +4361,7 @@ impl App {
                                 break;
                             }
                         }
-                        Ok(())
+                        drained(&job.cancel)
                     }
                     .await;
                     tx.send(Msg::IndexDone {
@@ -5815,6 +5823,24 @@ fn below_ignored(root: &VPath, path: &VPath, names: &[String]) -> bool {
     let rest = path.strip_prefix(root).unwrap_or(path);
     rest.split(|b| matches!(b, b'/' | b'\\'))
         .any(|part| names.iter().any(|name| name.as_bytes() == part))
+}
+
+/// How a job ends that has drained a stream: cancelled when its token is,
+/// done otherwise.
+///
+/// A stream ends when its token is cancelled, and it may end quietly, with
+/// `None` and no error (`Provider::list` and `SearchIndex::query` in
+/// SPEC.md, *Core types and extension traits*). The end of the stream is
+/// then not the end of the work. The job runner cannot say so for the job:
+/// it looks at the token before it polls, so a cancel that lands inside the
+/// poll in which the stream ends is one it never sees, and the job's `Ok`
+/// would be recorded as Done.
+fn drained(cancel: &CancelToken) -> Result<(), Error> {
+    if cancel.is_cancelled() {
+        Err(Error::Cancelled)
+    } else {
+        Ok(())
+    }
 }
 
 /// The search indexes the title-row search box queries: every registered
