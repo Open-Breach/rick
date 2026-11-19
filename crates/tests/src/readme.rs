@@ -680,8 +680,8 @@ pub fn install(version: &str, platforms: &[String]) -> String {
             "Linux",
             &links("linux", "tar.gz"),
             &format!(
-                "```bash\ntar xzf {linux}.tar.gz && ./{linux}/rick\n```\n\nNeeds glibc 2.39 or \
-                 later (Ubuntu 24.04). The first start offers to set Rick up in your desktop: \
+                "```bash\ntar xzf {linux}.tar.gz && ./{linux}/rick\n```\n\nNeeds glibc 2.36 or \
+                 later (Debian 12, Ubuntu 24.04). The first start offers to set Rick up in your desktop: \
                  the launcher entry, the default file manager, the `rick` command."
             ),
         ),

@@ -28,7 +28,7 @@ Release archives are built for Linux (x64 and arm64), macOS (Apple silicon) and 
 - the license, the README, the changelog and the third-party licenses: `THIRD-PARTY-LICENSES.md` lists the crates and, after them, what ships outside Cargo (pdfium, 7-Zip, GStreamer, the Rust standard library, the fonts and the icon font);
 - a `licenses/` folder with the texts two of those bring with them: `licenses/pdfium/`, pdfium's licence and those of the libraries built into it, and `licenses/rust/COPYRIGHT-library.html`, the notices of the Rust standard library and of the crates it is built from.
 
-`SHA256SUMS.txt` on the release page has the checksums of the archives, the packages and the lists below. The Linux builds need glibc 2.39 or later (Ubuntu 24.04). Intel Macs are not covered yet.
+`SHA256SUMS.txt` on the release page has the checksums of the archives, the packages and the lists below. The Linux archives need glibc 2.36 or later (Debian 12, Ubuntu 24.04): they are built on the oldest distribution release the packages are made for. Each deb and rpm is built on its own release. Intel Macs are not covered yet.
 
 The archives are not signed or notarised yet: macOS may refuse an app downloaded through a browser until you allow it under System Settings → Privacy & Security, or clear the quarantine flag with `xattr -dr com.apple.quarantine <folder>/Rick.app`; Windows SmartScreen may warn the first time.
 
