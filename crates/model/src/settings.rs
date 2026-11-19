@@ -309,6 +309,9 @@ pub struct Settings {
     pub archives: Archives,
     /// Plugins: which of them not to load.
     pub plugins: Plugins,
+    /// The plugin registry: whether Rick looks for plugins and updates
+    /// online by itself, and another index and key than this build's.
+    pub registry: RegistrySettings,
     /// The network and cloud connections, one `[[connections]]` table
     /// each: the provider, the name and the non-secret fields. The
     /// secrets are in the platform keychain, never here.
@@ -376,6 +379,33 @@ pub struct Plugins {
     /// Ids of the plugins not to load on the next start; they stay on disk
     /// and the Extensions screen lists them as disabled.
     pub disabled: Vec<String>,
+}
+
+/// The `[registry]` table (specs/plugin-distribution.md §6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RegistrySettings {
+    /// *Look for plugins and updates online*: Rick fetches the plugin
+    /// list when the *Available* view is opened and, in the background,
+    /// at most once a day. Off, it fetches nothing by itself; *Check now*
+    /// still does.
+    pub check: bool,
+    /// The address of another index than the registry's own, for
+    /// development and for the tests; `None` for the registry's.
+    pub url: Option<String>,
+    /// The minisign public key another index is signed with, as one
+    /// base64 line; `None` for the key compiled into this build.
+    pub public_key: Option<String>,
+}
+
+impl Default for RegistrySettings {
+    fn default() -> Self {
+        Self {
+            check: true,
+            url: None,
+            public_key: None,
+        }
+    }
 }
 
 /// The `[search]` table.
@@ -767,6 +797,7 @@ impl Default for Settings {
             search: Search::default(),
             archives: Archives::default(),
             plugins: Plugins::default(),
+            registry: RegistrySettings::default(),
             connections: Vec::new(),
             integration: IntegrationSettings::default(),
             language: None,
@@ -984,6 +1015,41 @@ mod tests {
         assert_eq!(s.archives.on_open, OnOpen::System);
         let text = toml::to_string(&s).unwrap_or_default();
         assert!(text.contains("[archives]\non_open = \"system\""), "{text}");
+    }
+
+    /// The `[registry]` table (specs/plugin-distribution.md §6): the
+    /// check is on unless the file switches it off, and the address and
+    /// the key are this build's unless the file names others.
+    #[test]
+    fn the_registry_is_checked_by_default_and_is_this_build_s() {
+        let s = Settings::default();
+        assert!(s.registry.check);
+        assert_eq!((&s.registry.url, &s.registry.public_key), (&None, &None));
+        // A file written from the defaults names neither.
+        let text = toml::to_string(&s).unwrap_or_default();
+        assert!(text.contains("[registry]\ncheck = true\n"), "{text}");
+        assert!(
+            !text.contains("url") && !text.contains("public_key"),
+            "{text}"
+        );
+
+        let read: Settings = toml::from_str(
+            "[registry]\ncheck = false\nurl = \"http://127.0.0.1:8123/index.json\"\n\
+             public_key = \"RWQ\"\n",
+        )
+        .unwrap_or_default();
+        assert!(!read.registry.check);
+        assert_eq!(
+            read.registry.url.as_deref(),
+            Some("http://127.0.0.1:8123/index.json")
+        );
+        assert_eq!(read.registry.public_key.as_deref(), Some("RWQ"));
+        let again: Settings =
+            toml::from_str(&toml::to_string(&read).unwrap_or_default()).unwrap_or_default();
+        assert_eq!(again.registry, read.registry);
+        // One key of the table leaves the others at their defaults.
+        let partial: Settings = toml::from_str("[registry]\nurl = \"x\"\n").unwrap_or_default();
+        assert!(partial.registry.check);
     }
 
     #[test]
