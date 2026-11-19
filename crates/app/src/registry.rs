@@ -95,6 +95,7 @@ fn failure(error: &plugins_registry::Error) -> types::Error {
             url,
             redirected: true,
         } => t!("plugins-redirect-refused", url = url.as_str()),
+        Error::Inward { url } => t!("plugins-redirect-inward", url = url.as_str()),
         other => other.to_string(),
     })
 }
@@ -137,7 +138,7 @@ impl From<&plugins_registry::Error> for RegistryProblem {
             Error::Unverified => Self::Unverified,
             Error::NewerSchema(_) => Self::NewerRick,
             // An index at an address that is not asked did not arrive.
-            Error::Fetch(_) | Error::Refused { .. } => Self::Offline,
+            Error::Fetch(_) | Error::Refused { .. } | Error::Inward { .. } => Self::Offline,
             Error::NotSetUp
             | Error::Unreadable(_)
             | Error::Mismatch

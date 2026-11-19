@@ -844,6 +844,88 @@ fn a_redirect_to_plain_http_on_another_machine_is_refused() {
     });
 }
 
+/// The decision the redirect loop makes for each address it is sent on
+/// to, asked directly. A server of the test's own cannot stand for
+/// "another machine" here: the only addresses elsewhere the client asks
+/// at all are `https://`, and the tests have no TLS server. The loop
+/// itself is run by the tests around this one.
+#[test]
+fn another_machine_does_not_send_a_request_on_to_this_one() {
+    use crate::fetch::{Way, onward};
+    let url = |text: &str| reqwest::Url::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+
+    // From elsewhere to this machine: refused, whatever the scheme, and
+    // however this machine is written.
+    for (from, to) in [
+        ("https://example.org/a.rkp", "http://127.0.0.1:8123/a.rkp"),
+        ("https://example.org/a.rkp", "https://127.0.0.1:8443/a.rkp"),
+        ("https://example.org/a.rkp", "http://localhost/a.rkp"),
+        ("https://example.org/a.rkp", "https://localhost/a.rkp"),
+        ("https://example.org/a.rkp", "http://[::1]:9000/a.rkp"),
+        ("https://example.org/a.rkp", "https://[::1]/a.rkp"),
+        ("https://example.org/a.rkp", "https://127.8.9.10/a.rkp"),
+        ("https://192.168.1.10/a.rkp", "http://127.1/a.rkp"),
+        (
+            "https://get.openbreach.dev/registry/index.json",
+            "http://localhost:8123/registry/index.json",
+        ),
+    ] {
+        let refused = onward(&url(from), &url(to));
+        assert!(
+            matches!(&refused, Err(Error::Inward { url: named }) if *named == url(to).as_str()),
+            "{from} to {to}: {refused:?}"
+        );
+    }
+
+    // From this machine to this machine: followed, by the client of the
+    // address's scheme.
+    for (from, to, way) in [
+        (
+            "http://127.0.0.1:8123/a",
+            "http://127.0.0.1:9000/b",
+            Way::Local,
+        ),
+        (
+            "http://127.0.0.1:8123/a",
+            "http://localhost:8123/b",
+            Way::Local,
+        ),
+        ("http://localhost/a", "http://[::1]/b", Way::Local),
+        (
+            "http://127.0.0.1/a",
+            "https://localhost:8443/b",
+            Way::Secure,
+        ),
+        ("https://localhost:8443/a", "http://127.0.0.1/b", Way::Local),
+        // Outward, and from elsewhere to elsewhere: `https://` as ever.
+        ("http://127.0.0.1/a", "https://example.org/b", Way::Secure),
+        (
+            "https://example.org/a",
+            "https://cdn.example.org/b",
+            Way::Secure,
+        ),
+    ] {
+        let taken = onward(&url(from), &url(to));
+        assert_eq!(taken.as_ref().ok(), Some(&way), "{from} to {to}: {taken:?}");
+    }
+
+    // Plain HTTP elsewhere stays what it was, from wherever.
+    for (from, to) in [
+        ("http://127.0.0.1/a", "http://example.org/b"),
+        ("https://example.org/a", "http://cdn.example.org/b"),
+        ("https://example.org/a", "ftp://example.org/b"),
+    ] {
+        let refused = onward(&url(from), &url(to));
+        assert!(
+            matches!(
+                &refused,
+                Err(Error::Refused { url: named, redirected: true }) if *named == url(to).as_str()
+            ),
+            "{from} to {to}: {refused:?}"
+        );
+    }
+}
+
 #[test]
 fn a_redirect_within_the_rule_is_followed() {
     runtime::block_on(async {
