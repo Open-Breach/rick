@@ -1,6 +1,6 @@
 # Still open
 
-Related: specs/system-integration.md
+Related: specs/system-integration.md, specs/plugin-distribution.md
 
 - Extension security model: what a WASM plugin may touch (capabilities per extension point). Native plugins are settled in `specs/system-integration.md` §9: declared permissions, release-signature verification for first-party plugins, trust on first use for third-party ones.
 - Testing strategy for the performance targets: a generated 200k-entry fixture and a benchmark harness in CI.
@@ -9,3 +9,6 @@ Related: specs/system-integration.md
 - Design, not drawn yet (issue 139): the paste-conflict dialogue between two folders; the File info card unfolded to all its fields; the search field behind *Other…* in the properties dialogue's dropdowns, and the ACL table for the lists that are not POSIX; the two fields of a *Custom* title bar colour; Dark for the properties, keyboard shortcuts and extensions dialogues, which follow the variables. Each is built from the rules of this document and asked about in the pull request where a rule had to be assumed.
 - Design, not drawn yet (issue 149): the *Connection lost* card in a pane; the *Run script?* question; the Behaviour page of the settings and the *Date format* row; the List view in Dark. Each is built from the rules of this document in the same way.
 - Design, not drawn yet (issue 221): the workspace tabs at their shrunken width, the dropdown button after them and its list of every tab; the drive variant of the Properties dialogue. Each is built from the rules of this document in the same way.
+- Plugin distribution (`specs/plugin-distribution.md`): a plugin boundary that outlives a Rick release, so one build of a plugin serves several releases and a plugin can be built outside this workspace — a C ABI in place of the Rust dynamic libraries of `QUESTIONS.md 81`, or the WASM host. Decided on 2026-11-18 to keep the dynamic libraries for now: a change rewrites the `ext` boundary and every plugin, and the API still moves. To look at again when it has settled or when the WASM host comes.
+- Plugin distribution: installing a `rick-plugin-<id>` package from inside a packaged Rick, through PackageKit or `pkexec`, in place of the command to copy; and loading an installed plugin without a restart.
+- Design, not drawn yet (plugin distribution): the *Available* list and its details in the Extensions dialogue, the update count and **Update all**, *Install from URL…*, the suggestion bar, and the registry kinds in *Add…*. Each is built from the rules of `specs/plugin-distribution.md` in the same way.
