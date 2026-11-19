@@ -8,6 +8,12 @@ repository.workspace = true
 
 build = "build.rs"
 
+# Separate on macOS and Windows, where the GStreamer runtime travels with
+# it; in the default set on Linux, which uses the system's
+# (specs/plugin-distribution.md §4).
+[package.metadata.rick]
+separate = ["macos", "windows"]
+
 # A plugin: the `cdylib` the host loads from `plugins/preview-media/`, and
 # an `rlib` for the binary's opt-in `preview-media` feature and the tests.
 [lib]

@@ -6,6 +6,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# A separate plugin: a release publishes it as a package of its own and its
+# archives do not carry it (specs/plugin-distribution.md §4).
+[package.metadata.rick]
+separate = true
+
 # A plugin: a `cdylib` the host loads from `plugins/svn/`, and an `rlib`
 # for the binary's opt-in `svn` feature and the tests.
 [lib]
