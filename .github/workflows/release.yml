@@ -2,12 +2,10 @@ name: release
 # On a `v*` tag: a release build on every OS, one archive per platform with
 # the bundle `cargo xtask bundle --release` lays out — the binary, the kernel
 # dylibs and libstd it shares with the plugins, the pdfium library beside it
-# (SPEC.md: pdfium ships beside the binary), the GStreamer runtime on macOS
-# and Windows in the media plugin's folder, plugins/preview-media/ (SPEC.md:
-# bundled there, the system's on Linux; specs/plugin-distribution.md §4),
-# the Visual C++ runtime on Windows (every module imports it, and a
-# machine without the Visual C++ Redistributable has none), `plugins/` with
-# every plugin (QUESTIONS.md 81) and the 7-Zip library
+# (SPEC.md: pdfium ships beside the binary), the Visual C++ runtime on
+# Windows (every module imports it, and a machine without the Visual C++
+# Redistributable has none), `plugins/` with the default set of plugins
+# (specs/plugin-distribution.md §4) and the 7-Zip library
 # with its licence beside the archive plugin (issue 51; built from the
 # pinned sources on Linux and macOS, the pinned installer's 7z.dll on
 # Windows, see .github/scripts/sevenzip.sh) — plus LICENSE, README,
@@ -19,7 +17,15 @@ name: release
 # Rick.app (Contents/MacOS/ with the plugins beside the binary as
 # everywhere, Info.plist from packaging/macos/ with the version filled in,
 # Resources/Rick.icns) and the archive is the folder with Rick.app and the
-# texts, zipped with ditto; a smoke test of every archive; then a GitHub Release with the archives, their
+# texts, zipped with ditto. The separate plugins are not in the archives:
+# `cargo xtask package --release` makes one `<id>-<version>-<platform>.rkp`
+# of each from the bundle and `plugins-<platform>.json`, the manifest the
+# plugin registry's publisher reads, and their folders leave the tree
+# before it is archived. On macOS and Windows the media plugin is one of
+# them, with the GStreamer runtime in its folder, so those archives hold no
+# GStreamer; on Linux it is in the archive and uses the system's. Then a
+# smoke test of every archive and of its packages, and a GitHub Release with
+# the archives, the packages and the manifests of the four platforms, their
 # SHA-256 sums and the tag's changelog section as its body. A tag with a
 # pre-release suffix (v0.1.0-rc1) makes a draft pre-release; a plain tag
 # publishes. Run by hand from a branch with a tag name, it is a dry run: the
@@ -338,6 +344,11 @@ jobs:
             video/x-raw,width=320,height=240,framerate=30/1 ! videoconvert ! \
             avenc_mpeg4 ! mp4mux ! filesink location=check/sample.mp4
           ls -l check/sample.mp4
+      # The packages of the separate plugins and the manifest that lists
+      # them (specs/plugin-distribution.md §4), from the bundle as it now
+      # is: on macOS after the libraries were thinned, since the media
+      # plugin's package holds them.
+      - run: cargo xtask package --release
       - uses: actions/download-artifact@v4
         with: { name: third-party-licenses }
       - name: package
@@ -367,6 +378,21 @@ jobs:
             cp -R target/release/bundle/. "dist/$NAME/"
             bin="dist/$NAME"
           fi
+          # The archive carries the default set: the separate plugins, the
+          # ones this platform's manifest lists a package for, leave the
+          # tree (specs/plugin-distribution.md §4). The ZFS plugin's helper
+          # rick-zfs stays beside the binary on Linux, where the plugin
+          # looks for it once its package is installed.
+          packages=target/release/packages
+          manifest="$packages/plugins-${{ matrix.platform }}.json"
+          separate="$(python3 -c 'import json,sys; print(" ".join(p["id"] for p in json.load(open(sys.argv[1], encoding="utf-8"))["plugins"]))' "$manifest")"
+          echo "separate plugins: $separate"
+          for id in $separate; do
+            test -d "$bin/plugins/$id" || { echo "no plugins/$id in the bundle to take out"; exit 1; }
+            rm -r "$bin/plugins/$id"
+          done
+          ls "$bin/plugins"
+          cp "$packages"/*.rkp "$manifest" dist/
           cp LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md "dist/$NAME/"
           # The component list the About dialog reads at start: beside the
           # binary, on macOS in the bundle's Resources
@@ -406,12 +432,17 @@ jobs:
             tar czf "$NAME.tar.gz" "$NAME"
             archive="$NAME.tar.gz"
           fi
-          if command -v sha256sum > /dev/null; then
-            sha256sum "$archive" > "$archive.sha256"
-          else
-            shasum -a 256 "$archive" > "$archive.sha256"
-          fi
-          cat "$archive.sha256"
+          # One checksum file each, for the archive, the packages and the
+          # manifest; the release job gathers them into SHA256SUMS.txt.
+          for file in "$archive" ./*.rkp ./plugins-*.json; do
+            file="${file#./}"
+            if command -v sha256sum > /dev/null; then
+              sha256sum "$file" > "$file.sha256"
+            else
+              shasum -a 256 "$file" > "$file.sha256"
+            fi
+            cat "$file.sha256"
+          done
           rm -r "$NAME"
           mkdir -p ../check
           cp "../target/release/examples/pdfium_check$exe" "../target/release/examples/preview_check$exe" ../check/
@@ -428,8 +459,13 @@ jobs:
           if-no-files-found: error
 
   # Each archive, as a user gets it: unpacked in an empty directory, the
-  # binary reports its version, lists every plugin of the platform as
-  # loaded, and pdfium loads from beside it.
+  # binary reports its version, lists the default set of the platform as
+  # loaded and holds no separate plugin, and pdfium loads from beside it.
+  # Then the packages of the platform: each is the file its manifest says,
+  # and unpacked into the empty per-user plugins folder, as Install from
+  # file… does it, every one of them loads from there. The media plugin
+  # plays a video: from the archive on Linux, from its package on macOS
+  # and Windows.
   smoke:
     needs: build
     strategy:
@@ -466,7 +502,15 @@ jobs:
           exe=""
           if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
           cd dist
-          if command -v sha256sum > /dev/null; then sha256sum -c "$name".*.sha256; else shasum -a 256 -c "$name".*.sha256; fi
+          dist="$PWD"
+          for sums in ./*.sha256; do
+            if command -v sha256sum > /dev/null; then sha256sum -c "$sums"; else shasum -a 256 -c "$sums"; fi
+          done
+          # The manifest of this platform's packages (Open-Breach/trebuchet,
+          # docs/spec.md 7.4): nine of them, each a file that is here with
+          # the size and the SHA-256 the manifest gives, built for this
+          # release of Rick.
+          python3 "$GITHUB_WORKSPACE/.github/scripts/check-packages.py" "plugins-${{ matrix.platform }}.json" "${{ matrix.platform }}"
           mkdir empty && cd empty
           case "${{ runner.os }}" in
             Windows) 7z x "../$name.zip" > /dev/null ;;
@@ -507,20 +551,13 @@ jobs:
           python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert isinstance(d,list) and len(d) > 100, "too few entries"; print(len(d), "third-party entries")' \
             "$([ "${{ runner.os }}" = "macOS" ] && echo ../Resources/third-party.json || echo third-party.json)"
           test -f libpdfium.so || test -f libpdfium.dylib || test -f pdfium.dll || { echo "no pdfium library beside the binary"; exit 1; }
-          # The GStreamer runtime the media previewer plays through, on
-          # macOS and Windows: in the plugin's folder, where its package
-          # will hold it, and nothing of it beside the binary any more
+          # The macOS and Windows archives hold no GStreamer: the runtime
+          # travels in the media plugin's package
           # (specs/plugin-distribution.md §4).
-          media=plugins/preview-media
-          case "${{ runner.os }}" in
-            macOS) test -f "$media/gstreamer/lib/libgstreamer-1.0.0.dylib" || { echo "no GStreamer in the media plugin's folder"; exit 1; }
-                   ls "$media/gstreamer/lib/gstreamer-1.0" | head -5
-                   test ! -e gstreamer || { echo "GStreamer beside the binary"; exit 1; } ;;
-            Windows) test -f "$media/gstreamer-1.0-0.dll" || { echo "no GStreamer in the media plugin's folder"; exit 1; }
-                     ls "$media/lib/gstreamer-1.0" | head -5
-                     test ! -e gstreamer-1.0-0.dll || { echo "GStreamer beside the binary"; exit 1; }
-                     test ! -e gstreamer-1.0 || { echo "GStreamer's elements beside the binary"; exit 1; } ;;
-          esac
+          if [ "${{ runner.os }}" != "Linux" ]; then
+            found="$(find . -iname '*gst*' -o -iname '*gstreamer*' | head -5)"
+            test -z "$found" || { echo "GStreamer in the archive:"; echo "$found"; exit 1; }
+          fi
           # Linux: the desktop entry and the icons under share/
           # (specs/app-icons.md): the entry valid and naming the app id
           # `rick` as its icon and its StartupWMClass, and every file of
@@ -549,16 +586,15 @@ jobs:
           printf '%s\n' "$out" | sed -n 1p | grep -Eq "^Rick ${version%%-*}(-[0-9A-Za-z.]+)?$" || { echo "unexpected version line"; exit 1; }
           printf '%s\n' "$out" | sed -n 2p | grep -Eq "^[0-9a-f]{7,} · (Linux|macOS|Windows) [a-z0-9_]+ · plugin ABI [0-9]+ · built [0-9]{4}-[0-9]{2}-[0-9]{2}$" || { echo "unexpected build line"; exit 1; }
           printf '%s\n' "$out" | sed -n 3p | grep -q "^rustc " || { echo "no toolchain line"; exit 1; }
-          printf '%s\n' "$out" | grep -Eq "^git [0-9][^ ]* loaded$" || { echo "the git plugin is not listed as loaded"; exit 1; }
-          # The plugins, bundled and loaded from plugins/<id>/: Git and SVN,
-          # the archive and trash providers of issue 20, the previewers of
-          # issue 18 and the markup previewer of issue 51, the hex fallback
-          # of issue 17, the subdirectory search and this platform's index
-          # connector of issue 22; and the 7-Zip library with its licence
-          # beside the archive plugin (issue 51). The media previewer
-          # loading on macOS and Windows shows the bundled GStreamer runtime
-          # resolves; on Linux the runner's system GStreamer does.
-          "$GITHUB_WORKSPACE/.github/scripts/check-plugins.sh" . --sevenzip
+          printf '%s\n' "$out" | grep -Eq "^vfs-trash [0-9][^ ]* loaded$" || { echo "the trash plugin is not listed as loaded"; exit 1; }
+          # The default set, in plugins/<id>/ and loaded: the trash and
+          # archive providers, the archive, markup, hex and icon previewers,
+          # the subdirectory search and this platform's index connectors,
+          # the actions and the installer, on Linux the media previewer
+          # with the runner's system GStreamer; no separate plugin and
+          # nothing else in plugins/; and the 7-Zip library with its
+          # licence beside the archive plugin (issue 51).
+          "$GITHUB_WORKSPACE/.github/scripts/check-plugins.sh" . --sevenzip --archive
           # pdfium from beside the binary: the previewer's test binary, copied
           # next to rick, with no setting (a fresh runner) and no system
           # pdfium. The example has no run path of its own, so the library
@@ -581,34 +617,41 @@ jobs:
             # Visual Studio and rick.exe starting here proves nothing.
             python3 "$GITHUB_WORKSPACE/.github/scripts/check-vcruntime.py" .
           fi
-          # The media preview, played for real: the host's test binary
-          # loads the plugins as rick does and plays the sample video
-          # through the previewer that claims it. On Linux from the
-          # archive, with the system GStreamer. On macOS and Windows the
-          # media plugin's folder is first moved into the per-user plugins
-          # folder, as a package installed with Install from file… lies
-          # there: the runtime in it has to be found from there, on a
-          # runner that has no GStreamer of its own.
-          cp "$GITHUB_WORKSPACE/check/preview_check$exe" .
-          chmod +x "preview_check$exe"
+          # The packages, installed the way Install from file… does it:
+          # each is unpacked into the per-user plugins folder, which is
+          # empty on this runner, its folder whole. Every separate plugin
+          # of the platform then loads, which it can only do from there.
           case "${{ runner.os }}" in
             macOS) user_plugins="$HOME/Library/Application Support/Rick/plugins" ;;
             Windows) user_plugins="$(cygpath -u "$APPDATA")/Rick/plugins" ;;
-            *) user_plugins="" ;;
+            *) user_plugins="${XDG_CONFIG_HOME:-$HOME/.config}/rick/plugins" ;;
           esac
-          from="beside the binary"
-          if [ -n "$user_plugins" ]; then
-            if command -v gst-inspect-1.0 > /dev/null || [ -e /Library/Frameworks/GStreamer.framework ]; then
-              echo "this runner has a GStreamer of its own; the test would prove nothing"; exit 1
-            fi
-            mkdir -p "$user_plugins"
-            rm -rf "$user_plugins/preview-media"
-            mv plugins/preview-media "$user_plugins/"
-            from="per-user"
-            "./rick$exe" --list-plugins | tee plugins.txt
-            grep -Eq "^preview-media +[^|]* +previewer +loaded +.*[/\\]Rick[/\\]plugins[/\\]preview-media" plugins.txt \
-              || { echo "the media plugin did not load from the per-user folder"; exit 1; }
+          if [ -d "$user_plugins" ] && [ -n "$(ls -A "$user_plugins")" ]; then
+            echo "$user_plugins is not empty on this runner"; ls "$user_plugins"; exit 1
           fi
+          if [ "${{ runner.os }}" != "Linux" ]; then
+            if command -v gst-inspect-1.0 > /dev/null || [ -e /Library/Frameworks/GStreamer.framework ]; then
+              echo "this runner has a GStreamer of its own; the media test would prove nothing"; exit 1
+            fi
+          fi
+          mkdir -p "$user_plugins"
+          for package in "$dist"/*-"${{ matrix.platform }}".rkp; do
+            echo "installing $(basename "$package")"
+            python3 -m zipfile -e "$package" "$user_plugins"
+          done
+          ls "$user_plugins"
+          "$GITHUB_WORKSPACE/.github/scripts/check-plugins.sh" . --archive --installed
+          # The media preview, played for real: the host's test binary
+          # loads the plugins as rick does and plays the sample video
+          # through the previewer that claims it. On Linux the plugin is
+          # the archive's, with the system GStreamer. On macOS and Windows
+          # it is the one just installed from its package, and the runtime
+          # in its folder has to be found from there, on a runner that has
+          # no GStreamer of its own.
+          cp "$GITHUB_WORKSPACE/check/preview_check$exe" .
+          chmod +x "preview_check$exe"
+          from="per-user"
+          if [ "${{ runner.os }}" = "Linux" ]; then from="beside the binary"; fi
           sample="$GITHUB_WORKSPACE/check/sample.mp4"
           if ! LD_LIBRARY_PATH=. DYLD_LIBRARY_PATH=. "./preview_check$exe" "$sample" --play | tee media.txt; then
             # GStreamer's own account of what refused, for whoever reads
@@ -641,7 +684,11 @@ jobs:
           python3 .github/scripts/changelog-section.py "$TAG" CHANGELOG.md > body.md
           {
             echo
-            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, SVN, archive, trash, Office, media, archive-preview, markup (Markdown, HTML, CSV), hex-preview and subdirectory-search plugins and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo), the 7-Zip library (LGPL) beside the archive plugin for the disk images, the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), on Linux the desktop entry and the icons under \`share/\` in the XDG layout (copy \`share/\` into \`~/.local/share/\` and put \`rick\` on the PATH, or install the tarball with Rick's installer plugin), on macOS all of it inside \`Rick.app\` (drag it to Applications), LICENSE, README, CHANGELOG, THIRD-PARTY-LICENSES, the 7-Zip licence and \`third-party.json\` beside the binary (the component list the About dialog shows); \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see docs/building.md)."
+            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, and \`plugins/\` with the plugins every install has: the trash and the archives, the previewers for archives, markup (Markdown, HTML, CSV), icons and the hex view, the subdirectory search and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo), bulk rename, compress and extract, compare, the console and the installer, and on Linux the audio and video previewer (it uses the system's GStreamer: install the gstreamer1.0 plug-in packages for playback). Also the 7-Zip library (LGPL) beside the archive plugin for the disk images, on Linux the desktop entry and the icons under \`share/\` in the XDG layout (copy \`share/\` into \`~/.local/share/\` and put \`rick\` on the PATH, or install the tarball with Rick's installer plugin), on macOS all of it inside \`Rick.app\` (drag it to Applications), LICENSE, README, CHANGELOG, THIRD-PARTY-LICENSES, the 7-Zip licence and \`third-party.json\` beside the binary (the component list the About dialog shows)."
+            echo
+            echo "Plugins that are separate downloads: Git, SVN, ZFS (Linux), SSH, S3, Azure Blob, Google Cloud Storage, Office documents, 3D models and, on macOS and Windows, audio and video with its GStreamer runtime. Each is one \`<id>-<version>-<platform>.rkp\` below. Download the ones for your platform and install them with *Install from file…* in the Extensions dialogue; they are loaded at the next start. A package fits the Rick of this release only. \`plugins-<platform>.json\` lists a platform's packages for the plugin registry."
+            echo
+            echo "\`SHA256SUMS.txt\` has the checksums of the archives, the packages and the lists. Not signed or notarised (see docs/building.md)."
           } >> body.md
           cat body.md
       - uses: softprops/action-gh-release@v2
@@ -655,5 +702,7 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.zip
+            dist/*.rkp
+            dist/plugins-*.json
             dist/SHA256SUMS.txt
           fail_on_unmatched_files: true
