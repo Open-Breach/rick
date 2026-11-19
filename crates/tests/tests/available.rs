@@ -140,7 +140,8 @@ fn window(start: &Start<'_>) -> (Harness<'static, RickUi>, Restarts) {
     (harness, restarts)
 }
 
-/// A window of Rick after its start, with no dialogue open.
+/// A window of Rick a minute after its start, when the background check
+/// of the plugin list has been, with no dialogue open.
 fn shell(start: &Start<'_>) -> (Harness<'static, RickUi>, Restarts) {
     let config = start.fake.config_dir();
     fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
@@ -173,6 +174,10 @@ fn shell(start: &Start<'_>) -> (Harness<'static, RickUi>, Restarts) {
         .with_size(egui::vec2(1200.0, 820.0))
         .with_pixels_per_point(1.0)
         .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx).with_relaunch(hook));
+    settle(&mut harness);
+    // The first frame read the cache and asked nobody; a minute later
+    // the background check does.
+    registry::background_check(harness.state_mut().app_mut());
     settle(&mut harness);
     (harness, restarts)
 }
@@ -977,4 +982,240 @@ fn install_from_url_downloads_a_package_and_handles_it_as_a_file() {
     assert!(record.contains("[probe]\nsource = \"url\""), "{record}");
     assert!(record.contains(&format!("url = \"{address}\"")), "{record}");
     assert!(record.contains(&sha256(&package)), "{record}");
+}
+
+/// The page of the release the tests' list names as the newest.
+const RELEASE_PAGE: &str = "https://github.com/Open-Breach/rick/releases/tag/v0.7.0";
+
+/// Clicks the one control with `role` called `label` and gives the
+/// addresses the window asked the system to open in the frames after.
+fn opened_by(harness: &mut Harness<'_, RickUi>, role: Role, label: &str) -> Vec<String> {
+    harness.get_by_role_and_label(role, label).click();
+    let mut opened = Vec::new();
+    for _ in 0..6 {
+        harness.step();
+        for command in &harness.output().platform_output.commands {
+            if let egui::OutputCommand::OpenUrl(open) = command {
+                opened.push(open.url.clone());
+            }
+        }
+    }
+    settle(harness);
+    opened
+}
+
+/// The update notice for Rick itself (specs/plugin-distribution.md §6,
+/// specs/gui-title-row.md *Menu*, specs/about-dialog.md): the plugin
+/// list names a newer release. A toast says so once, with **Download**;
+/// the menu button carries the attention dot and the menu has *Update
+/// available* until Rick is that release; the About dialog has the same
+/// line. Each of the three opens the release's page, and no request is
+/// made beyond the two files of the list.
+#[test]
+fn a_newer_rick_is_said_once_and_stays_in_the_menu_and_in_about() {
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(
+        &signer,
+        &registry::index_with_latest(&[git()], "0.7.0", RELEASE_PAGE),
+    );
+    let fake = fake();
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let start = |rick: &'static str| Start {
+        fake: &fake,
+        settings: registry::rick_toml(&server, &signer, true),
+        rick,
+        folder: dir.path(),
+        rows: Vec::new(),
+        packaging: None,
+    };
+    let available = "Rick 0.7.0 is available";
+
+    // The list arrives with the background check: the toast, with its
+    // button, and the dot on the menu button.
+    let (mut harness, _) = shell(&start(RICK));
+    assert_eq!(server.requests().len(), 2, "the list, and nothing for this");
+    assert_eq!(
+        harness.state().toasts(),
+        [(Level::Info, available.to_owned())]
+    );
+    let menu = harness.get_by_role_and_label(Role::Button, "Menu").rect();
+    let dot = harness
+        .get_by_role_and_label(Role::Label, "Update available")
+        .rect();
+    assert!(menu.contains_rect(dot), "the dot is on the menu button");
+    assert!((dot.width() - 8.0).abs() < 0.5 && (dot.height() - 8.0).abs() < 0.5);
+    assert!(
+        dot.center().x > menu.center().x && dot.center().y < menu.center().y,
+        "at the icon's top right"
+    );
+
+    // Download opens the release's page and the toast has done its work.
+    assert_eq!(
+        opened_by(&mut harness, Role::Button, "Download"),
+        [RELEASE_PAGE]
+    );
+    assert_eq!(harness.state().toasts(), []);
+    // The dot stays: Rick is not that release yet.
+    harness.get_by_role_and_label(Role::Label, "Update available");
+
+    // The menu: Update available above About Rick, with the release's
+    // version where About Rick has its own. It does what the button did.
+    harness.get_by_role_and_label(Role::Button, "Menu").click();
+    steps(&mut harness);
+    let entry = harness
+        .get_by_role_and_label(Role::Button, "Update available")
+        .rect();
+    let about = harness
+        .get_by_role_and_label(Role::Button, "About Rick")
+        .rect();
+    assert!(entry.bottom() <= about.top() + 0.5, "above About Rick");
+    assert!((entry.left() - about.left()).abs() < 0.5 && (entry.height() - 32.0).abs() < 0.5);
+    assert_eq!(
+        opened_by(&mut harness, Role::Button, "Update available"),
+        [RELEASE_PAGE]
+    );
+    assert_eq!(
+        count(&harness, "About Rick"),
+        0,
+        "the menu closed with the click"
+    );
+
+    // The About dialog: the same line under the build line, and Download
+    // as a link.
+    harness.state_mut().open_about();
+    steps(&mut harness);
+    let said = harness.get_by_label(available).rect();
+    // A link is a label to the accessibility tree.
+    let download = harness
+        .get_by_role_and_label(Role::Label, "Download")
+        .rect();
+    assert!((said.center().y - download.center().y).abs() < 2.0 && download.left() > said.right());
+    let copy = harness.get_by_label("Copy details").rect();
+    assert!(said.bottom() < copy.top(), "above the two buttons");
+    assert_eq!(
+        opened_by(&mut harness, Role::Label, "Download"),
+        [RELEASE_PAGE]
+    );
+    assert_eq!(
+        server.requests().len(),
+        2,
+        "still the two files of the list"
+    );
+    drop(harness);
+
+    // The next start: the release was said, and is not said again. The
+    // dot and the entry are there all the same.
+    let (mut harness, _) = shell(&start(RICK));
+    assert_eq!(harness.state().toasts(), []);
+    harness.get_by_role_and_label(Role::Label, "Update available");
+    harness.get_by_role_and_label(Role::Button, "Menu").click();
+    steps(&mut harness);
+    harness.get_by_role_and_label(Role::Button, "Update available");
+    drop(harness);
+
+    // A Rick that is that release has no notice of any kind.
+    let (mut harness, _) = shell(&start("0.7.0"));
+    assert_eq!(harness.state().toasts(), []);
+    assert_eq!(count(&harness, "Update available"), 0);
+    harness.get_by_role_and_label(Role::Button, "Menu").click();
+    steps(&mut harness);
+    harness.get_by_role_and_label(Role::Button, "About Rick");
+    assert_eq!(count(&harness, "Update available"), 0);
+    harness.key_press(egui::Key::Escape);
+    steps(&mut harness);
+    harness.state_mut().open_about();
+    steps(&mut harness);
+    harness.get_by_label("Copy details");
+    assert_eq!(count(&harness, available), 0);
+}
+
+/// A Rick a package manager installed is updated there: the toast and
+/// the About line say so, and nothing offers a download.
+#[test]
+fn a_packaged_rick_is_told_to_update_through_its_package_manager() {
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(
+        &signer,
+        &registry::index_with_latest(&[git()], "0.7.0", RELEASE_PAGE),
+    );
+    let fake = fake();
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, _) = shell(&Start {
+        fake: &fake,
+        settings: registry::rick_toml(&server, &signer, true),
+        rick: RICK,
+        folder: dir.path(),
+        rows: Vec::new(),
+        packaging: Some(app::plugins::Packaging::Deb),
+    });
+    let packaged = "Rick 0.7.0 is available. Update it through your package manager.";
+    assert_eq!(
+        harness.state().toasts(),
+        [(Level::Info, packaged.to_owned())]
+    );
+    assert_eq!(count(&harness, "Download"), 0);
+    harness.get_by_role_and_label(Role::Label, "Update available");
+
+    // The entry is there and opens nothing: it says the same again.
+    harness.get_by_role_and_label(Role::Button, "Menu").click();
+    steps(&mut harness);
+    assert_eq!(
+        opened_by(&mut harness, Role::Button, "Update available"),
+        [] as [&str; 0]
+    );
+    assert_eq!(
+        harness.state().toasts(),
+        [(Level::Info, packaged.to_owned())],
+        "said once while it is shown"
+    );
+
+    harness.state_mut().open_about();
+    steps(&mut harness);
+    // The toast and the dialog's line.
+    assert_eq!(count(&harness, packaged), 2);
+    assert_eq!(count(&harness, "Download"), 0);
+}
+
+/// The notice is under the same switch as the list: with *Look for
+/// plugins and updates online* off, a list that names a newer Rick makes
+/// no toast, no dot, no entry and no line.
+#[test]
+fn with_the_switch_off_a_newer_rick_is_not_said() {
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(
+        &signer,
+        &registry::index_with_latest(&[git()], "0.7.0", RELEASE_PAGE),
+    );
+    let fake = fake();
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let start = |check: bool| Start {
+        fake: &fake,
+        settings: registry::rick_toml(&server, &signer, check),
+        rick: RICK,
+        folder: dir.path(),
+        rows: Vec::new(),
+        packaging: None,
+    };
+    // A start with the switch on leaves the list in the cache.
+    let (harness, _) = shell(&start(true));
+    assert_eq!(harness.state().toasts().len(), 1);
+    drop(harness);
+    // Forget that the release was said, so that only the switch stands
+    // between the list and a toast.
+    let said = fake
+        .config_dir()
+        .join(app::CACHE_DIR)
+        .join(plugins_registry::CACHE_DIR)
+        .join("release-announced");
+    fs::remove_file(&said).unwrap_or_else(|e| panic!("{e}"));
+
+    let (mut harness, _) = shell(&start(false));
+    assert!(harness.state().app().plugin_registry().index.is_some());
+    assert_eq!(harness.state().toasts(), []);
+    assert_eq!(count(&harness, "Update available"), 0);
+    harness.get_by_role_and_label(Role::Button, "Menu").click();
+    steps(&mut harness);
+    harness.get_by_role_and_label(Role::Button, "About Rick");
+    assert_eq!(count(&harness, "Update available"), 0);
+    assert!(!said.exists(), "and nothing was said to remember");
 }

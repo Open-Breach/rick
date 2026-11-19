@@ -32,6 +32,10 @@ menu-application-menu = Menu
 menu-new-window = New window
 menu-layouts = Layouts
 about-rick = About Rick
+update-entry = Update available
+update-available = Rick { $version } is available
+update-available-packaged = Rick { $version } is available. Update it through your package manager.
+update-download = Download
 continue-where-i-left-off = Continue where I left off
 menu-switch = Switch
 menu-set-as-start-layout = Set as start layout
@@ -402,6 +406,7 @@ plugins-download-mismatch = The download did not match the plugin list
 plugins-download-failed = The plugin could not be downloaded: { $reason }
 plugins-address-refused = { $url } was not requested: a plugin package needs an https:// address
 plugins-redirect-refused = The download was sent on to { $url }, which was not requested: a plugin package needs an https:// address
+plugins-redirect-inward = The download was sent on to { $url }, which was not requested: another machine may not send a download on to this one
 # The plugin registry in the Extensions dialogue
 # (specs/plugin-distribution.md §6 and §7, issue 251).
 extensions-tab-installed = Installed

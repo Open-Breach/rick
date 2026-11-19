@@ -65,7 +65,7 @@ const LABEL: f32 = 96.0;
 /// A row of the info card.
 const INFO_ROW: f32 = 39.0;
 /// The attention dot.
-const DOT: f32 = 8.0;
+const DOT: f32 = widgets::ATTENTION_DOT;
 /// The strip at the foot of the *Available* list: the list's date, or why
 /// the last check gave none, and *Check now*.
 const STRIP: f32 = 52.0;
@@ -1117,15 +1117,12 @@ fn row(
     );
     right -= 32.0 + 10.0;
     if attention(app, plugin).is_some() {
-        let dot = Rect::from_center_size(pos2(right - DOT / 2.0, inner.center().y), vec2(DOT, DOT));
-        ui.painter()
-            .circle_filled(dot.center(), DOT / 2.0, scheme.status_warning);
-        let needs = t!("extensions-needs-attention");
-        ui.interact(dot, ui.id().with(("dot", &plugin.path)), Sense::hover())
-            .on_hover_text(&needs)
-            .widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Label, true, needs.clone())
-            });
+        widgets::attention_dot(
+            ui,
+            pos2(right - DOT / 2.0, inner.center().y),
+            ui.id().with(("dot", &plugin.path)),
+            &t!("extensions-needs-attention"),
+        );
         right -= DOT + 10.0;
     }
     if waits_for_restart(app, plugin) {

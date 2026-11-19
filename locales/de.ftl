@@ -45,6 +45,10 @@ shortcuts-reset = Auf Standard zurücksetzen: { $keys }
 shortcuts-reset-of = { $action } auf Standard zurücksetzen: { $keys }
 shortcuts-reset-all = Alle auf Standard zurücksetzen
 about-rick = Über Rick
+update-entry = Aktualisierung verfügbar
+update-available = Rick { $version } ist verfügbar
+update-available-packaged = Rick { $version } ist verfügbar. Aktualisiere es über deinen Paketmanager.
+update-download = Herunterladen
 
 # Das Burger-Menü und die Layouts
 menu-application-menu = Menü
@@ -167,6 +171,7 @@ plugins-download-mismatch = Der Download stimmt nicht mit der Plugin-Liste über
 plugins-download-failed = Das Plugin konnte nicht heruntergeladen werden: { $reason }
 plugins-address-refused = { $url } wurde nicht abgerufen: Ein Plugin-Paket braucht eine https://-Adresse
 plugins-redirect-refused = Der Download wurde an { $url } weitergeleitet, was nicht abgerufen wurde: Ein Plugin-Paket braucht eine https://-Adresse
+plugins-redirect-inward = Der Download wurde an { $url } weitergeleitet, was nicht abgerufen wurde: Ein anderer Rechner darf einen Download nicht an diesen weiterleiten
 extensions-tab-installed = Installiert
 extensions-tab-available = Verfügbar
 extensions-tab-available-count = Verfügbar { $count }

@@ -2,22 +2,28 @@
 //! (specs/plugin-distribution.md §6).
 //!
 //! The client is the crate `plugins-registry`; this module decides when it
-//! is asked. Three occasions reach it as a [`RegistryCommand`]: the start,
-//! once the first frame is drawn, the opening of the Extensions dialogue's
-//! *Available* view, and *Check now*. Each runs as a job off the loop's
-//! thread and answers with messages to the loop, which folds them into
-//! [`PluginRegistry`], what the dialogue is drawn from.
+//! is asked. Four occasions reach it as a [`RegistryCommand`]: the start,
+//! once the first frame is drawn, the background check, the opening of
+//! the Extensions dialogue's *Available* view, and *Check now*. Each runs
+//! as a job off the loop's thread and answers with messages to the loop,
+//! which folds them into [`PluginRegistry`], what the dialogue is drawn
+//! from.
 //!
 //! - Without a public key the registry is off: nothing is read and nothing
 //!   is fetched, whatever asks.
-//! - The cached index is read once, at the first occasion, and verified as
-//!   every read of it is.
-//! - With *Look for plugins and updates online* on (`[registry] check`),
-//!   the start fetches when the cached index is a day old or there is
-//!   none, and the opening of the view fetches. With it off only *Check
-//!   now* does.
-//! - A fetch that fails leaves the last good index in place and says why;
-//!   it is tried again at the next occasion, never in a loop.
+//! - The cached index is read once, at the start, and verified as every
+//!   read of it is. The start asks nobody.
+//! - The background check comes [`REGISTRY_AFTER_START`] after the start
+//!   and from then on whenever the list becomes a day old, for as long as
+//!   Rick runs: in a Rick that stays open, every 24 hours. With *Look for
+//!   plugins and updates online* on (`[registry] check`) it fetches when
+//!   the cached index is a day old or there is none; so does the opening
+//!   of the view, whatever the list's age. With the switch off only
+//!   *Check now* fetches.
+//! - A fetch that fails leaves the last good index in place and says why.
+//!   The background check tries again a day after the try that failed,
+//!   never sooner by itself and never in a loop; the next start, the
+//!   opening of the view and *Check now* are occasions of their own.
 //! - A Rick with a pre-release part in its version fits nothing the
 //!   registry has, and asks for nothing.
 //!
@@ -42,13 +48,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use ext::{Points, t};
 use plugins_registry::{
-    Cache, Cached, Expected, Index, Offer, Source, download, due, is_pre_release, refresh,
+    CHECK_EVERY, Cache, Cached, Expected, Index, Offer, Source, download, due_after,
+    is_pre_release, refresh,
 };
-use types::{JobId, Progress};
+use types::{CancelToken, JobId, Progress};
 
 use crate::plugins::{self, Origin};
 use crate::{App, Event, Msg};
@@ -66,6 +73,44 @@ const DOWNLOADS_DIR: &str = "downloads";
 /// Rick whose updates were announced: the toast of the first start that
 /// finds any is shown once for a release of Rick, not at every start.
 const ANNOUNCED_FILE: &str = "updates-announced";
+
+/// The file beside the cached plugin list that holds the version of the
+/// newest release of Rick the user was told of: the toast that says a
+/// newer Rick is available is shown once for a release, not at every
+/// start.
+const RELEASE_FILE: &str = "release-announced";
+
+/// What the files of the cache say was announced before this run.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Announced {
+    /// The release of Rick whose plugin updates were said
+    /// ([`ANNOUNCED_FILE`]).
+    updates: Option<String>,
+    /// The newest release of Rick that was said to be available
+    /// ([`RELEASE_FILE`]).
+    release: Option<String>,
+}
+
+/// How long after the start the background check first looks whether the
+/// plugin list is a day old: not at the start itself, which has enough
+/// to do and asks nobody.
+pub const REGISTRY_AFTER_START: Duration = Duration::from_mins(1);
+
+/// The longest the background check's timer sleeps at a stretch. A
+/// machine that is suspended does not count the time for a timer on
+/// every platform, so the timer looks at the clock again every hour
+/// rather than once in a day; a look that finds the list younger than a
+/// day asks nobody and costs nothing.
+const LOOK_EVERY: Duration = Duration::from_hours(1);
+
+/// When the background check runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Schedule {
+    /// How long after the start it first looks.
+    after_start: Duration,
+    /// How old the list is when it is fetched again.
+    every: Duration,
+}
 
 /// Whether `offered` is a higher version than `installed`, as versions
 /// where both are, and never when either is none.
@@ -95,6 +140,7 @@ fn failure(error: &plugins_registry::Error) -> types::Error {
             url,
             redirected: true,
         } => t!("plugins-redirect-refused", url = url.as_str()),
+        Error::Inward { url } => t!("plugins-redirect-inward", url = url.as_str()),
         other => other.to_string(),
     })
 }
@@ -102,9 +148,15 @@ fn failure(error: &plugins_registry::Error) -> types::Error {
 /// An occasion to read the plugin list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegistryCommand {
-    /// The first frame is drawn: read what is cached and, with the switch
-    /// on, fetch when the last fetch is a day old.
+    /// The first frame is drawn: read what is cached, ask nobody, and
+    /// set the background check for [`REGISTRY_AFTER_START`] from now.
     Start,
+    /// The background check's time has come: a while after the start,
+    /// and from then on whenever the list becomes a day old. With the
+    /// switch on, fetch when the cached list is a day old or there is
+    /// none. The application's own timer sends this; nothing of the
+    /// interface does.
+    Daily,
     /// The *Available* view was opened: fetch, with the switch on.
     Opened,
     /// *Check now*: fetch, whatever the switch says.
@@ -137,7 +189,7 @@ impl From<&plugins_registry::Error> for RegistryProblem {
             Error::Unverified => Self::Unverified,
             Error::NewerSchema(_) => Self::NewerRick,
             // An index at an address that is not asked did not arrive.
-            Error::Fetch(_) | Error::Refused { .. } => Self::Offline,
+            Error::Fetch(_) | Error::Refused { .. } | Error::Inward { .. } => Self::Offline,
             Error::NotSetUp
             | Error::Unreadable(_)
             | Error::Mismatch
@@ -145,6 +197,20 @@ impl From<&plugins_registry::Error> for RegistryProblem {
             | Error::Io { .. } => Self::Unreadable,
         }
     }
+}
+
+/// A release of Rick newer than the one that runs, as the plugin list
+/// names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RickUpdate {
+    /// Its version, `0.7.0`.
+    pub version: String,
+    /// The address of its release page, for the browser. `None` for a
+    /// Rick a package manager installed, which is updated there, and
+    /// when the list names no `https://` address.
+    pub page: Option<String>,
+    /// A package manager installed this Rick and updates it.
+    pub packaged: bool,
 }
 
 /// What the application knows of the plugin registry.
@@ -260,6 +326,17 @@ pub(crate) struct RegistryRun {
     /// Where the index is and which key signs it, as `rick.toml` had it
     /// at the start: another address or key is taken up by the next start.
     source: Source,
+    /// When the background check runs.
+    schedule: Schedule,
+    /// Stops the timer of the background check that is waiting, if one
+    /// is: there is never more than one.
+    timer: CancelToken,
+    /// The updates were said in this run of Rick, whatever the file of
+    /// the cache says by now.
+    said: bool,
+    /// The newest release of Rick the user was told of, in this run or
+    /// in one before it.
+    release_said: Option<String>,
 }
 
 impl RegistryRun {
@@ -290,7 +367,19 @@ impl RegistryRun {
             from_address: BTreeSet::new(),
             packaging: None,
             source,
+            schedule: Schedule {
+                after_start: REGISTRY_AFTER_START,
+                every: CHECK_EVERY,
+            },
+            timer: CancelToken::new(),
+            said: false,
+            release_said: None,
         }
+    }
+
+    /// Stops the background check's timer: the application is going.
+    pub(crate) fn stop(&self) {
+        self.timer.cancel();
     }
 }
 
@@ -332,6 +421,15 @@ impl App {
         version.clone_into(&mut self.plugin_registry.view.rick);
     }
 
+    /// Sets when the background check runs: `after_start` after the
+    /// start, and from then on whenever the plugin list is `every` old.
+    /// Rick's own are [`REGISTRY_AFTER_START`] and a day; a test that
+    /// watches the check come round gives it shorter ones. Takes effect
+    /// for the timers set from now on, so it is called before the start.
+    pub fn set_registry_schedule(&mut self, after_start: Duration, every: Duration) {
+        self.plugin_registry.schedule = Schedule { after_start, every };
+    }
+
     /// Handles a [`Command::Registry`](crate::Command::Registry).
     pub(crate) fn registry_command(&mut self, command: RegistryCommand) {
         let source = self.plugin_registry.source.clone();
@@ -339,38 +437,72 @@ impl App {
             // Off: nothing is read and nothing is fetched.
             return;
         };
-        if is_pre_release(&self.plugin_registry.view.rick) || self.plugin_registry.job.is_some() {
+        if is_pre_release(&self.plugin_registry.view.rick) {
+            return;
+        }
+        let schedule = self.plugin_registry.schedule;
+        let daily = command == RegistryCommand::Daily;
+        if self.plugin_registry.job.is_some() {
+            // A check is running: the background one looks again shortly.
+            if daily {
+                self.registry_arm(schedule.after_start);
+            }
             return;
         }
         let allowed = self.model.settings.registry.check;
+        // The background check asks only for a list that is a day old,
+        // and that is known here without a look at the disk.
+        let old = due_after(
+            self.plugin_registry.view.fetched,
+            SystemTime::now(),
+            schedule.every,
+        );
         let fetch = match command {
-            RegistryCommand::Start | RegistryCommand::Opened => allowed,
+            RegistryCommand::Start => false,
+            RegistryCommand::Daily => allowed && old,
+            RegistryCommand::Opened => allowed,
             RegistryCommand::CheckNow => true,
         };
         let read = !self.plugin_registry.cache_read;
         if !read && !fetch {
+            if daily {
+                // Not yet a day old, or not allowed: look again later.
+                self.registry_arm(self.registry_next());
+            }
             return;
         }
         self.plugin_registry.cache_read = true;
-        // The start waits for the cache's age before it is known whether
-        // it fetches; the two others fetch for certain.
-        let only_when_due = command == RegistryCommand::Start;
+        // The background check fetches only when the cache it has just
+        // read is a day old as well; the two the user starts fetch for
+        // certain, and say so while they do.
+        let only_when_due = daily;
+        // The start and the background check say what the list brought.
+        let background = matches!(command, RegistryCommand::Start | RegistryCommand::Daily);
         self.plugin_registry.view.checking = fetch && !only_when_due;
         let cache = Cache::new(&self.plugin_registry.cache_dir);
         let rick = self.plugin_registry.view.rick.clone();
         let tx = self.mailbox.clone();
         let handle = self.jobs.spawn(move |_job| async move {
-            // At a start: the release of Rick whose updates were said.
-            let announced = if only_when_due {
-                let file = cache.dir().join(ANNOUNCED_FILE);
+            // In the background: the release of Rick whose updates were
+            // said.
+            let announced = if background {
+                let folder = cache.dir().to_owned();
                 runtime::handle()
-                    .spawn_blocking(move || std::fs::read_to_string(file).ok())
+                    .spawn_blocking(move || {
+                        let said = |file: &str| {
+                            std::fs::read_to_string(folder.join(file))
+                                .ok()
+                                .map(|text| text.trim().to_owned())
+                        };
+                        Announced {
+                            updates: said(ANNOUNCED_FILE),
+                            release: said(RELEASE_FILE),
+                        }
+                    })
                     .await
-                    .ok()
-                    .flatten()
-                    .map(|text| text.trim().to_owned())
+                    .unwrap_or_default()
             } else {
-                None
+                Announced::default()
             };
             // Fresh is an index that can be used and is not a day old: a
             // cached one that does not verify is no reason to wait.
@@ -386,12 +518,15 @@ impl App {
                 };
                 let fresh = matches!(
                     &cached,
-                    Ok(Some(cached)) if !due(Some(cached.fetched), SystemTime::now())
+                    Ok(Some(cached))
+                        if !due_after(Some(cached.fetched), SystemTime::now(), schedule.every)
                 );
                 tx.send(Msg::RegistryCached(cached));
                 fresh
             } else {
-                !due(cache.fetched(), SystemTime::now())
+                // The cache was read before: the application knew the
+                // age of the list it holds and has decided.
+                false
             };
             let fetched = if fetch && !(only_when_due && fresh) {
                 tx.send(Msg::RegistryChecking);
@@ -401,7 +536,7 @@ impl App {
             };
             tx.send(Msg::RegistryDone {
                 fetched,
-                start: only_when_due,
+                command,
                 announced,
             });
             Ok(())
@@ -431,13 +566,16 @@ impl App {
     }
 
     /// A job ended, with the answer of its fetch when it made one. The
-    /// job of a `start` that finds updates says so, once for a release
-    /// of Rick: `announced` is the release they were last said for.
+    /// start and the background check set the timer of the next look,
+    /// and the first of them that finds updates says so, once for a
+    /// release of Rick. Whatever asked, a list that names a newer Rick
+    /// than this one says so, once for that release. `announced` is what
+    /// was said before this run.
     pub(crate) fn registry_done(
         &mut self,
         fetched: Option<Result<Cached, plugins_registry::Error>>,
-        start: bool,
-        announced: Option<&str>,
+        command: RegistryCommand,
+        announced: Announced,
         events: &mut Vec<Event>,
     ) {
         self.plugin_registry.job = None;
@@ -450,14 +588,35 @@ impl App {
             }
             None => {}
         }
-        if !start {
+        // The background check comes round: a while after the start, and
+        // after each of its own looks. One the user started leaves the
+        // timer as it stands; when that fires, the list is young, and
+        // the look sets it for the day the list turns old.
+        match command {
+            RegistryCommand::Start => {
+                self.registry_arm(self.plugin_registry.schedule.after_start);
+            }
+            RegistryCommand::Daily => self.registry_arm(self.registry_next()),
+            RegistryCommand::Opened | RegistryCommand::CheckNow => {}
+        }
+        // What an earlier run said of a newer Rick, where this run has
+        // said nothing yet.
+        if self.plugin_registry.release_said.is_none() {
+            self.plugin_registry.release_said = announced.release;
+        }
+        self.announce_release(events);
+        if !matches!(command, RegistryCommand::Start | RegistryCommand::Daily) {
             return;
         }
         let count = self.updates().len();
         let rick = self.plugin_registry.view.rick.clone();
-        if count == 0 || announced == Some(rick.as_str()) {
+        if count == 0
+            || self.plugin_registry.said
+            || announced.updates.as_deref() == Some(rick.as_str())
+        {
             return;
         }
+        self.plugin_registry.said = true;
         events.push(Event::PluginUpdates { count });
         let folder = Cache::new(&self.plugin_registry.cache_dir).dir().to_owned();
         runtime::handle().spawn_blocking(move || {
@@ -737,6 +896,88 @@ impl App {
     #[must_use]
     pub fn packaging(&self) -> Option<plugins::Packaging> {
         self.plugin_registry.packaging
+    }
+
+    /// The release of Rick that is newer than this one, when the plugin
+    /// list names one (specs/plugin-distribution.md §6, *The update
+    /// notice*): what the toast, the menu and the About dialog say. It is
+    /// read from the list Rick holds and asks nobody. `None` with *Look
+    /// for plugins and updates online* off, without a list, and while
+    /// this Rick is that release or a newer one.
+    #[must_use]
+    pub fn rick_update(&self) -> Option<RickUpdate> {
+        if !self.model.settings.registry.check {
+            return None;
+        }
+        let run = &self.plugin_registry;
+        let latest = run.view.index.as_ref()?.newer_than(&run.view.rick)?;
+        let packaged = run.packaging.is_some();
+        Some(RickUpdate {
+            version: latest.version.clone(),
+            // A packaged Rick is updated where it was installed.
+            page: latest.page().filter(|_| !packaged).map(str::to_owned),
+            packaged,
+        })
+    }
+
+    /// Says that a newer Rick is available, once for a release: the
+    /// release is remembered in the cache, beside the plugin list.
+    fn announce_release(&mut self, events: &mut Vec<Event>) {
+        let Some(update) = self.rick_update() else {
+            return;
+        };
+        if self.plugin_registry.release_said.as_deref() == Some(update.version.as_str()) {
+            return;
+        }
+        self.plugin_registry.release_said = Some(update.version.clone());
+        let version = update.version;
+        events.push(Event::RickUpdate {
+            version: version.clone(),
+        });
+        let folder = Cache::new(&self.plugin_registry.cache_dir).dir().to_owned();
+        runtime::handle().spawn_blocking(move || {
+            let written = std::fs::create_dir_all(&folder)
+                .and_then(|()| std::fs::write(folder.join(RELEASE_FILE), version));
+            if let Err(error) = written {
+                tracing::warn!(%error, "the announced release is not remembered");
+            }
+        });
+    }
+
+    /// How long until the background check is due again: until the list
+    /// that arrived last is a day old. A whole day when it is that old
+    /// already or there is none, which is after a check that failed and
+    /// while the switch is off: the background check does not try again
+    /// sooner by itself.
+    fn registry_next(&self) -> Duration {
+        let every = self.plugin_registry.schedule.every;
+        self.plugin_registry
+            .view
+            .fetched
+            .and_then(|fetched| SystemTime::now().duration_since(fetched).ok())
+            .and_then(|age| every.checked_sub(age))
+            .filter(|left| !left.is_zero())
+            .unwrap_or(every)
+    }
+
+    /// Sets the background check's timer: [`RegistryCommand::Daily`]
+    /// comes `after` from now, or after [`LOOK_EVERY`] when that is
+    /// sooner, and finds out then whether the list is a day old. A timer
+    /// that was waiting is dropped; there is one at most.
+    fn registry_arm(&mut self, after: Duration) {
+        self.plugin_registry.timer.cancel();
+        self.plugin_registry.timer = CancelToken::new();
+        let cancel = self.plugin_registry.timer.clone();
+        let tx = self.mailbox.clone();
+        let after = after.min(LOOK_EVERY);
+        runtime::handle().spawn(async move {
+            tokio::select! {
+                () = cancel.cancelled() => {}
+                () = tokio::time::sleep(after) => {
+                    tx.send(Msg::RegistryDue);
+                }
+            }
+        });
     }
 
     /// An index that verified is the one to show.

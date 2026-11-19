@@ -196,6 +196,8 @@ pub const FIT: &str = ph::ARROWS_IN;
 pub const ACTUAL_SIZE: &str = ph::FRAME_CORNERS;
 /// The File info badge.
 pub const INFO: &str = ph::INFO;
+/// *Update available* in the application menu.
+pub const UPDATE: &str = ph::ARROW_CIRCLE_UP;
 /// The licence row of the About dialog.
 pub const DOCUMENT: &str = ph::FILE_TEXT;
 /// The source-code row of the About dialog.
@@ -429,6 +431,7 @@ mod tests {
         CLOSE,
         PLUS,
         MENU,
+        UPDATE,
         SEARCH,
         UNDO,
         REDO,

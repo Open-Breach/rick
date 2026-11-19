@@ -96,8 +96,10 @@ impl Drop for Partial {
 ///
 /// # Errors
 ///
-/// [`Error::Refused`] for an address that is not asked, before any
-/// request to it; [`Error::Fetch`] when the package does not arrive,
+/// [`Error::Refused`] for an address that is not asked and
+/// [`Error::Inward`] for a redirect from another machine to this one,
+/// before any request to it; [`Error::Fetch`] when the package does not
+/// arrive,
 /// [`Error::Mismatch`] when it is not what `expected` describes, and the
 /// I/O error of the file.
 pub async fn download(

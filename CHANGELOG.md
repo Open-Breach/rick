@@ -88,13 +88,23 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   machine, a loopback address or `localhost`, and the same holds for
   every address a download is redirected to: no plain-HTTP request for a
   plugin leaves the machine, and an address that is refused is not asked
-  at all (#269, #274).
+  at all. A redirect from another machine to this one is refused as
+  well, whatever the scheme (#269, #274, #279).
 - **A Rick installed from a deb or an rpm** takes its separate plugins
   from its package manager: in place of **Install**, an available plugin
   shows the command, `sudo apt install rick-plugin-git` or `sudo dnf
   install rick-plugin-git`, with a copy button, and Rick downloads none.
   It knows by a file named `package` beside its binary, which the two
   packages install (#269).
+- **Rick says when a newer Rick is out.** The plugin list names the newest
+  release, so nothing is asked for it and nothing is installed by Rick
+  itself. A notice says *Rick 0.7.0 is available*, once for a release,
+  with **Download**, which opens the release page in the browser; the
+  menu button carries a dot and the menu has *Update available* until
+  Rick is that release, and the About dialog has the same line. A Rick
+  installed from a deb or an rpm is told to update through its package
+  manager instead. *Look for plugins and updates online* switches it off
+  with the rest (#281).
 - **Linux packages.** A release makes a deb for each supported Debian
   and Ubuntu release and an rpm for each supported Fedora release, for
   x86-64 and arm64, with the plugins every install has, and they go into
@@ -105,9 +115,10 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
 - ***Look for plugins and updates online*** on the Behaviour page of the
   settings, on by default; `[registry] check` in `rick.toml`. On, Rick
   fetches the plugin list when the *Available* list is opened and, in the
-  background, at most once a day, after the first frame is drawn. Off, it
-  fetches nothing by itself and shows what it has; **Check now** still
-  asks (#271).
+  background, once a day: one minute after the start when the list it
+  has is more than a day old, and again every 24 hours while it stays
+  open. The start itself asks nobody. Off, it fetches nothing by itself
+  and shows what it has; **Check now** still asks (#271, #280).
 - **The plugin list and what Rick sends for it.** The list is
   `https://get.openbreach.dev/registry/index.json` with a minisign
   signature beside it. Rick makes one request for each of the two files,

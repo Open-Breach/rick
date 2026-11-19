@@ -6,7 +6,9 @@
 //! `https://` is asked of any host, plain `http://` only of this machine,
 //! so that no plain-HTTP request ever leaves it. [`Clients::get`] is the
 //! one door, and it holds every address against the rule before it
-//! connects: the one it is given and each one a redirect names.
+//! connects: the one it is given and each one a redirect names. A
+//! redirect has a rule of its own on top ([`onward`]): another machine
+//! does not send a request on to this one, whatever the scheme.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
@@ -63,19 +65,51 @@ pub(crate) enum Way {
 /// the connection is made. `localhost` is not looked up either; the
 /// client of plain HTTP takes it for the loopback addresses itself.
 pub(crate) fn way(url: &reqwest::Url) -> Option<Way> {
-    let host = url.host_str().filter(|host| !host.is_empty())?;
+    url.host_str().filter(|host| !host.is_empty())?;
     match url.scheme() {
         "https" => Some(Way::Secure),
-        "http" => {
-            // An IPv6 address stands in brackets in an address.
-            let loopback = host
-                .trim_matches(['[', ']'])
-                .parse::<IpAddr>()
-                .is_ok_and(|address| address.is_loopback());
-            (loopback || host == LOCALHOST).then_some(Way::Local)
-        }
+        "http" if is_this_machine(url) => Some(Way::Local),
         _ => None,
     }
+}
+
+/// Whether the host of `url` is this machine, as [`way`] has it: a
+/// loopback address written as one, or the name `localhost`. The scheme
+/// does not enter into it.
+pub(crate) fn is_this_machine(url: &reqwest::Url) -> bool {
+    url.host_str().is_some_and(|host| {
+        host == LOCALHOST
+            // An IPv6 address stands in brackets in an address.
+            || host
+                .trim_matches(['[', ']'])
+                .parse::<IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    })
+}
+
+/// How a request that `from` answered with a redirect is sent on to
+/// `to`, when it is. Two rules, in this order:
+///
+/// - Another machine does not send a request on to this one, whatever
+///   the scheme of either address: a server elsewhere would otherwise
+///   have Rick ask a service of this machine for it. From this machine
+///   to this machine a redirect is followed.
+/// - `to` is an address [`way`] takes at all.
+///
+/// # Errors
+///
+/// [`Error::Inward`] for the first rule and [`Error::Refused`] for the
+/// second; nothing is sent to `to` in either case.
+pub(crate) fn onward(from: &reqwest::Url, to: &reqwest::Url) -> Result<Way, Error> {
+    if is_this_machine(to) && !is_this_machine(from) {
+        return Err(Error::Inward {
+            url: to.to_string(),
+        });
+    }
+    way(to).ok_or_else(|| Error::Refused {
+        url: to.to_string(),
+        redirected: true,
+    })
 }
 
 /// The one name that is this machine.
@@ -149,30 +183,37 @@ impl Clients {
 
     /// One GET of `address`, sent on along its redirects, and the answer
     /// of the last address: the caller reads its status and its body.
-    /// Every address is held against [`way`] before anything is sent to
-    /// it, the first and each one a redirect names, whatever address the
-    /// request started from; one that fails is not connected to.
+    /// Every address is held against the rule before anything is sent
+    /// to it: the first against [`way`], and each one a redirect names
+    /// against [`onward`], whatever address the request started from.
+    /// One that fails is not connected to.
     ///
     /// # Errors
     ///
-    /// [`Error::Refused`] for an address the rule does not take, before
-    /// any request to it; [`Error::Fetch`] when a request fails, when a
-    /// redirect names no address and after [`MAX_REDIRECTS`] of them.
+    /// [`Error::Refused`] for an address the rule does not take and
+    /// [`Error::Inward`] for a redirect from another machine to this
+    /// one, before any request to it; [`Error::Fetch`] when a request
+    /// fails, when a redirect names no address and after
+    /// [`MAX_REDIRECTS`] of them.
     pub(crate) async fn get(&self, address: &str) -> Result<reqwest::Response, Error> {
-        let refused = |url: String, redirected| Error::Refused { url, redirected };
-        let mut url = reqwest::Url::parse(address.trim())
-            .map_err(|_| refused(address.trim().to_owned(), false))?;
-        for hop in 0..=MAX_REDIRECTS {
-            let client = match way(&url) {
-                Some(Way::Secure) => &self.secure,
-                Some(Way::Local) => &self.local,
-                None => return Err(refused(url.into(), hop > 0)),
+        let refused = |url: String| Error::Refused {
+            url,
+            redirected: false,
+        };
+        let mut url =
+            reqwest::Url::parse(address.trim()).map_err(|_| refused(address.trim().to_owned()))?;
+        let mut way = way(&url).ok_or_else(|| refused(url.to_string()))?;
+        for _ in 0..=MAX_REDIRECTS {
+            let client = match way {
+                Way::Secure => &self.secure,
+                Way::Local => &self.local,
             };
-            let response = client.get(url).send().await.map_err(failed)?;
-            match redirect(&response)? {
-                Some(next) => url = next,
-                None => return Ok(response),
-            }
+            let response = client.get(url.clone()).send().await.map_err(failed)?;
+            let Some(next) = redirect(&response)? else {
+                return Ok(response);
+            };
+            way = onward(&url, &next)?;
+            url = next;
         }
         Err(Error::Fetch(format!(
             "{address}: more than {MAX_REDIRECTS} redirects"
@@ -238,7 +279,8 @@ async fn get(clients: &Clients, url: &str, limit: usize) -> Result<Vec<u8>, Erro
 ///
 /// [`Error::NotSetUp`] without a key, before any request;
 /// [`Error::Refused`] when the index's address, or one it is sent on to,
-/// is plain HTTP to another machine; [`Error::Fetch`] when either file
+/// is plain HTTP to another machine, and [`Error::Inward`] when another
+/// machine sends it on to this one; [`Error::Fetch`] when either file
 /// does not arrive;
 /// [`Error::Unverified`] when the signature is not the key's signature of
 /// the index; [`Error::NewerSchema`] and [`Error::Unreadable`] as

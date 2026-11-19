@@ -854,6 +854,15 @@ pub enum Event {
         /// How many plugins have an update.
         count: usize,
     },
+    /// The plugin list names a newer release of Rick than this one, and
+    /// the user has not been told of that release yet
+    /// (specs/plugin-distribution.md §6, *The update notice*): the UI
+    /// says so in a toast, once. What there is to say is
+    /// [`App::rick_update`](crate::App::rick_update).
+    RickUpdate {
+        /// The release's version.
+        version: String,
+    },
     /// What `Command::ShowProperties` found: the dialogue's contents.
     Properties(Box<PropertiesInfo>),
     /// The count of the folder the Properties dialogue shows is in.
@@ -1069,6 +1078,10 @@ impl fmt::Debug for Event {
             Self::PluginUpdates { count } => f
                 .debug_struct("PluginUpdates")
                 .field("count", count)
+                .finish(),
+            Self::RickUpdate { version } => f
+                .debug_struct("RickUpdate")
+                .field("version", version)
                 .finish(),
             Self::Properties(info) => f
                 .debug_struct("Properties")

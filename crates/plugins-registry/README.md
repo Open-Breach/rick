@@ -16,10 +16,13 @@ signature verifies (`minisign-verify`, the legacy form refused) and its
 `schema` is one this Rick reads; `Cache` keeps the last index that
 verified with its signature in `registry/` of Rick's cache directory and
 verifies it again on every read; `refresh` is a fetch written to the
-cache, and `due` says whether the daily check is due. `Index::offer` is
+cache, and `due` says whether the daily check is due (`due_after`
+for a check at another interval). `Index::offer` is
 the rule of what fits: a build is for one platform and one release of
 Rick, compared as whole strings, a pre-release Rick fits nothing, and
-neither does one older than the registry's oldest release. `download`
+neither does one older than the registry's oldest release.
+`Index::newer_than` is the update notice for Rick itself: the index names
+the newest release, and no request of its own is made for it. `download`
 fetches a package to a file, hashing it as it is written, and holds it
 against the size and the SHA-256 the index names: it stops as soon as more
 bytes arrive than were named, and a package that is another one is
@@ -30,8 +33,9 @@ plain `http://` to this machine — a loopback address written as one, or
 the name `localhost`, which the crate takes for the loopback address
 without a lookup — so that no plain-HTTP request leaves the machine. Each
 address a redirect names is held against it again before it is asked,
-plain HTTP never goes through a proxy, and an address that is refused
-gets no request. When to ask, and whether the user allows it, is `app`'s. The `fixtures` feature adds what a test
+a redirect from another machine to this one is refused whatever its
+scheme, plain HTTP never goes through a proxy, and an address that is
+refused gets no request. When to ask, and whether the user allows it, is `app`'s. The `fixtures` feature adds what a test
 needs to stand in for the registry — a key pair made on the spot that
 signs as minisign does (`ring` and `blake2`), and a server on this machine
 that counts what it is asked and can send a request on — and is the only
