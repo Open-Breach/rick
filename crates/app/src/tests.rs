@@ -386,14 +386,21 @@ fn settings_changes_are_saved_and_disk_edits_are_picked_up() {
     )));
 
     fs::write(&path, "font_size = \n").unwrap_or_else(|e| panic!("{e}"));
-    h.settle();
-    assert!(h.events.iter().any(|e| matches!(
-        e,
-        Event::Notify {
-            level: Level::Warning,
-            ..
-        }
-    )));
+    // The watcher reports this write when the platform gets to it, as it
+    // did the one above, and `settle` returns once nothing has arrived for
+    // 80 ms: the warning is waited for, as the reload was (issue 263).
+    let warned = wait_until(&mut h, Duration::from_secs(10), |h| {
+        h.events.iter().any(|e| {
+            matches!(
+                e,
+                Event::Notify {
+                    level: Level::Warning,
+                    ..
+                }
+            )
+        })
+    });
+    assert!(warned, "no warning for the broken file: {:?}", h.events);
     assert_eq!(
         h.app.model().settings.font_size,
         15,
