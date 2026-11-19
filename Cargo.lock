@@ -2241,11 +2241,11 @@ version = "0.5.0"
 dependencies = [
  "backhand",
  "bzip2",
- "chrono",
  "ext",
  "ext-installer",
  "flate2",
  "futures",
+ "jiff",
  "liblzma",
  "platform",
  "runtime",
