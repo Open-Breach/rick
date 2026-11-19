@@ -135,3 +135,62 @@ tempfile = { workspace = true }
 
 [lints]
 workspace = true
+
+# The Linux packages (docs/building.md, Linux packages). Trebuchet's
+# workflow linux-packages.yml, called from release.yml, makes a deb with
+# cargo-deb and an rpm with cargo-generate-rpm from this metadata, after
+# .github/scripts/linux-package.sh laid out target/release/package/: `bin/`
+# with the programs and `lib/` with what sits beside them, both installed
+# to /usr/lib/rick/, where Rick finds its libraries and `plugins/` beside
+# the binary as everywhere. /usr/bin/rick is a script that starts it there.
+# The call sets the version and names every dependency, per distribution.
+# The tools' own search for the libraries a binary links is off for both
+# formats (`depends = ""`, `auto-req = "no"`): Rick's binaries link the
+# kernel libraries and `libstd` that sit beside them in the package, and
+# that search stops at a library no package owns (deb) or makes the package
+# require it from another one (rpm).
+#
+# Both tools run in the workspace's root. cargo-deb reads a path from this
+# crate's folder, `target/` excepted, hence the `../../`; cargo-generate-rpm
+# reads it from the workspace's root.
+# `package` tells Rick which package manager it came from
+# (specs/plugin-distribution.md §7); the licence is the package's copyright
+# file, and the third-party licences are beside it.
+[package.metadata.deb]
+name = "rick"
+maintainer = "Open-Breach <packages@openbreach.dev>"
+section = "utils"
+priority = "optional"
+depends = ""
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+Rick is a file manager for professionals: lean and simple to use, powerful \
+and flexible underneath, and identical in look and behaviour on Linux, \
+macOS and Windows. This package holds Rick and the plugins every install \
+has."""
+assets = [
+  { source = "target/release/package/bin/*", dest = "usr/lib/rick/", mode = "755" },
+  { source = "target/release/package/lib/**/*", dest = "usr/lib/rick/", mode = "644" },
+  { source = "target/release/package/deb/package", dest = "usr/lib/rick/", mode = "644" },
+  { source = "../../packaging/linux/rick.sh", dest = "usr/bin/rick", mode = "755" },
+  { source = "../../packaging/linux/rick.desktop", dest = "usr/share/applications/", mode = "644" },
+  { source = "../../assets/icons/linux/hicolor/**/*", dest = "usr/share/icons/hicolor/", mode = "644" },
+  { source = "../../THIRD-PARTY-LICENSES.md", dest = "usr/share/doc/rick/", mode = "644" },
+]
+
+[package.metadata.generate-rpm]
+name = "rick"
+summary = "A god-like file manager"
+auto-req = "no"
+assets = [
+  { source = "target/release/package/bin/*", dest = "/usr/lib/rick/", mode = "755" },
+  { source = "target/release/package/lib/**/*", dest = "/usr/lib/rick/", mode = "644" },
+  { source = "target/release/package/rpm/package", dest = "/usr/lib/rick/package", mode = "644" },
+  { source = "packaging/linux/rick.sh", dest = "/usr/bin/rick", mode = "755" },
+  { source = "packaging/linux/rick.desktop", dest = "/usr/share/applications/rick.desktop", mode = "644" },
+  { source = "assets/icons/linux/hicolor/**/*", dest = "/usr/share/icons/hicolor/", mode = "644" },
+  # Plain files, not marked as documentation: an install that leaves the
+  # documentation out, as a container image's does, still gets the licences.
+  { source = "LICENSE", dest = "/usr/share/licenses/rick/LICENSE", mode = "644" },
+  { source = "THIRD-PARTY-LICENSES.md", dest = "/usr/share/licenses/rick/THIRD-PARTY-LICENSES.md", mode = "644" },
+]
