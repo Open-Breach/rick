@@ -146,7 +146,9 @@ anything waits for the next start, and for a plugin with an update the
 card that reads the host's reason with **Update**, the header's count and
 **Update all** in the footer and in the notice of the start that found
 them — a notice can carry one button, and then stays until it is pressed
-or dismissed), and drag and drop of entries: rows are drag
+or dismissed; *Install from URL…* with its prompt for an `https://`
+address, and in a Rick a package manager installed the command with its
+copy button in place of **Install**), and drag and drop of entries: rows are drag
 sources, folders, pane space, breadcrumb segments and tab headers are drop
 zones with the ghost, the live indicator and spring-loading in between (a
 pane at the Trash view trashes what lands in it); the side panel is never a

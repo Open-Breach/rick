@@ -702,6 +702,14 @@ fn groups_of(page: &Page, app: &App) -> Vec<Group> {
                     t!("settings-editor-desc"),
                 )],
             },
+            // The plugin registry (specs/plugin-distribution.md §6).
+            Group {
+                title: t!("settings-plugins"),
+                rows: vec![Spec::described(
+                    t!("settings-registry-check"),
+                    t!("settings-registry-check-desc"),
+                )],
+            },
         ],
         Page::Integration => integration_groups(app),
         Page::Plugin(id) => app
@@ -1282,6 +1290,12 @@ fn rows_of(page: &Page, index: usize, card: &mut Card<'_>, cx: &mut PageCx<'_>) 
                 &t!("settings-editor-hint"),
                 |text| cx.change(SettingsChange::Editor(text)),
             );
+        }
+        (Page::Behaviour, 2) => {
+            // Off, Rick fetches the plugin list only on Check now.
+            switch_row(card, 0, settings.registry.check, |v| {
+                cx.change(SettingsChange::RegistryCheck(v));
+            });
         }
         (Page::Integration, group) => integration_rows(group, card, cx),
         (Page::Plugin(id), 0) => plugin_rows(id, card, cx),

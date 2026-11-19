@@ -35,7 +35,10 @@
 //! speaks to `rick-perms`, the helper that does so as the administrator;
 //! [`sevenzip`] binds the 7-Zip library (`7z.so`, `7z.dll`) at run time
 //! for the disk images the archive plugins browse, the one place its
-//! `unsafe` lives; [`instance`] is the single-instance endpoint
+//! `unsafe` lives; [`loader`] tells the system's loader where to look for
+//! the libraries a plugin's library links, which on Windows is the
+//! plugin's folder named to it and nothing put on the `PATH`;
+//! [`instance`] is the single-instance endpoint
 //! ([`SingleInstance`] names it per user and config directory: a Unix
 //! socket or a named pipe) and the one message a second launch hands the
 //! running Rick over it.
@@ -67,6 +70,7 @@ pub mod file_manager;
 pub mod fs;
 pub mod instance;
 pub mod integration;
+pub mod loader;
 pub mod paths;
 pub mod perms;
 pub mod process;

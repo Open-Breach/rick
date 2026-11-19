@@ -6,8 +6,8 @@
 //! library that links them has to say where they are; from there on each
 //! of them, and each element, carries a run path of its own to the `lib`
 //! folder it lies in or under. Linux uses the system GStreamer. On Windows
-//! the DLLs lie in the plugin's folder and the plugin host puts that
-//! folder on the `PATH` before it loads the plugin. This is build
+//! the DLLs lie in the plugin's folder and the plugin host names that
+//! folder to the system's loader when it loads the plugin. This is build
 //! configuration, not a `cfg(target_os)` in code.
 
 fn main() {

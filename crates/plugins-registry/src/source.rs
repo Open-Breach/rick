@@ -37,6 +37,16 @@ impl Source {
         Self::with_compiled(COMPILED_KEY, url, public_key)
     }
 
+    /// The source `rick.toml` names and nothing of this build's: the key
+    /// compiled in is left out, so there is a key only where the file
+    /// gives one. This is the source of an application that is not the
+    /// released binary — every test — which thereby never asks the real
+    /// registry, whatever key a build carries.
+    #[must_use]
+    pub fn named(url: Option<&str>, public_key: Option<&str>) -> Self {
+        Self::with_compiled("", url, public_key)
+    }
+
     /// [`Source::new`] with `compiled` as the text of the key file.
     pub(crate) fn with_compiled(
         compiled: &str,

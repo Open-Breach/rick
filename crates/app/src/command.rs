@@ -402,6 +402,11 @@ pub enum Command {
     /// §7). Answered by `Event::PluginInstalled`; a package that is not
     /// the one the list describes is deleted and the job fails.
     InstallAvailable(String),
+    /// *Install from URL…* of the Extensions dialogue: download the
+    /// plugin package at this `https://` address and handle it exactly
+    /// as [`InstallPlugin`](Self::InstallPlugin) handles a file; the
+    /// record notes the address. Answered by `Event::PluginInstalled`.
+    InstallPluginFrom(String),
     /// **Update all** of the Extensions dialogue and of the toast: every
     /// plugin [`App::updates`](crate::App::updates) lists is installed
     /// over its folder, each as a job of its own.

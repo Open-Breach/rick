@@ -318,6 +318,8 @@ settings-editor-desc = The command Open in editor starts, with the files added t
 settings-editor-hint = System default text editor
 settings-rename-on-click = Rename on a second click
 settings-rename-on-click-desc = A second click on the selected item edits its name. F2 and the context menu always do
+settings-registry-check = Look for plugins and updates online
+settings-registry-check-desc = Once a day, and when the Available list of the Extensions dialogue is opened, Rick fetches the list of its plugins. It sends its version and nothing else
 settings-density = Density
 keyboard-shortcuts = Keyboard shortcuts
 shortcuts-subtitle = Click a shortcut to change it. Changes apply at once.
@@ -387,9 +389,18 @@ extensions-remove = Remove
 extensions-where = Plugins live in the plugins folder beside the binary and in the config directory; a per-user plugin wins on an id clash.
 extensions-install = Install from file…
 extensions-install-title = Install a plugin from a file
+extensions-install-url = Install from URL…
+extensions-url-title = Install from URL
+extensions-url-subtitle = A plugin package is downloaded and unpacked as a file is
+extensions-url-heading = Package address
+extensions-url-invalid = Enter the https:// address of a plugin package.
+extensions-url-note = Nothing is checked, as for a file.
+extensions-packaged = Installed through your package manager
+extensions-command = command
 # An install from the plugin registry that failed (issue 251).
 plugins-download-mismatch = The download did not match the plugin list
 plugins-download-failed = The plugin could not be downloaded: { $reason }
+plugins-address-refused = { $url } is not an https:// address
 # The plugin registry in the Extensions dialogue
 # (specs/plugin-distribution.md §6 and §7, issue 251).
 extensions-tab-installed = Installed

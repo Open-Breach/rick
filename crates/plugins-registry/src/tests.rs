@@ -365,6 +365,17 @@ fn the_source_is_this_build_s_unless_rick_toml_says_otherwise() {
     assert_ne!(rekeyed.key, built.key);
     assert!(rekeyed.key.is_some() && rekeyed.custom);
 
+    // The source of an application that is not the released binary has
+    // no key but the one rick.toml names, whatever this build carries.
+    assert_eq!(Source::named(None, None).key, None);
+    assert_eq!(
+        Source::named(Some("http://127.0.0.1:1/i.json"), None).key,
+        None
+    );
+    let named = Source::named(Some("http://127.0.0.1:1/i.json"), Some(&other));
+    assert_eq!(named.key, rekeyed.key);
+    assert!(named.custom);
+
     // A key that was asked for and is none: the compiled one does not
     // stand in for it.
     let broken = Source::with_compiled(&compiled, None, Some("not a key"));
@@ -658,4 +669,52 @@ fn a_package_that_is_another_one_is_deleted() {
             Some(0)
         );
     });
+}
+
+#[test]
+fn a_package_address_is_https_or_this_machine() {
+    for good in [
+        "https://example.org/plugin.rkp",
+        "  https://get.openbreach.dev/plugins/rick/0.6.0/git-0.6.0-linux-x64.rkp ",
+        "https://example.org:8443/download?file=plugin",
+        "http://127.0.0.1:8123/plugin.rkp",
+        "http://localhost/plugin.rkp",
+        "http://[::1]:9000/plugin.rkp",
+    ] {
+        assert!(is_package_address(good), "{good}");
+    }
+    for bad in [
+        "",
+        "plugin.rkp",
+        "http://example.org/plugin.rkp",
+        "http://192.168.1.10/plugin.rkp",
+        "ftp://example.org/plugin.rkp",
+        "file:///tmp/plugin.rkp",
+        "https://",
+    ] {
+        assert!(!is_package_address(bad), "{bad}");
+    }
+}
+
+#[test]
+fn a_download_is_named_after_the_file_its_address_names() {
+    for (url, name) in [
+        (
+            "https://example.org/git-0.6.0-linux-x64.rkp",
+            "git-0.6.0-linux-x64.rkp",
+        ),
+        ("https://example.org/a/b/hello.rkp?token=1#top", "hello.rkp"),
+        ("https://example.org/download/hello", "hello.rkp"),
+        // Never a path: no separator survives, and no leading dot.
+        (
+            "https://example.org/he%20llo/..%2F..%2Fsly.rkp",
+            "2F..2Fsly.rkp",
+        ),
+        ("https://example.org/", "plugin.rkp"),
+        ("https://example.org", "plugin.rkp"),
+        ("https://example.org/.rkp", "plugin.rkp"),
+        ("not an address", "plugin.rkp"),
+    ] {
+        assert_eq!(package_name(url), name, "{url}");
+    }
 }

@@ -64,7 +64,13 @@ Rick before — or that the list has a higher version of; **Update** is an
 install over the old folder and `Command::UpdateAll` one for each. The
 start that first finds any for a release of Rick says so
 (`Event::PluginUpdates`) and remembers the release in
-`registry/updates-announced` of the cache. The extension settings store is shared with the plugins through the
+`registry/updates-announced` of the cache. `Command::InstallPluginFrom` is
+*Install from URL…*: the package at an `https://` address is downloaded
+and handled exactly as a file, the record noting `url` and the address. A
+Rick a package manager installed says so in the file `package` beside
+its binary (`plugins::Packaging`, which the binary hands over): it shows
+the command for an available plugin, `sudo apt install rick-plugin-git`,
+downloads none and has no update of its own to offer. The extension settings store is shared with the plugins through the
 registry, so a plugin that found its third-party library writes the path
 into its own setting. The pinned list lives in its settings, and the pin actions
 in `ops` see it through the `PinStore` bridge it hands them. It feeds the
@@ -108,7 +114,11 @@ plugin list and fetches it when it is a day old, `Opened` fetches when the
 thread through the `plugins-registry` crate, and `App::plugin_registry` is
 what came of it: whether a key is there at all, the last index that
 verified, when it was fetched, and why the last attempt gave none. A Rick
-without a key or with a pre-release version asks nothing. The cache is
+without a key or with a pre-release version asks nothing. The key compiled
+into the build counts only once the binary has said so
+(`App::use_build_registry`): an application made anywhere else, as every
+test is, knows only a key its `rick.toml` names, and so never asks the
+real registry. The cache is
 `cache/` in the config directory unless the binary names the platform's
 (`App::set_cache_dir`). It depends on `types`,
 `runtime`, `platform`, `ext`, `vfs`, `vfs-local`, `vfs-rick`, `model`,
