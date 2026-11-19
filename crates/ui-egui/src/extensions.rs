@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use app::{
     App, Available, Command, Offering, Plugin, PluginRegistry, PluginStatus, RegistryCommand,
-    RegistryProblem,
+    RegistryProblem, Update,
 };
 use egui::{Align, Align2, FontId, Rect, Sense, pos2, vec2};
 use ext::{Level, Points, t};
@@ -253,6 +253,7 @@ enum Ask {
     Show(Tab),
     ChooseAvailable(String),
     InstallAvailable(String),
+    UpdateAll,
     CheckNow,
     Restart,
     Choose(PathBuf),
@@ -341,11 +342,13 @@ impl ExtensionsDialog {
             .plugins()
             .iter()
             .any(|plugin| waits_for_restart(app, plugin));
+        // The plugins the registry has this Rick's build of.
+        let updates = app.updates();
 
         let mut asked = None;
         let modal = dialog::modal(ctx, egui::Id::new("extensions"), WIDTH, |ui| {
             let scheme = theme::scheme(ui);
-            if dialog::band(ui, None, &t!("extensions"), &counts(app)) {
+            if dialog::band(ui, None, &t!("extensions"), &counts(app, updates.len())) {
                 asked = Some(Ask::Close);
             }
             // Header and footer stay in view in a low window.
@@ -361,7 +364,10 @@ impl ExtensionsDialog {
                 .vline(split - 0.5, body.y_range(), scheme.hairline());
             self.list(ui, left, app, &lists, &mut asked);
             match (self.tab, chosen, chosen_available) {
-                (Tab::Installed, Some(plugin), _) => details(ui, right, app, plugin, &mut asked),
+                (Tab::Installed, Some(plugin), _) => {
+                    let update = updates.iter().find(|update| update.path == plugin.path);
+                    details(ui, right, app, plugin, update, &mut asked);
+                }
                 (Tab::Installed, None, _) => {
                     let text = if app.plugins().is_empty() {
                         t!("settings-no-plugins-found")
@@ -378,7 +384,7 @@ impl ExtensionsDialog {
                     nothing(ui, right, &text, check, &mut asked);
                 }
             }
-            if let Some(ask) = footer(ui, app, restart) {
+            if let Some(ask) = footer(ui, app, restart, !updates.is_empty()) {
                 asked = Some(ask);
             }
         });
@@ -407,6 +413,7 @@ impl ExtensionsDialog {
             Some(Ask::InstallAvailable(id)) => {
                 requests.push(Request::Command(Command::InstallAvailable(id)));
             }
+            Some(Ask::UpdateAll) => requests.push(Request::Command(Command::UpdateAll)),
             Some(Ask::CheckNow) => {
                 requests.push(Request::Command(Command::Registry(
                     RegistryCommand::CheckNow,
@@ -581,10 +588,11 @@ impl ExtensionsDialog {
 
 /// The dialogue's footer: where the plugins live at the left — or, while
 /// `rick.toml` names another index or key than this build's own, where
-/// the plugin list is read from — and at the right *Restart now* while
-/// anything waits for the next start (`restart`), *Install from file…*
-/// and *Close*.
-fn footer(ui: &mut egui::Ui, app: &App, restart: bool) -> Option<Ask> {
+/// the plugin list is read from — and at the right **Update all** while
+/// any plugin has an update (`updates`), *Restart now* while anything
+/// waits for the next start (`restart`), *Install from file…* and
+/// *Close*.
+fn footer(ui: &mut egui::Ui, app: &App, restart: bool, updates: bool) -> Option<Ask> {
     let scheme = theme::scheme(ui);
     let asked = std::cell::Cell::new(None);
     dialog::footer(
@@ -623,6 +631,18 @@ fn footer(ui: &mut egui::Ui, app: &App, restart: bool) -> Option<Ask> {
                 .clicked()
             {
                 asked.set(Some(Ask::Restart));
+            }
+            if updates
+                && widgets::icon_button(
+                    right,
+                    Some(icons::INSTALL),
+                    &t!("extensions-update-all"),
+                    false,
+                    true,
+                )
+                .clicked()
+            {
+                asked.set(Some(Ask::UpdateAll));
             }
         },
     );
@@ -731,20 +751,24 @@ fn list_strip(ui: &mut egui::Ui, rect: Rect, app: &App, asked: &mut Option<Ask>)
 }
 
 /// The header's secondary line: how many plugins there are, how many are
-/// switched on and how many need attention.
-fn counts(app: &App) -> String {
+/// switched on, how many need attention and, while there are any, how
+/// many have an update — *2 updates*.
+fn counts(app: &App, updates: usize) -> String {
     let plugins: Vec<&Plugin> = app.plugins().iter().filter(|p| !p.removed).collect();
     let on = plugins.iter().filter(|p| enabled(app, p)).count();
     let attention = plugins
         .iter()
         .filter(|p| attention(app, p).is_some())
         .count();
-    [
+    let mut parts = vec![
         t!("extensions-installed", count = plugins.len()),
         t!("extensions-enabled", count = on),
         t!("extensions-attention", count = attention),
-    ]
-    .join("  ·  ")
+    ];
+    if updates > 0 {
+        parts.push(t!("extensions-updates", count = updates));
+    }
+    parts.join("  ·  ")
 }
 
 /// The search field of the list: a magnifier and the text, on `bg/card`.
@@ -1214,8 +1238,16 @@ fn available_head(ui: &mut egui::Ui, plugin: &Available, asked: &mut Option<Ask>
     chip(ui, line.right() + 6.0, y, &chip_text);
 }
 
-/// The details of the chosen plugin.
-fn details(ui: &mut egui::Ui, rect: Rect, app: &App, plugin: &Plugin, asked: &mut Option<Ask>) {
+/// The details of the chosen plugin; `update` is the build the registry
+/// has for it, when it has one.
+fn details(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    app: &App,
+    plugin: &Plugin,
+    update: Option<&Update>,
+    asked: &mut Option<Ask>,
+) {
     let scheme = theme::scheme(ui);
     let inner = rect.shrink2(vec2(PAD, 20.0));
     // The actions keep the foot; the rest scrolls above them when a low
@@ -1249,9 +1281,7 @@ fn details(ui: &mut egui::Ui, rect: Rect, app: &App, plugin: &Plugin, asked: &mu
                     .selectable(false),
                 );
             }
-            if let Some(text) = attention(app, plugin) {
-                attention_card(ui, &text);
-            }
+            update_or_attention(ui, app, plugin, update, asked);
             info_card(ui, app, plugin, asked);
         });
 }
@@ -1319,10 +1349,56 @@ fn head(ui: &mut egui::Ui, app: &App, plugin: &Plugin, asked: &mut Option<Ask>) 
     );
 }
 
+/// The card over the info card. A plugin with an update gets the update's:
+/// the host's reason as it stands, *Built for Rick 0.5.0*, with
+/// **Update** — or, for a plugin that is loaded, the version that is
+/// there to have. Any other plugin that needs attention gets the
+/// attention card.
+fn update_or_attention(
+    ui: &mut egui::Ui,
+    app: &App,
+    plugin: &Plugin,
+    update: Option<&Update>,
+    asked: &mut Option<Ask>,
+) {
+    let Some(update) = update else {
+        if let Some(text) = attention(app, plugin) {
+            attention_card(ui, &t!("extensions-needs-attention"), &text, None);
+        }
+        return;
+    };
+    let (title, text) = match &plugin.status {
+        PluginStatus::Refused(reason) => (t!("extensions-needs-attention"), reason.clone()),
+        _ => (
+            t!("extensions-update-available"),
+            t!(
+                "extensions-update-version",
+                version = update.version.as_str()
+            ),
+        ),
+    };
+    let label = if update.updating {
+        t!("extensions-updating")
+    } else {
+        t!("extensions-update")
+    };
+    if attention_card(ui, &title, &text, Some((&label, !update.updating))) {
+        *asked = Some(Ask::InstallAvailable(update.id.clone()));
+    }
+}
+
 /// The attention card: `bg/card` with an amber border, never an amber
-/// fill, the dot, *Needs attention* and the reason.
-fn attention_card(ui: &mut egui::Ui, text: &str) {
+/// fill, the dot, `title` and the reason, and under them the card's
+/// button when it has one, with whether it takes a click. Returns
+/// whether the button was clicked.
+fn attention_card(
+    ui: &mut egui::Ui,
+    title: &str,
+    text: &str,
+    button: Option<(&str, bool)>,
+) -> bool {
     let scheme = theme::scheme(ui);
+    let mut clicked = false;
     egui::Frame::new()
         .fill(scheme.bg_card)
         .stroke(egui::Stroke::new(1.5, scheme.status_warning))
@@ -1337,7 +1413,7 @@ fn attention_card(ui: &mut egui::Ui, text: &str) {
                     .circle_filled(dot.center(), DOT / 2.0, scheme.status_warning);
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new(t!("extensions-needs-attention"))
+                        egui::RichText::new(title)
                             .size(TEXT_BODY)
                             .color(scheme.text_primary),
                     )
@@ -1354,7 +1430,19 @@ fn attention_card(ui: &mut egui::Ui, text: &str) {
                 .wrap()
                 .selectable(false),
             );
+            if let Some((label, enabled)) = button {
+                ui.add_space(2.0);
+                let update = widgets::button_of(
+                    ui,
+                    Some(icons::INSTALL),
+                    label,
+                    ButtonKind::Primary,
+                    enabled,
+                );
+                clicked = update.clicked() && enabled;
+            }
         });
+    clicked
 }
 
 /// The path as the card shows it: under the home directory, with `~`.
