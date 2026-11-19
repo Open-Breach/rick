@@ -1,9 +1,13 @@
 //! Playback and decoding through GStreamer, behind the `gstreamer` feature.
 //!
-//! [`Runtime::get`] initialises GStreamer once per process and adds the
-//! plugin directories a bundle carries (`<binary dir>/gstreamer/lib/
-//! gstreamer-1.0` on macOS, `<binary dir>/gstreamer-1.0` on Windows,
-//! QUESTIONS.md 106). [`Player`] is a `playbin3` whose video sink is an
+//! [`Runtime::get`] initialises GStreamer once per process. Where the
+//! runtime travels in the plugin's own folder (macOS and Windows,
+//! specs/plugin-distribution.md §4) nothing is added to its search:
+//! GStreamer looks for its elements relative to its own library, in
+//! `gstreamer-1.0/` beside it on macOS and in `lib/gstreamer-1.0/` of its
+//! folder on Windows, which is where `cargo xtask bundle` puts them. So
+//! the elements are always those of the runtime that was loaded, whichever
+//! plugins folder it came from. [`Player`] is a `playbin3` whose video sink is an
 //! `appsink` asking for RGBA frames, kept as the latest frame for `render`;
 //! it is the [`Transport`]. [`discover`] reads duration, streams and tags
 //! with the Discoverer, and [`waveform`] decodes the audio to mono samples
@@ -50,8 +54,8 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    /// Initialises GStreamer once and scans the bundled plugin directories;
-    /// the reason when it cannot be initialised.
+    /// Initialises GStreamer once; the reason when it cannot be
+    /// initialised.
     ///
     /// # Errors
     ///
@@ -60,21 +64,6 @@ impl Runtime {
         RUNTIME
             .get_or_init(|| {
                 gst::init().map_err(|e| e.to_string())?;
-                let registry = gst::Registry::get();
-                if let Ok(exe) = std::env::current_exe()
-                    && let Some(dir) = exe.parent()
-                {
-                    for relative in [
-                        Path::new("gstreamer").join("lib").join("gstreamer-1.0"),
-                        Path::new("gstreamer-1.0").to_path_buf(),
-                    ] {
-                        let dir = dir.join(relative);
-                        if dir.is_dir() {
-                            registry.scan_path(&dir);
-                            tracing::info!(dir = %dir.display(), "GStreamer plugins scanned");
-                        }
-                    }
-                }
                 Ok(Runtime {
                     version: gst::version_string().to_string(),
                 })

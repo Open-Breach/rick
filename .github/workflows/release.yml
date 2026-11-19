@@ -3,8 +3,9 @@ name: release
 # the bundle `cargo xtask bundle --release` lays out — the binary, the kernel
 # dylibs and libstd it shares with the plugins, the pdfium library beside it
 # (SPEC.md: pdfium ships beside the binary), the GStreamer runtime on macOS
-# and Windows (SPEC.md: bundled there, the system's on Linux; QUESTIONS.md
-# 89), the Visual C++ runtime on Windows (every module imports it, and a
+# and Windows in the media plugin's folder, plugins/preview-media/ (SPEC.md:
+# bundled there, the system's on Linux; specs/plugin-distribution.md §4),
+# the Visual C++ runtime on Windows (every module imports it, and a
 # machine without the Visual C++ Redistributable has none), `plugins/` with
 # every plugin (QUESTIONS.md 81) and the 7-Zip library
 # with its licence beside the archive plugin (issue 51; built from the
@@ -101,8 +102,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
       - uses: Swatinem/rust-cache@v2
       # GStreamer for the media previewer (issue 18). Linux: the system
-      # packages, development files for the build and the codec plug-ins
-      # for the smoke test; the archive relies on the user's GStreamer.
+      # packages, development files for the build, the codec plug-ins and
+      # the tools for the sample the smoke test plays; the archive relies
+      # on the user's GStreamer.
       # macOS and Windows: the official runtime and development packages,
       # installed where their installers put them; the runtime is copied
       # into the bundle (RICK_GSTREAMER_DIR, QUESTIONS.md 106). The new
@@ -114,7 +116,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-            gstreamer1.0-plugins-ugly gstreamer1.0-libav
+            gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools
       # The downloaded packages are cached per GStreamer release: about
       # 920 MB on macOS and 520 MB on Windows, from a server that is slow
       # and cuts transfers short. A tag run's own cache
@@ -283,27 +285,59 @@ jobs:
           Get-ChildItem -Path $crt.FullName | Select-Object Name, Length
           "RICK_VCRUNTIME_DIR=$($crt.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
       # The bundle: binary, kernel dylibs, libstd, pdfium (from the PDF
-      # previewer's setting), the GStreamer runtime (from RICK_GSTREAMER_DIR on
-      # macOS and Windows), the Visual C++ runtime (from RICK_VCRUNTIME_DIR on
-      # Windows), plugins/ with the 7-Zip library beside the
-      # archive plugin (from RICK_SEVENZIP_DIR), from one build of every library,
-      # binary and example in the workspace with the media previewer's
-      # playback on, the previewer's pdfium_check example for the smoke
-      # test among them.
+      # previewer's setting), the Visual C++ runtime (from RICK_VCRUNTIME_DIR on
+      # Windows), plugins/ with the GStreamer runtime in the media plugin's
+      # folder (from RICK_GSTREAMER_DIR on macOS and Windows) and the 7-Zip
+      # library beside the archive plugin (from RICK_SEVENZIP_DIR), from one
+      # build of every library, binary and example in the workspace with the
+      # media previewer's playback on, the pdfium_check and preview_check
+      # examples for the smoke test among them.
       - run: cargo xtask bundle --release --features ext-preview-media/gstreamer
       # The official macOS libraries are universal; the archive is for
-      # Apple silicon, so the other half goes.
+      # Apple silicon, so the other half goes. Then the run paths are
+      # printed, for the record of how the runtime is found from the
+      # plugin's folder: the plugin's to gstreamer/lib beside itself, and
+      # those every library and element of the runtime carries to the lib
+      # folder it lies in or under.
       - name: thin the gstreamer libraries
         if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
-          find target/release/bundle/gstreamer -type f \( -name '*.dylib' -o -name 'gst-plugin-scanner' \) | while read -r file; do
+          media=target/release/bundle/plugins/preview-media
+          find "$media/gstreamer" -type f -name '*.dylib' | while read -r file; do
             if lipo -info "$file" 2>/dev/null | grep -q "arm64"; then
               lipo -thin arm64 "$file" -output "$file.thin" 2>/dev/null && mv "$file.thin" "$file" || true
             fi
           done
-          du -sh target/release/bundle/gstreamer
+          du -sh "$media/gstreamer"
+          for file in "$media/libext_preview_media.dylib" \
+                      "$media/gstreamer/lib/libgstreamer-1.0.0.dylib" \
+                      "$media/gstreamer/lib/gstreamer-1.0/libgstcoreelements.dylib"; do
+            echo "run paths of $file:"
+            otool -l "$file" | grep -A2 LC_RPATH | grep ' path ' || echo "  none"
+          done
+          echo "what the plugin links of GStreamer:"
+          otool -L "$media/libext_preview_media.dylib" | grep -i gst
+      # A short video for the smoke test to play: the test pattern as
+      # MPEG-4 part 2, written by the GStreamer the build has (the system's
+      # on Linux, the official runtime on macOS and Windows). GStreamer
+      # decodes that codec itself on every platform, through libav, whose
+      # library lies in the media plugin's folder on macOS and Windows; so
+      # the test is of the runtime, not of the machine. H.264 would be:
+      # the macOS runners are virtual machines without a hardware video
+      # decoder, and GStreamer's hardware decoder of macOS stops playback
+      # there (vtdec_hw, "VTDecompressionSessionCreate returned -12906").
+      - name: media sample
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p check
+          gst-inspect-1.0 --exists avenc_mpeg4 || { echo "no MPEG-4 encoder (avenc_mpeg4) in this GStreamer"; exit 1; }
+          gst-launch-1.0 -q videotestsrc num-buffers=90 pattern=smpte ! \
+            video/x-raw,width=320,height=240,framerate=30/1 ! videoconvert ! \
+            avenc_mpeg4 ! mp4mux ! filesink location=check/sample.mp4
+          ls -l check/sample.mp4
       - uses: actions/download-artifact@v4
         with: { name: third-party-licenses }
       - name: package
@@ -380,12 +414,13 @@ jobs:
           cat "$archive.sha256"
           rm -r "$NAME"
           mkdir -p ../check
-          cp "../target/release/examples/pdfium_check$exe" ../check/
+          cp "../target/release/examples/pdfium_check$exe" "../target/release/examples/preview_check$exe" ../check/
       - uses: actions/upload-artifact@v4
         with:
           name: archive-${{ matrix.platform }}
           path: dist/
           if-no-files-found: error
+      # The two test binaries and the sample video.
       - uses: actions/upload-artifact@v4
         with:
           name: pdfium-check-${{ matrix.platform }}
@@ -411,12 +446,13 @@ jobs:
       # For .github/scripts/check-plugins.sh, the per-platform plugin check.
       - uses: actions/checkout@v4
       # The Linux archives use the system GStreamer: the media plugin links
-      # it and loads only where it is installed, as a user's desktop has it.
+      # it and loads only where it is installed, as a user's desktop has it,
+      # with the plug-in packages that decode the sample video.
       - name: gstreamer and desktop-file-utils (linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 gstreamer1.0-plugins-good desktop-file-utils
+          sudo apt-get install -y --no-install-recommends libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav desktop-file-utils
       - uses: actions/download-artifact@v4
         with: { name: "archive-${{ matrix.platform }}", path: dist }
       - uses: actions/download-artifact@v4
@@ -471,13 +507,19 @@ jobs:
           python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert isinstance(d,list) and len(d) > 100, "too few entries"; print(len(d), "third-party entries")' \
             "$([ "${{ runner.os }}" = "macOS" ] && echo ../Resources/third-party.json || echo third-party.json)"
           test -f libpdfium.so || test -f libpdfium.dylib || test -f pdfium.dll || { echo "no pdfium library beside the binary"; exit 1; }
-          # The GStreamer runtime the media previewer plays through, bundled
-          # on macOS and Windows (QUESTIONS.md 106).
+          # The GStreamer runtime the media previewer plays through, on
+          # macOS and Windows: in the plugin's folder, where its package
+          # will hold it, and nothing of it beside the binary any more
+          # (specs/plugin-distribution.md §4).
+          media=plugins/preview-media
           case "${{ runner.os }}" in
-            macOS) test -f gstreamer/lib/libgstreamer-1.0.0.dylib || { echo "no bundled GStreamer"; exit 1; }
-                   ls gstreamer/lib/gstreamer-1.0 | head -5 ;;
-            Windows) test -f gstreamer-1.0-0.dll || { echo "no bundled GStreamer"; exit 1; }
-                     ls gstreamer-1.0 | head -5 ;;
+            macOS) test -f "$media/gstreamer/lib/libgstreamer-1.0.0.dylib" || { echo "no GStreamer in the media plugin's folder"; exit 1; }
+                   ls "$media/gstreamer/lib/gstreamer-1.0" | head -5
+                   test ! -e gstreamer || { echo "GStreamer beside the binary"; exit 1; } ;;
+            Windows) test -f "$media/gstreamer-1.0-0.dll" || { echo "no GStreamer in the media plugin's folder"; exit 1; }
+                     ls "$media/lib/gstreamer-1.0" | head -5
+                     test ! -e gstreamer-1.0-0.dll || { echo "GStreamer beside the binary"; exit 1; }
+                     test ! -e gstreamer-1.0 || { echo "GStreamer's elements beside the binary"; exit 1; } ;;
           esac
           # Linux: the desktop entry and the icons under share/
           # (specs/app-icons.md): the entry valid and naming the app id
@@ -539,6 +581,45 @@ jobs:
             # Visual Studio and rick.exe starting here proves nothing.
             python3 "$GITHUB_WORKSPACE/.github/scripts/check-vcruntime.py" .
           fi
+          # The media preview, played for real: the host's test binary
+          # loads the plugins as rick does and plays the sample video
+          # through the previewer that claims it. On Linux from the
+          # archive, with the system GStreamer. On macOS and Windows the
+          # media plugin's folder is first moved into the per-user plugins
+          # folder, as a package installed with Install from file… lies
+          # there: the runtime in it has to be found from there, on a
+          # runner that has no GStreamer of its own.
+          cp "$GITHUB_WORKSPACE/check/preview_check$exe" .
+          chmod +x "preview_check$exe"
+          case "${{ runner.os }}" in
+            macOS) user_plugins="$HOME/Library/Application Support/Rick/plugins" ;;
+            Windows) user_plugins="$(cygpath -u "$APPDATA")/Rick/plugins" ;;
+            *) user_plugins="" ;;
+          esac
+          from="beside the binary"
+          if [ -n "$user_plugins" ]; then
+            if command -v gst-inspect-1.0 > /dev/null || [ -e /Library/Frameworks/GStreamer.framework ]; then
+              echo "this runner has a GStreamer of its own; the test would prove nothing"; exit 1
+            fi
+            mkdir -p "$user_plugins"
+            rm -rf "$user_plugins/preview-media"
+            mv plugins/preview-media "$user_plugins/"
+            from="per-user"
+            "./rick$exe" --list-plugins | tee plugins.txt
+            grep -Eq "^preview-media +[^|]* +previewer +loaded +.*[/\\]Rick[/\\]plugins[/\\]preview-media" plugins.txt \
+              || { echo "the media plugin did not load from the per-user folder"; exit 1; }
+          fi
+          sample="$GITHUB_WORKSPACE/check/sample.mp4"
+          if ! LD_LIBRARY_PATH=. DYLD_LIBRARY_PATH=. "./preview_check$exe" "$sample" --play | tee media.txt; then
+            # GStreamer's own account of what refused, for whoever reads
+            # this log: its warnings and errors, which name the element.
+            echo "the sample did not play; once more with GStreamer's warnings:"
+            GST_DEBUG=2 LD_LIBRARY_PATH=. DYLD_LIBRARY_PATH=. "./preview_check$exe" "$sample" --play 2>&1 \
+              | grep -v "^plugin .*: loaded, " | tail -40 || true
+            exit 1
+          fi
+          grep -q "^plugin preview-media: loaded, $from, " media.txt || { echo "the media plugin was not loaded from $from"; exit 1; }
+          grep -q "^preview ok: .*first frame 320x240, played to " media.txt || { echo "the sample video did not play"; exit 1; }
 
   release:
     needs: [build, smoke]
