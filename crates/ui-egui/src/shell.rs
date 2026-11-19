@@ -175,6 +175,9 @@ pub enum Request {
     About,
     /// Open the Settings window on a plugin's page, by the plugin's id.
     PluginSettings(String),
+    /// *Restart now* of the Extensions dialogue: close Rick and start it
+    /// again with its session.
+    Restart,
     /// Rows were dragged past the threshold: start a drag of them.
     StartDrag {
         /// The pane.
@@ -1924,8 +1927,9 @@ impl RickUi {
         }
     }
 
-    /// Rick was installed to the standard location: the session is saved
-    /// for the installed copy to restore, and the binary's hook starts it.
+    /// Rick is to continue from `binary`, the copy it was installed to
+    /// or the one it runs from: the session is saved for that process to
+    /// restore, and the binary's hook starts it.
     fn relaunch_from(&mut self, binary: &std::path::Path) {
         let Some(relaunch) = self.relaunch.clone() else {
             return;
@@ -1933,8 +1937,21 @@ impl RickUi {
         if let Err(error) = self.app.save_session() {
             tracing::warn!(%error, "session not saved before the relaunch");
         }
-        tracing::info!(binary = %binary.display(), "continuing from the installed copy");
+        tracing::info!(binary = %binary.display(), "continuing in a new process");
         relaunch(binary);
+    }
+
+    /// *Restart now*: Rick starts again from the binary it runs from, by
+    /// the rules of a relaunch, and the new process loads the plugins as
+    /// they are now and restores the session.
+    fn restart(&mut self) {
+        match std::env::current_exe() {
+            Ok(binary) => self.relaunch_from(&binary),
+            Err(error) => {
+                tracing::warn!(%error, "the running binary was not found");
+                self.toast(Level::Error, error.to_string());
+            }
+        }
     }
 
     /// Draws the text windows and drops the closed ones.
@@ -2249,6 +2266,7 @@ impl RickUi {
                     }
                     Request::About => self.about.open(),
                     Request::PluginSettings(id) => self.settings.open_plugin(self.root, &id),
+                    Request::Restart => self.restart(),
                     Request::StartDrag {
                         pane,
                         tab,

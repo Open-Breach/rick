@@ -138,7 +138,11 @@ dialogue (`extensions`: the plugins grouped by what they contribute, each
 with its enable switch and an amber dot when it needs attention; the
 chosen plugin's details with the manifest's description, the attention
 card and an info card whose rows copy; *Settings*, *Open folder*, *Remove*
-for a user's plugin and *Install from file…*), and drag and drop of entries: rows are drag
+for a user's plugin and *Install from file…*; the *Installed · Available*
+control over the list, the plugins the registry offers with their sizes,
+the details of one with **Install**, the line that says why there is no
+list with *Check now* where checking can help, and *Restart now* while
+anything waits for the next start), and drag and drop of entries: rows are drag
 sources, folders, pane space, breadcrumb segments and tab headers are drop
 zones with the ghost, the live indicator and spring-loading in between (a
 pane at the Trash view trashes what lands in it); the side panel is never a

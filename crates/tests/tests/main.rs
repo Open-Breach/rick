@@ -22,6 +22,7 @@ mod actions;
 mod address_bar;
 mod app;
 mod app_menu;
+mod available;
 mod chrome;
 mod clipboard_chords;
 mod closeout;
