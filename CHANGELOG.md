@@ -144,6 +144,16 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   platforms beside the archives, and `SHA256SUMS.txt` names them all
   (#260).
 
+### Fixed
+
+- A search in subfolders that a new text replaced, or that was cancelled
+  in the operations area, is shown there as *Cancelled* in every case.
+  Where the cancel arrived in the moment the search was working through
+  matches it had ready, the search ended as *Done*. Cancelled in the
+  operations area at such a moment, its pane showed the matches so far as
+  the complete result; it now says that the search was cancelled, with
+  *Retry* (#285).
+
 ## [0.5.0] - 2026-11-15
 
 On Linux, ZFS snapshots with a time slider and AppImages in the installer.
