@@ -469,3 +469,67 @@ fn the_third_party_page_filters_by_name_and_exports_the_whole_list() {
         harness.state().toasts()
     );
 }
+
+/// The components shipped outside Cargo are in the licence file a release
+/// carries, not only in the dialog: `bundled-licenses.py`, which the
+/// release appends to the generated `THIRD-PARTY-LICENSES.md`, prints
+/// every entry of `about/bundled.toml` — pdfium, the standard library, the
+/// fonts and the icon font among them — with its licence text, says where
+/// the texts of the libraries inside pdfium and the standard library are,
+/// and ends with the note on the project's own artwork.
+#[test]
+fn the_licence_file_names_the_bundled_components_with_their_texts() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let output = std::process::Command::new("python3")
+        .arg(root.join(".github/scripts/bundled-licenses.py"))
+        .arg(root.join("about/bundled.toml"))
+        .output();
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!("python3 is not available ({error}); the check is not run here");
+            return;
+        }
+    };
+    assert!(
+        output.status.success(),
+        "bundled-licenses failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("\n## Bundled components\n"), "no section");
+
+    let bundled = about::bundled();
+    for name in [
+        "pdfium",
+        "Rust standard library",
+        "Ubuntu Light",
+        "Phosphor Icons",
+    ] {
+        assert!(bundled.iter().any(|c| c.name == name), "{name} is bundled");
+    }
+    for component in &bundled {
+        let heading = format!(
+            "\n### {} {} ({})\n",
+            component.name, component.version, component.license
+        );
+        assert!(text.contains(&heading), "no heading for {}", component.name);
+        // The licence text itself, whole: what the dialog shows is what
+        // the file has.
+        assert!(
+            text.contains(component.text.trim_matches('\n')),
+            "the text of {} is not in the file",
+            component.name
+        );
+    }
+    for place in ["licenses/pdfium/", "licenses/rust/COPYRIGHT-library.html"] {
+        assert!(text.contains(place), "{place} is not named");
+    }
+    assert!(
+        text.contains("original artwork of the Rick project"),
+        "no note on the artwork"
+    );
+}

@@ -1,11 +1,14 @@
 # The third-party components Rick ships outside Cargo, for the Bundled
 # runtimes section of the About dialog's Third-party licences page
-# (specs/about-dialog.md): the native libraries beside the binary and the
-# fonts compiled into it. The Rust crates are not here: cargo-about
-# generates them into third-party.json at release time (about-json.hbs).
+# (specs/about-dialog.md): the native libraries beside the binary, the
+# standard library and the fonts compiled into it. The Rust crates are not
+# here: cargo-about generates them into third-party.json at release time
+# (about-json.hbs).
 # Each entry: name, version, the SPDX licence id, the copyright holder,
 # the project URL and the full licence text. The list is read at start-up
-# and shown as is; licence texts are data and are not translated.
+# and shown as is; licence texts are data and are not translated. A release
+# also prints it into THIRD-PARTY-LICENSES.md, after the crates
+# (.github/scripts/bundled-licenses.py), so every entry needs all six.
 
 # The PDF renderer, loaded from beside the binary (SPEC.md *Third-party
 # libraries*). release.yml downloads the latest build of
