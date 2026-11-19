@@ -387,9 +387,18 @@ extensions-remove = Remove
 extensions-where = Plugins live in the plugins folder beside the binary and in the config directory; a per-user plugin wins on an id clash.
 extensions-install = Install from file…
 extensions-install-title = Install a plugin from a file
+extensions-install-url = Install from URL…
+extensions-url-title = Install from URL
+extensions-url-subtitle = A plugin package is downloaded and unpacked as a file is
+extensions-url-heading = Package address
+extensions-url-invalid = Enter the https:// address of a plugin package.
+extensions-url-note = Nothing is checked, as for a file.
+extensions-packaged = Installed through your package manager
+extensions-command = command
 # An install from the plugin registry that failed (issue 251).
 plugins-download-mismatch = The download did not match the plugin list
 plugins-download-failed = The plugin could not be downloaded: { $reason }
+plugins-address-refused = { $url } is not an https:// address
 # The plugin registry in the Extensions dialogue
 # (specs/plugin-distribution.md §6 and §7, issue 251).
 extensions-tab-installed = Installed

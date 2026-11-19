@@ -4059,6 +4059,34 @@ fn screenshots_of_the_available_plugins() {
             shoot(&mut harness, &format!("extensions-available-{file}-{mode}"));
         }
     }
+    // The same plugin in a Rick a package manager installed: the command
+    // in place of Install.
+    harness
+        .state_mut()
+        .app_mut()
+        .set_packaging(Some(app::plugins::Packaging::Deb));
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(
+            &mut harness,
+            &format!("extensions-available-packaged-{mode}"),
+        );
+    }
+    harness.state_mut().app_mut().set_packaging(None);
+    // The prompt of Install from URL…, with an address typed.
+    harness.get_by_label("Install from URL…").click();
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness
+        .get_all_by_role(Role::TextInput)
+        .find(egui_kittest::Node::is_focused)
+        .unwrap_or_else(|| panic!("the address field has the focus"))
+        .type_text("https://example.org/plugins/word-count-1.2.0-linux-x64.rkp");
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("extensions-install-from-url-{mode}"));
+    }
 }
 
 /// specs/plugin-distribution.md §7, *Updates* (issue 251): after Rick was

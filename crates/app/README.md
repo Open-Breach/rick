@@ -64,7 +64,13 @@ Rick before — or that the list has a higher version of; **Update** is an
 install over the old folder and `Command::UpdateAll` one for each. The
 start that first finds any for a release of Rick says so
 (`Event::PluginUpdates`) and remembers the release in
-`registry/updates-announced` of the cache. The extension settings store is shared with the plugins through the
+`registry/updates-announced` of the cache. `Command::InstallPluginFrom` is
+*Install from URL…*: the package at an `https://` address is downloaded
+and handled exactly as a file, the record noting `url` and the address. A
+Rick a package manager installed says so in the file `package` beside
+its binary (`plugins::Packaging`, which the binary hands over): it shows
+the command for an available plugin, `sudo apt install rick-plugin-git`,
+downloads none and has no update of its own to offer. The extension settings store is shared with the plugins through the
 registry, so a plugin that found its third-party library writes the path
 into its own setting. The pinned list lives in its settings, and the pin actions
 in `ops` see it through the `PinStore` bridge it hands them. It feeds the

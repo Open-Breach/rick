@@ -22,8 +22,10 @@ strings, a pre-release Rick fits nothing, and neither does one older than
 the registry's oldest release. `download` fetches a package to a file,
 hashing it as it is written, and holds it against the size and the SHA-256
 the index names: it stops as soon as more bytes arrive than were named,
-and a package that is another one is deleted. When to ask, and whether the
-user allows it, is `app`'s. The `fixtures` feature adds what a test needs to stand in for
+and a package that is another one is deleted. Without an expectation it
+checks nothing, which is *Install from URL…*: `is_package_address` is the
+rule for such an address, `https://` with a host or plain `http://` on
+this machine. When to ask, and whether the user allows it, is `app`'s. The `fixtures` feature adds what a test needs to stand in for
 the registry — a key pair made on the spot that signs as minisign does
 (`ring` and `blake2`), and a server on this machine that counts what it is
 asked — and is the only use the crate has for `runtime`; no test asks the
