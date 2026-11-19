@@ -8,8 +8,11 @@ the pull request that brought the change.
 ## [Unreleased]
 
 Plugins come in two kinds from here on: the ones every install has, and
-the ones that are separate downloads. The extension API is 23: a plugin
-built for 0.5.0 is refused until it is rebuilt.
+the ones that are separate downloads. The Extensions dialogue lists the
+separate ones and installs and updates them from a signed plugin list,
+once that list has its key: the key is not in the source yet, so in every
+build for now the list is off and Rick fetches nothing. The extension API
+is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
 
 ### Changed
 
@@ -53,6 +56,65 @@ built for 0.5.0 is refused until it is rebuilt.
 
 ### Added
 
+- **The Extensions dialogue has an *Available* list** beside *Installed*,
+  chosen above the search field: the plugins the plugin list has for this
+  Rick and this platform that are not installed, under the headings of the
+  installed ones, each with its download size. The details of one say
+  what it contributes, its size and its source, and have **Install** where
+  an installed plugin has its switch. Install is a job in the operations
+  area: it downloads the package, holds it against the size and the
+  SHA-256 the signed list names, and unpacks it into the per-user plugins
+  folder as *Install from file…* does. A package that differs is deleted
+  and the job fails with *The download did not match the plugin list*.
+  The plugin is loaded at the next start, and while anything waits for
+  one the footer has **Restart now**, which starts Rick again with its
+  session. Where there is no list the view says why in one line, with
+  **Check now** where checking can help (#267).
+- **Updates for the plugins the list installed.** After Rick is updated,
+  such a plugin is refused as built for the Rick before. When the list
+  has its build for the new Rick, the plugin's card reads the reason and
+  has **Update**, the dialogue's header counts the updates, the footer
+  has **Update all**, and the first start that finds any says so in a
+  notice with the same button. An update is an install over the old
+  folder. A plugin installed from a file or put there by hand is never
+  updated (#268).
+- ***Install from URL…*** beside *Install from file…*: the plugin package
+  at an `https://` address is downloaded and then handled exactly as a
+  file is. Nothing is checked (#269).
+- **A Rick installed from a deb or an rpm** takes its separate plugins
+  from its package manager: in place of **Install**, an available plugin
+  shows the command, `sudo apt install rick-plugin-git` or `sudo dnf
+  install rick-plugin-git`, with a copy button, and Rick downloads none.
+  It knows by a file named `package` beside its binary, which the two
+  packages install (#269).
+- ***Look for plugins and updates online*** on the Behaviour page of the
+  settings, on by default; `[registry] check` in `rick.toml`. On, Rick
+  fetches the plugin list when the *Available* list is opened and, in the
+  background, at most once a day, after the first frame is drawn. Off, it
+  fetches nothing by itself and shows what it has; **Check now** still
+  asks (#271).
+- **The plugin list and what Rick sends for it.** The list is
+  `https://get.openbreach.dev/registry/index.json` with a minisign
+  signature beside it. Rick makes one request for each of the two files,
+  saying `rick/<version>` and nothing else: no identifier, and nothing
+  about the plugins that are installed. The list is checked against a
+  public key compiled into Rick on every read, the fetched one and the
+  cached one; a list that does not verify is not used and the last good
+  one stays. A build of the list fits when it is for this platform and
+  for exactly this release of Rick, so a pre-release Rick is offered
+  nothing. **The key file is empty in the source for now**, and a build
+  without a key reads and fetches nothing: *The plugin list is not set up
+  in this build*. `[registry] url` and `public_key` point a Rick at
+  another list and key, for development (#265).
+- `installed.toml` in the per-user plugins folder notes where each plugin
+  there came from, the plugin list, a file or an address, with its
+  version and the SHA-256 of its package. *Remove* drops the entry
+  (#267).
+- Rick has a cache directory, where the plugin list is kept:
+  `$XDG_CACHE_HOME/rick` on Linux, `~/Library/Caches/Rick` on macOS and
+  `%LOCALAPPDATA%\Rick\Cache` on Windows. A Rick started with
+  `--config-dir` keeps its cache in `cache/` inside that directory
+  (#265).
 - `cargo xtask package`, which makes the packages of the separate plugins
   from a bundle: one `.rkp` per plugin and `plugins-<platform>.json`, the
   list the plugin registry's publisher reads, with each file's size and

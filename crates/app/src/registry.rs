@@ -20,6 +20,24 @@
 //!   it is tried again at the next occasion, never in a loop.
 //! - A Rick with a pre-release part in its version fits nothing the
 //!   registry has, and asks for nothing.
+//!
+//! What the index is used for is here too (§7). [`App::offering`] is the
+//! *Available* view: why there is no list, or the plugins that fit this
+//! Rick and are in neither plugins folder. **Install**
+//! (`Command::InstallAvailable`) is a job of the operations area that
+//! downloads a package, holds it against the size and the SHA-256 the
+//! index names, unpacks it as *Install from file…* does and notes it in
+//! the record. [`App::updates`] lists the plugins the registry installed
+//! and has this Rick's build of; an update is the same install over the
+//! old folder. *Install from URL…* (`Command::InstallPluginFrom`)
+//! downloads a package from an address and checks nothing. A Rick a
+//! package manager installed ([`App::packaging`]) shows that package
+//! manager's command and downloads none.
+//!
+//! The key compiled into the build counts only once the binary has said
+//! so ([`App::use_build_registry`]): an application made anywhere else
+//! knows only the key its `rick.toml` names, which keeps every test away
+//! from the real registry.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
