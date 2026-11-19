@@ -3,10 +3,11 @@
 //! own — a server on this machine that counts what it is asked, and a key
 //! made here. No test asks get.openbreach.dev.
 //!
-//! Rick reads the plugin list once its first frame is drawn. With *Look
-//! for plugins and updates online* off and nothing cached, starting Rick
-//! and selecting files makes no request; with it on, the start makes one
-//! for each of the two files and the next start, the same day, none.
+//! Rick reads the cached plugin list once its first frame is drawn, and
+//! asks nobody then. With *Look for plugins and updates online* off and
+//! nothing cached, starting Rick and selecting files makes no request;
+//! with it on, the background check a minute after the start makes one
+//! for each of the two files, and the next start, the same day, none.
 
 use std::fs;
 use std::path::Path;
@@ -152,13 +153,20 @@ fn with_the_switch_off_and_nothing_cached_starting_and_selecting_asks_nobody() {
 }
 
 #[test]
-fn the_start_fetches_the_list_once_the_first_frame_is_drawn_and_once_a_day() {
+fn the_first_frame_asks_nobody_and_the_background_check_fetches_once_a_day() {
     let (server, signer) = (Server::start(), Signer::new(1));
     server.publish(&signer, &index());
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let dir = folder();
 
-    let harness = window(&fake, &server, &signer, true, dir.path());
+    // The first frames: nothing is cached, and nobody is asked for it.
+    let mut harness = window(&fake, &server, &signer, true, dir.path());
+    assert_eq!(server.requests(), [], "the start asks nobody");
+    assert_eq!(harness.state().app().plugin_registry().index, None);
+
+    // A minute later the background check comes.
+    tests::registry::background_check(harness.state_mut().app_mut());
+    settle(&mut harness);
     let requests = server.requests();
     let paths: Vec<&str> = requests.iter().map(|r| r.path.as_str()).collect();
     assert_eq!(paths, [INDEX_PATH, "registry/index.json.minisig"]);
@@ -174,10 +182,59 @@ fn the_start_fetches_the_list_once_the_first_frame_is_drawn_and_once_a_day() {
     assert_eq!(registry.problem, None);
     drop(harness);
 
-    // The next start reads what was cached and asks nobody.
-    let again = window(&fake, &server, &signer, true, dir.path());
+    // The next start reads what was cached, and its background check
+    // finds a list that is not a day old: nobody is asked.
+    let mut again = window(&fake, &server, &signer, true, dir.path());
     assert!(again.state().app().plugin_registry().index.is_some());
+    tests::registry::background_check(again.state_mut().app_mut());
+    settle(&mut again);
     assert_eq!(server.requests().len(), 2, "at most once a day");
+}
+
+/// The background check comes by itself, through the window's own loop:
+/// a Rick whose minute is a moment asks without anything being done.
+#[test]
+fn the_background_check_comes_by_itself_a_while_after_the_first_frame() {
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(&signer, &index());
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let dir = folder();
+    let config = fake.config_dir();
+    fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+    let settings = tests::registry::rick_toml(&server, &signer, true);
+    fs::write(config.join(app::SETTINGS_FILE), settings).unwrap_or_else(|e| panic!("{e}"));
+    let host = Arc::new(EguiHost::new());
+    let mut app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: Vec::new(),
+        config_dir: Some(config),
+        start: Some(local(dir.path())),
+    });
+    app.set_rick_version(RICK);
+    let after_start = Duration::from_millis(500);
+    app.set_registry_schedule(after_start, Duration::from_hours(24));
+    let started = Instant::now();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1200.0, 820.0))
+        .with_pixels_per_point(1.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    if started.elapsed() < after_start {
+        assert_eq!(server.requests(), [], "the first frames ask nobody");
+    }
+
+    // Nothing is done but drawing frames.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while server.requests().len() < 2 {
+        assert!(Instant::now() < deadline, "the check did not come");
+        harness.step();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(started.elapsed() >= after_start);
+    settle(&mut harness);
+    assert!(harness.state().app().plugin_registry().index.is_some());
+    assert_eq!(server.requests().len(), 2);
 }
 
 /// Issue 251, item 5: *Look for plugins and updates online* is on the
@@ -215,7 +272,9 @@ fn the_behaviour_page_switches_the_looking_for_plugins_online_off() {
         .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
     settle(&mut harness);
     assert!(harness.state().app().model().settings.registry.check);
-    assert_eq!(server.requests().len(), 2, "the start looked");
+    tests::registry::background_check(harness.state_mut().app_mut());
+    settle(&mut harness);
+    assert_eq!(server.requests().len(), 2, "the background check looked");
 
     harness.state_mut().open_settings();
     for _ in 0..4 {

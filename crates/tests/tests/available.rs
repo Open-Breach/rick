@@ -140,7 +140,8 @@ fn window(start: &Start<'_>) -> (Harness<'static, RickUi>, Restarts) {
     (harness, restarts)
 }
 
-/// A window of Rick after its start, with no dialogue open.
+/// A window of Rick a minute after its start, when the background check
+/// of the plugin list has been, with no dialogue open.
 fn shell(start: &Start<'_>) -> (Harness<'static, RickUi>, Restarts) {
     let config = start.fake.config_dir();
     fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
@@ -173,6 +174,10 @@ fn shell(start: &Start<'_>) -> (Harness<'static, RickUi>, Restarts) {
         .with_size(egui::vec2(1200.0, 820.0))
         .with_pixels_per_point(1.0)
         .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx).with_relaunch(hook));
+    settle(&mut harness);
+    // The first frame read the cache and asked nobody; a minute later
+    // the background check does.
+    registry::background_check(harness.state_mut().app_mut());
     settle(&mut harness);
     (harness, restarts)
 }

@@ -570,6 +570,12 @@ fn the_background_check_is_due_once_a_day() {
     assert!(due(Some(ago(24 * 30)), now));
     // A cached file dated after now is no reason to wait.
     assert!(due(Some(now + Duration::from_secs(3600)), now));
+    // The same rule for a check at another interval.
+    let hour = Duration::from_hours(1);
+    assert!(due_after(None, now, hour));
+    assert!(!due_after(Some(now - Duration::from_mins(59)), now, hour));
+    assert!(due_after(Some(now - hour), now, hour));
+    assert_eq!(CHECK_EVERY, Duration::from_hours(24));
 }
 
 /// The SHA-256 of `bytes`, as the index writes it.

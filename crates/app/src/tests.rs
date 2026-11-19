@@ -4866,11 +4866,211 @@ mod registry {
             self.settle();
         }
 
+        /// A start as time brings it: the first frame, which reads the
+        /// cache, and then the background check, which the timer sends
+        /// a minute later.
+        fn begin(&mut self) {
+            self.registry(RegistryCommand::Start);
+            self.registry(RegistryCommand::Daily);
+        }
+
         /// The version of Git in the index the application holds.
         fn git(&self) -> Option<String> {
             let index = self.app.plugin_registry().index.as_ref()?;
             Some(index.plugin("git")?.builds.first()?.version.clone())
         }
+    }
+
+    /// Runs the loop until `server` has been asked `count` times and says
+    /// when that was. It was never asked more often on the way, and half
+    /// a minute is as long as this waits.
+    fn until_asked(h: &mut Harness, server: &Server, count: usize) -> Instant {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            h.settle();
+            let seen = server.requests().len();
+            assert!(seen <= count, "asked {seen} times, {count} were expected");
+            if seen == count {
+                return Instant::now();
+            }
+            assert!(Instant::now() < deadline, "asked {seen} times only");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Runs the loop for `long`, in which `server` is asked nothing new.
+    fn left_alone(h: &mut Harness, server: &Server, long: Duration) {
+        let asked = server.requests().len();
+        let until = Instant::now() + long;
+        while Instant::now() < until {
+            h.settle();
+            assert_eq!(server.requests().len(), asked, "asked in the meantime");
+        }
+    }
+
+    #[test]
+    fn the_start_asks_nobody_and_the_background_check_comes_a_while_after_it() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(&signer, &index(1, "0.6.0"));
+        let mut h = start(&fake, &table(&server, &signer, true));
+        // Rick's own schedule is a minute and a day; the test's is the
+        // same in small.
+        assert_eq!(crate::REGISTRY_AFTER_START, Duration::from_mins(1));
+        let after_start = Duration::from_millis(600);
+        h.app
+            .set_registry_schedule(after_start, Duration::from_hours(24));
+
+        // The first frame: the cache is read, which is empty, and nobody
+        // is asked, although there is no list at all.
+        let started = Instant::now();
+        h.registry(RegistryCommand::Start);
+        assert_eq!(h.git(), None);
+        if started.elapsed() < after_start {
+            assert_eq!(server.requests(), [], "the start asks nobody");
+        }
+
+        // The check comes by itself, and not before its time.
+        let asked = until_asked(&mut h, &server, 2);
+        assert!(
+            asked.duration_since(started) >= after_start,
+            "asked after {:?}",
+            asked.duration_since(started)
+        );
+        h.settle();
+        assert_eq!(h.git().as_deref(), Some("0.6.0"));
+        assert_eq!(h.app.plugin_registry().problem, None);
+        // And then the list is good for a day.
+        left_alone(&mut h, &server, 3 * after_start);
+    }
+
+    #[test]
+    fn a_rick_that_stays_open_fetches_the_list_again_when_it_is_a_day_old() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(&signer, &index(1, "0.6.0"));
+        let mut h = start(&fake, &table(&server, &signer, true));
+        // A day of a second and a half.
+        let (after_start, day) = (Duration::from_millis(100), Duration::from_millis(1500));
+        h.app.set_registry_schedule(after_start, day);
+        let started = Instant::now();
+        h.registry(RegistryCommand::Start);
+        let first = until_asked(&mut h, &server, 2);
+        assert_eq!(h.git().as_deref(), Some("0.6.0"));
+
+        // A new list is published meanwhile. Rick does not look before
+        // the one it has is a day old, and then it does, by itself.
+        server.publish(&signer, &index(1, "0.6.1"));
+        let second = until_asked(&mut h, &server, 4);
+        // The list arrived after the start, so a day after the start is
+        // the earliest; the clocks of the file and of the test may differ
+        // by a moment.
+        let slack = Duration::from_millis(50);
+        assert!(
+            second.duration_since(started) + slack >= day,
+            "fetched again after {:?}",
+            second.duration_since(started)
+        );
+        assert!(second > first);
+        h.settle();
+        assert_eq!(h.git().as_deref(), Some("0.6.1"));
+
+        // And again a day after that.
+        server.publish(&signer, &index(1, "0.6.2"));
+        let third = until_asked(&mut h, &server, 6);
+        assert!(
+            third.duration_since(started) + slack >= 2 * day,
+            "fetched a third time after {:?}",
+            third.duration_since(started)
+        );
+        h.settle();
+        assert_eq!(h.git().as_deref(), Some("0.6.2"));
+    }
+
+    #[test]
+    fn a_list_younger_than_a_day_is_left_until_it_is_one_and_one_the_user_fetched_counts() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(&signer, &index(1, "0.6.0"));
+        let settings = table(&server, &signer, true);
+        let (after_start, day) = (Duration::from_millis(100), Duration::from_millis(2000));
+
+        // A Rick that fetched the list, and was closed.
+        let fetched = Instant::now();
+        let mut before = start(&fake, &settings);
+        before.begin();
+        assert_eq!(server.requests().len(), 2);
+        drop(before);
+
+        // The next one finds a list that is younger than a day: its
+        // check, a moment after the start, asks nobody. It waits for the
+        // list to be a day old, not for a day of its own.
+        let mut h = start(&fake, &settings);
+        h.app.set_registry_schedule(after_start, day);
+        h.registry(RegistryCommand::Start);
+        assert_eq!(h.git().as_deref(), Some("0.6.0"));
+        left_alone(&mut h, &server, 4 * after_start);
+        let again = until_asked(&mut h, &server, 4);
+        let slack = Duration::from_millis(50);
+        assert!(
+            again.duration_since(fetched) + slack >= day,
+            "fetched again after {:?}",
+            again.duration_since(fetched)
+        );
+
+        // The user asks for the list: the day starts over from there.
+        let asked = Instant::now();
+        h.registry(RegistryCommand::CheckNow);
+        assert_eq!(server.requests().len(), 6);
+        let later = until_asked(&mut h, &server, 8);
+        assert!(
+            later.duration_since(asked) + slack >= day,
+            "fetched again after {:?}",
+            later.duration_since(asked)
+        );
+    }
+
+    #[test]
+    fn a_background_check_that_fails_is_tried_again_a_day_later_and_not_before() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        // Nothing is published: the index is not there.
+        let mut h = start(&fake, &table(&server, &signer, true));
+        let (after_start, day) = (Duration::from_millis(100), Duration::from_millis(1500));
+        h.app.set_registry_schedule(after_start, day);
+        h.registry(RegistryCommand::Start);
+        let first = until_asked(&mut h, &server, 1);
+        h.settle();
+        assert_eq!(
+            h.app.plugin_registry().problem,
+            Some(RegistryProblem::Offline)
+        );
+
+        // No second try for a day, however soon the list would be there.
+        server.publish(&signer, &index(1, "0.6.0"));
+        left_alone(&mut h, &server, day / 2);
+        let second = until_asked(&mut h, &server, 3);
+        let slack = Duration::from_millis(50);
+        assert!(
+            second.duration_since(first) + slack >= day,
+            "tried again after {:?}",
+            second.duration_since(first)
+        );
+        h.settle();
+        assert_eq!(h.git().as_deref(), Some("0.6.0"));
+        assert_eq!(h.app.plugin_registry().problem, None);
+    }
+
+    #[test]
+    fn with_the_switch_off_the_background_check_asks_nobody() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(&signer, &index(1, "0.6.0"));
+        let mut h = start(&fake, &table(&server, &signer, false));
+        let (after_start, day) = (Duration::from_millis(50), Duration::from_millis(400));
+        h.app.set_registry_schedule(after_start, day);
+        h.registry(RegistryCommand::Start);
+        // A day and more: not at its start, and not when it comes round.
+        left_alone(&mut h, &server, 3 * day);
+        assert_eq!(server.requests(), []);
+        // Check now still asks, whatever the switch says.
+        h.registry(RegistryCommand::CheckNow);
+        assert_eq!(server.requests().len(), 2);
     }
 
     #[test]
@@ -4890,7 +5090,7 @@ mod registry {
         );
         assert_eq!(server.requests(), [], "and nothing is asked");
 
-        h.registry(RegistryCommand::Start);
+        h.begin();
         let requests = server.requests();
         let paths: Vec<&str> = requests.iter().map(|r| r.path.as_str()).collect();
         assert_eq!(paths, [INDEX_PATH, "registry/index.json.minisig"]);
@@ -4911,7 +5111,7 @@ mod registry {
         // The next start, the same day: the list is there and nobody is
         // asked.
         let mut again = start(&fake, &settings);
-        again.registry(RegistryCommand::Start);
+        again.begin();
         assert_eq!(again.git().as_deref(), Some("0.6.0"));
         assert_eq!(again.app.plugin_registry().fetched, registry.fetched);
         assert_eq!(server.requests().len(), 2, "at most once a day");
@@ -4926,7 +5126,7 @@ mod registry {
         drop(file);
         server.publish(&signer, &index(1, "0.6.1"));
         let mut later = start(&fake, &settings);
-        later.registry(RegistryCommand::Start);
+        later.begin();
         assert_eq!(later.git().as_deref(), Some("0.6.1"));
         assert_eq!(server.requests().len(), 4);
     }
@@ -4938,7 +5138,7 @@ mod registry {
         let mut h = start(&fake, &table(&server, &signer, false));
 
         // The start, the view opened, a selection: not one request.
-        h.registry(RegistryCommand::Start);
+        h.begin();
         h.registry(RegistryCommand::Opened);
         let pane = h.app.model().focused;
         h.send(Command::Select {
@@ -4958,7 +5158,7 @@ mod registry {
 
         // What was cached is shown by the next start, which asks nobody.
         let mut again = start(&fake, &table(&server, &signer, false));
-        again.registry(RegistryCommand::Start);
+        again.begin();
         assert_eq!(again.git().as_deref(), Some("0.6.0"));
         assert_eq!(server.requests().len(), 2);
     }
@@ -4968,7 +5168,7 @@ mod registry {
         let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
         server.publish(&signer, &index(1, "0.6.0"));
         let mut h = start(&fake, &table(&server, &signer, true));
-        h.registry(RegistryCommand::Start);
+        h.begin();
         assert_eq!(server.requests().len(), 2);
         server.publish(&signer, &index(1, "0.6.1"));
         h.registry(RegistryCommand::Opened);
@@ -4982,7 +5182,7 @@ mod registry {
         server.publish(&signer, &index(1, "0.6.0"));
         let settings = table(&server, &signer, true);
         let mut h = start(&fake, &settings);
-        h.registry(RegistryCommand::Start);
+        h.begin();
         let fetched = h.app.plugin_registry().fetched;
 
         // The registry now serves an index somebody else signed.
@@ -4997,7 +5197,7 @@ mod registry {
         // It was never cached: the next start has the good one, and a
         // fetch of a good index takes the problem away.
         let mut again = start(&fake, &settings);
-        again.registry(RegistryCommand::Start);
+        again.begin();
         assert_eq!(again.git().as_deref(), Some("0.6.0"));
         assert_eq!(again.app.plugin_registry().problem, None);
         again.registry(RegistryCommand::CheckNow);
@@ -5017,7 +5217,7 @@ mod registry {
         server.publish(&signer, &index(1, "0.6.0"));
         let settings = table(&server, &signer, true);
         let mut h = start(&fake, &settings);
-        h.registry(RegistryCommand::Start);
+        h.begin();
         assert_eq!(server.requests().len(), 2);
 
         // Somebody changes the cached file. It is fresh, and no reason to
@@ -5029,7 +5229,7 @@ mod registry {
             .join(plugins_registry::INDEX_FILE);
         fs::write(&cached, index(1, "6.6.6").to_string()).unwrap_or_else(|e| panic!("{e}"));
         let mut again = start(&fake, &settings);
-        again.registry(RegistryCommand::Start);
+        again.begin();
         assert_eq!(server.requests().len(), 4);
         assert_eq!(again.git().as_deref(), Some("0.6.0"));
         assert_eq!(again.app.plugin_registry().problem, None);
@@ -5037,7 +5237,7 @@ mod registry {
         // With the switch off it is dropped all the same, and said.
         fs::write(&cached, index(1, "6.6.6").to_string()).unwrap_or_else(|e| panic!("{e}"));
         let mut off = start(&fake, &table(&server, &signer, false));
-        off.registry(RegistryCommand::Start);
+        off.begin();
         assert_eq!(server.requests().len(), 4);
         assert_eq!(off.git(), None);
         assert_eq!(
@@ -5051,7 +5251,7 @@ mod registry {
         let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
         server.publish(&signer, &index(1, "0.6.0"));
         let mut h = start(&fake, &table(&server, &signer, true));
-        h.registry(RegistryCommand::Start);
+        h.begin();
 
         server.publish(&signer, &index(2, "0.9.0"));
         h.registry(RegistryCommand::CheckNow);
@@ -5240,6 +5440,8 @@ mod install {
             events: Vec::new(),
         };
         harness.send(Command::Registry(RegistryCommand::Start));
+        harness.settle();
+        harness.send(Command::Registry(RegistryCommand::Daily));
         harness.settle();
         harness
     }
@@ -5561,6 +5763,8 @@ mod install {
         harness.settle();
         harness.take_events();
         harness.send(Command::Registry(RegistryCommand::Start));
+        harness.settle();
+        harness.send(Command::Registry(RegistryCommand::Daily));
         harness.settle();
         harness
     }

@@ -387,8 +387,9 @@ pub struct Plugins {
 pub struct RegistrySettings {
     /// *Look for plugins and updates online*: Rick fetches the plugin
     /// list when the *Available* view is opened and, in the background,
-    /// at most once a day. Off, it fetches nothing by itself; *Check now*
-    /// still does.
+    /// once a day: a minute after the start when the list is a day old,
+    /// and every 24 hours while it stays open. Off, it fetches nothing by
+    /// itself; *Check now* still does.
     pub check: bool,
     /// The address of another index than the registry's own, for
     /// development and for the tests; `None` for the registry's.

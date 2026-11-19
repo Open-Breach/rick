@@ -4012,6 +4012,10 @@ fn screenshots_of_the_available_plugins() {
         .with_pixels_per_point(2.0)
         .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
     settle(&mut harness);
+    // A minute after the start, in a test's time: the background check
+    // of the plugin list.
+    registry::background_check(harness.state_mut().app_mut());
+    settle(&mut harness);
     let set = |harness: &mut Harness<'_, RickUi>, theme: Theme| {
         harness.state_mut().app_mut().handle(
             app::Command::Settings(SettingsChange::Theme(theme)),
@@ -4183,6 +4187,10 @@ fn screenshots_of_a_plugin_update() {
         .with_size(egui::vec2(1280.0, 840.0))
         .with_pixels_per_point(2.0)
         .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    // A minute after the start, in a test's time: the background check
+    // of the plugin list.
+    registry::background_check(harness.state_mut().app_mut());
     settle(&mut harness);
     let set = |harness: &mut Harness<'_, RickUi>, theme: Theme| {
         harness.state_mut().app_mut().handle(
