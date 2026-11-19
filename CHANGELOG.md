@@ -132,6 +132,14 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
 - The release page carries the packages and the lists of the four
   platforms beside the archives, and `SHA256SUMS.txt` names them all
   (#260).
+- **The licences of everything a release ships are in the archive as
+  files**, not only in the About dialog. `THIRD-PARTY-LICENSES.md` lists,
+  after the crates, what ships outside Cargo: pdfium, 7-Zip, GStreamer,
+  the Rust standard library, the fonts and the icon font. A `licenses/`
+  folder holds the texts of the libraries built into pdfium and the
+  notices of the Rust standard library, each taken from the build that
+  ships. The About dialog's *Bundled runtimes* gain the Rust standard
+  library (#278).
 
 ## [0.5.0] - 2026-11-15
 
