@@ -212,17 +212,16 @@ pub fn sign(req: &Unsigned<'_>, account: &str, key: &[u8]) -> String {
     format!("SharedKey {account}:{signature}")
 }
 
-/// The current time as the `x-ms-date` header writes it.
-fn date_now() -> String {
-    chrono::DateTime::<chrono::Utc>::from(SystemTime::now())
-        .format("%a, %d %b %Y %H:%M:%S GMT")
-        .to_string()
+/// `time` as the `x-ms-date` header writes it.
+pub(crate) fn ms_date(time: SystemTime) -> String {
+    jiff::Timestamp::try_from(time)
+        .ok()
+        .and_then(|time| jiff::fmt::strtime::format("%a, %d %b %Y %H:%M:%S GMT", time).ok())
+        .unwrap_or_default()
 }
 
 fn parse_time(text: &str) -> Option<SystemTime> {
-    chrono::DateTime::parse_from_rfc2822(text)
-        .ok()
-        .map(SystemTime::from)
+    jiff::fmt::rfc2822::parse(text).ok().map(SystemTime::from)
 }
 
 /// A container of the account.
@@ -395,7 +394,7 @@ impl AzureClient {
         if !query.is_empty() {
             url.set_query(Some(&encode_query(query)));
         }
-        let date = date_now();
+        let date = ms_date(SystemTime::now());
         let mut ms: Vec<(&str, &str)> =
             vec![("x-ms-date", date.as_str()), ("x-ms-version", VERSION)];
         ms.extend_from_slice(ms_headers);
