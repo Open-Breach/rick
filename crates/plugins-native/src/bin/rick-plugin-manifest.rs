@@ -3,7 +3,8 @@
 //!
 //! Loads the library once, reads the manifest its entry point registers,
 //! writes `<plugins dir>/<id>/plugin.toml` from it with this build's
-//! toolchain (QUESTIONS.md 83), copies the library beside the file and
+//! version of Rick and its toolchain (QUESTIONS.md 83,
+//! specs/plugin-distribution.md §3), copies the library beside the file and
 //! prints the id. A plugin whose manifest leaves this platform out (the
 //! Spotlight connector on Linux) is not placed: the helper says so on its
 //! standard error and exits with [`NOT_FOR_THIS_PLATFORM`], and the bundler
