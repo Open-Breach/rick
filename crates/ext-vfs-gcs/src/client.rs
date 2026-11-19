@@ -115,9 +115,7 @@ pub fn encode(text: &str) -> String {
 }
 
 fn parse_time(text: &str) -> Option<SystemTime> {
-    chrono::DateTime::parse_from_rfc3339(text)
-        .ok()
-        .map(SystemTime::from)
+    text.parse::<jiff::Timestamp>().ok().map(SystemTime::from)
 }
 
 /// A bucket of the project.
