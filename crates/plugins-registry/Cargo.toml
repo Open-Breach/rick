@@ -13,7 +13,7 @@ repository.workspace = true
 # Rick does at run time reaches it.
 [features]
 default = []
-fixtures = ["dep:base64", "dep:blake2", "dep:ring", "dep:runtime", "dep:tokio"]
+fixtures = ["dep:base64", "dep:blake2", "dep:ring", "dep:runtime", "tokio/net"]
 
 [dependencies]
 minisign-verify = { workspace = true }
@@ -23,13 +23,16 @@ rustls = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# A package is hashed while it is written to the disk.
+sha2 = { workspace = true }
+hex = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util"] }
 tracing = { workspace = true }
 base64 = { workspace = true, optional = true }
 blake2 = { workspace = true, optional = true }
 ring = { workspace = true, optional = true }
 runtime = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["net", "io-util"], optional = true }
 
 [dev-dependencies]
 plugins-registry = { path = ".", features = ["fixtures"] }
