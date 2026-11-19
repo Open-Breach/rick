@@ -40,11 +40,15 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   video plugin's folder, in place of beside the binary, so the plugin's
   package holds it and it is found from the per-user plugins folder as
   well. The archives of those two platforms hold no GStreamer any more.
-  On Windows Rick puts the folder of a plugin that brings libraries of
-  its own first on the `PATH` before it loads the plugin. GStreamer's
-  plugin scanner is no longer bundled on macOS; GStreamer reads its
-  elements in the process, as it did on Windows. Linux uses the system's
-  GStreamer as before (#258).
+  On Windows Rick names the folder of a plugin whose library needs the
+  libraries beside it to the system's loader, for Rick's own process
+  only; nothing is put on the `PATH`, so a program started from Rick
+  inherits no plugin folder. Rick itself looks for libraries beside the
+  binary, in those folders and in the system's folder, and no longer in
+  the current directory or on the `PATH`. GStreamer's plugin scanner is
+  no longer bundled on macOS; GStreamer reads its elements in the
+  process, as it did on Windows. Linux uses the system's GStreamer as
+  before (#258, #264).
 - The extension API is 23 (#256): a manifest says what the plugin is for.
   `ext::Manifest` gained `markers`, the names of an entry that make a
   folder the plugin's business (`.git`, `.svn`), and `connections`, what

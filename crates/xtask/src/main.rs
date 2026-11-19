@@ -451,7 +451,7 @@ fn bundled_gstreamer(plugins_dir: &Path) -> Result<()> {
 /// library, and the elements into `lib/gstreamer-1.0/`, where GStreamer
 /// looks for them from a library that is in neither a `bin` nor a `lib`
 /// folder. Windows does not search a library's own folder for what it
-/// links, so the plugin host puts the folder on the `PATH` before it
+/// links, so the plugin host names the folder to the loader when it
 /// loads the plugin (`plugins_native::Host`).
 ///
 /// The plugin scanner is not copied on either platform: a package holds

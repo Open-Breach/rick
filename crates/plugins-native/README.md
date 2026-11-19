@@ -254,12 +254,22 @@ development build has them all. A release splits them
 A library the plugin needs travels in the plugin's folder, so that its
 package holds it: the 7-Zip library of the archive plugin, the GStreamer
 runtime of the media previewer on macOS and Windows. A library the plugin
-loads itself is looked for there by the plugin. One it links has to be
-found by the system's loader: on macOS the plugin's library carries a run
-path relative to itself (`build.rs` of `ext-preview-media`), and on
-Windows the host puts the folder of a plugin that brings libraries first
-on the `PATH` before it loads the plugin, since Windows never looks in the
-folder of the library that asks.
+loads itself is looked for there by the plugin, and opened by its full
+path. One it links has to be found by the system's loader: on macOS the
+plugin's library carries a run path relative to itself (`build.rs` of
+`ext-preview-media`). Windows never looks in the folder of the library
+that asks, so there the host names the folder to the loader
+(`platform::loader`, `AddDllDirectory`): when a plugin's library does not
+load and its folder holds libraries besides its own, the folder is named
+and the library loaded once more, and the folder stays named for the
+libraries the plugin's own open later. A plugin that loads the first time
+is left alone, the archive plugin among them. The host never changes
+Rick's environment for a plugin: nothing goes on the `PATH`, which every
+program Rick starts would inherit. From the start of the host on, Windows
+looks for libraries beside the binary, in the named folders and in the
+system's folder only (`SetDefaultDllDirectories`), no longer in the
+current directory or on the `PATH`; a library a plugin opens by name has
+to lie in one of those.
 
 A user drops a plugin into the `plugins/` folder beside the binary or into
 the per-user one in the config directory (`~/.config/rick/plugins/` on

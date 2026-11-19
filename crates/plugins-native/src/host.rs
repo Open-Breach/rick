@@ -2,15 +2,14 @@
 //! of every plugin at start.
 
 use std::collections::BTreeMap;
-use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ext::platform::Platform;
+use ext::platform::{Platform, loader};
 use ext::{API_VERSION, Extension, Platforms, Points};
 use tracing::{debug, info, info_span, warn};
 
-use crate::load::{Loaded, load_library};
+use crate::load::{LoadError, Loaded, load_library};
 use crate::manifest::{self, Head, MANIFEST_FILE, ManifestError, PluginToml};
 use crate::{HOST_RICK, HOST_TOOLCHAIN};
 
@@ -159,6 +158,14 @@ impl Host {
     /// with a reason.
     #[must_use]
     pub fn load(options: &Options) -> Self {
+        // Before the first library: on Windows the process looks for
+        // libraries beside the binary, in the folders named to the loader
+        // and in the system's folder from here on, and no longer in the
+        // current directory or on the `PATH`. For every start alike,
+        // whatever the plugins bring; nothing happens on Linux and macOS.
+        if let Err(error) = loader::restrict_search() {
+            warn!(%error, "the search for libraries is not restricted");
+        }
         let mut candidates: Vec<Candidate> = options
             .dirs
             .iter()
@@ -340,40 +347,49 @@ fn brings_libraries(dir: &Path, library: &str) -> bool {
         })
 }
 
-/// `path`, the value of a search path variable, with `dir` put first and
-/// not named a second time.
-fn with_first(dir: &Path, path: Option<&OsStr>) -> Result<OsString, std::env::JoinPathsError> {
-    let rest = path
-        .map(|path| std::env::split_paths(path).collect::<Vec<_>>())
-        .unwrap_or_default();
-    std::env::join_paths(
-        std::iter::once(dir.to_path_buf()).chain(rest.into_iter().filter(|known| known != dir)),
-    )
-}
-
-/// Puts the plugin folder `dir` first on the `PATH`, for the rest of the
-/// process: Windows only.
+/// Loads the plugin's library a second time, with the plugin's folder
+/// `dir` named to the loader, after the load failed with `first`: Windows
+/// only, and only for a folder that brings libraries.
 ///
-/// Windows looks for the libraries a library links beside the binary, in
-/// the system's folders and on the `PATH`, never in the folder of the
-/// library that asks. A plugin that brings libraries of its own in its
-/// folder would not load, wherever the folder lies. The `PATH` is the one
-/// of those places a process can add to that every later load honours as
-/// well, and later loads matter: GStreamer opens its elements by full path
-/// when they are first needed, and what an element links lies in the
-/// plugin's folder too.
-fn lend_to_loader(dir: &Path) {
-    match with_first(dir, std::env::var_os("PATH").as_deref()) {
-        Ok(path) => {
-            // SAFETY: changing the environment is unsound where another
-            // thread may read it at the same moment without std's lock.
-            // That cannot happen on Windows, where the system guards the
-            // environment itself, and this function runs nowhere else
-            // (the caller checks the operating system).
-            unsafe { std::env::set_var("PATH", path) };
-            debug!(dir = %dir.display(), "plugin folder put on the PATH");
+/// Windows looks for the libraries a library links beside the binary and
+/// in the system's folder, never in the folder of the library that asks. A
+/// plugin whose library links what its folder brings does not load until
+/// the folder is named to the loader, and it stays named for the rest of
+/// the process, since later loads count as well: GStreamer opens its
+/// elements by full path when they are first needed, and what an element
+/// links lies in the plugin's folder too. Rick's environment is not
+/// touched for it; a folder on the `PATH` would reach every program Rick
+/// starts.
+///
+/// A folder is named only after its plugin failed to load without it. A
+/// plugin that opens the library beside it by itself, as the archive
+/// provider opens the 7-Zip library by its full path, loads the first
+/// time and its folder is never named.
+fn load_with_folder_named(
+    dir: &Path,
+    first: LoadError,
+    load: impl FnOnce() -> Result<Loaded, LoadError>,
+) -> Result<Loaded, LoadError> {
+    let named = match loader::name_dir(dir) {
+        Ok(named) => named,
+        Err(error) => {
+            warn!(dir = %dir.display(), %error, "plugin folder not named to the loader");
+            return Err(first);
         }
-        Err(error) => warn!(dir = %dir.display(), %error, "plugin folder not put on the PATH"),
+    };
+    debug!(dir = %dir.display(), reason = %first, "plugin folder named to the loader");
+    match load() {
+        // The loader refused the library again: nothing of the plugin is
+        // mapped, and its folder has no business in the search.
+        Err(LoadError::Open(error)) => {
+            if let Err(error) = named.remove() {
+                warn!(dir = %dir.display(), %error, "plugin folder still named to the loader");
+            }
+            Err(LoadError::Open(error))
+        }
+        // Loaded, or mapped and refused for what its entry point did: the
+        // library stays, and the folder with it.
+        outcome => outcome,
     }
 }
 
@@ -433,15 +449,20 @@ fn check_and_load(
     if options.disabled.contains(&toml.id) {
         return Ok(None);
     }
-    if os == "windows" && brings_libraries(dir, file) {
-        lend_to_loader(dir);
+    let load = || {
+        load_library(
+            &path,
+            options.platform(),
+            options.prompts.clone(),
+            options.settings.clone(),
+        )
+    };
+    let loaded = match load() {
+        Err(LoadError::Open(error)) if os == "windows" && brings_libraries(dir, file) => {
+            load_with_folder_named(dir, LoadError::Open(error), load)
+        }
+        outcome => outcome,
     }
-    let loaded = load_library(
-        &path,
-        options.platform(),
-        options.prompts.clone(),
-        options.settings.clone(),
-    )
     .map_err(|e| e.to_string())?;
     let manifest = loaded.manifest();
     if manifest.id.0 != toml.id {
@@ -470,8 +491,9 @@ mod tests {
     use super::*;
 
     /// A plugin's folder counts as bringing libraries when a library other
-    /// than the plugin's own lies in it: the rule by which the host lends
-    /// the folder to the Windows loader (issue 250, item 5).
+    /// than the plugin's own lies in it: the folders the host names to
+    /// the Windows loader when their plugin does not load without (issues
+    /// 250, item 5, and 264).
     #[test]
     fn a_folder_brings_libraries_when_one_lies_beside_the_plugin_s_own() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -492,20 +514,5 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"));
         assert!(brings_libraries(dir.path(), &own));
         assert!(!brings_libraries(&dir.path().join("missing"), &own));
-    }
-
-    #[test]
-    fn the_folder_goes_first_on_the_path_and_is_named_once() {
-        let dir = Path::new("plugins").join("preview-media");
-        let other = Path::new("somewhere").join("else");
-        let split = |path: &OsString| std::env::split_paths(path).collect::<Vec<_>>();
-
-        let alone = with_first(&dir, None).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(split(&alone), std::slice::from_ref(&dir));
-
-        let before = std::env::join_paths([other.clone(), dir.clone(), other.join("bin")])
-            .unwrap_or_else(|e| panic!("{e}"));
-        let after = with_first(&dir, Some(&before)).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(split(&after), [dir, other.clone(), other.join("bin")]);
     }
 }

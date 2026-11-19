@@ -9,10 +9,12 @@
 //! the one beside the binary; disabling a plugin writes `rick.toml` and the
 //! next start lists it disabled; a job spawned inside a plugin shows in the
 //! job table and cancels from it; the Git plugin decorates a work tree and
-//! brings its action group exactly as the compiled-in extension did; and
-//! loading it costs at most 50 ms on Linux.
+//! brings its action group exactly as the compiled-in extension did;
+//! loading it costs at most 50 ms on Linux; and loading every plugin leaves
+//! the process environment as it was (issue 264).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -68,6 +70,42 @@ fn install(plugins_dir: &Path, stem: &str, edit: impl FnOnce(&mut PluginToml)) -
         .unwrap_or_else(|| panic!("no library name for this OS"));
     fs::copy(&library, dir.join(file)).unwrap_or_else(|e| panic!("{e}"));
     dir
+}
+
+/// Lays `plugins_dir` out as the bundler lays out a bundle's: every plugin
+/// library built beside this binary in a folder named after its id, with
+/// the manifest the bundler would write. Returns the ids.
+fn install_every_plugin(plugins_dir: &Path) -> Vec<String> {
+    let (prefix, suffix) = (std::env::consts::DLL_PREFIX, std::env::consts::DLL_SUFFIX);
+    let mut stems: Vec<String> = fs::read_dir(deps_dir())
+        .unwrap_or_else(|e| panic!("{e}"))
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let stem = name.strip_prefix(prefix)?.strip_suffix(suffix)?;
+            // A plugin crate is an `ext-*` one built as a library file;
+            // cargo names the file after the crate, with no hash.
+            stem.starts_with("ext_").then(|| stem.to_owned())
+        })
+        .collect();
+    stems.sort();
+    let mut ids = Vec::new();
+    for stem in stems {
+        let library = library_of(&stem);
+        let mut toml = plugins_native::describe(&library)
+            .unwrap_or_else(|e| panic!("{}: {e}", library.display()));
+        toml.library = Library::for_crate(&stem);
+        let dir = plugins_dir.join(&toml.id);
+        toml.write(&dir.join(MANIFEST_FILE))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let file = toml
+            .library
+            .for_os(std::env::consts::OS)
+            .unwrap_or_else(|| panic!("no library name for this OS"));
+        fs::copy(&library, dir.join(file)).unwrap_or_else(|e| panic!("{e}"));
+        ids.push(toml.id);
+    }
+    ids
 }
 
 fn options(dirs: Vec<(Source, PathBuf)>) -> Options {
@@ -931,6 +969,82 @@ fn the_search_and_svn_plugins_load_on_their_platforms() {
     assert!(indexes.contains(&"search-walk"), "{indexes:?}");
     assert_eq!(indexes.len(), loaded - 1, "{indexes:?}");
     drop(app);
+    drop(host);
+}
+
+/// Acceptance (issue 264): after the host has loaded every plugin of a
+/// bundle, the process environment is what it was at start, `PATH` and
+/// every other variable, and a program started from here is handed no
+/// plugin folder on its `PATH`. On every platform; Windows is where the
+/// host changed the `PATH`, for a plugin with a library beside its own.
+/// The bundle is a plugins directory laid out as the bundler lays one
+/// out, with every plugin library built beside this binary, and with a
+/// library beside the archive plugin's, as a bundle carries the 7-Zip
+/// library there. In a process of its own: the environment and where a
+/// process looks for libraries are things it has once.
+#[test]
+fn loading_every_plugin_leaves_the_environment_as_it_was() {
+    if !tests::alone("plugins::loading_every_plugin_leaves_the_environment_as_it_was") {
+        return;
+    }
+    let environment = || std::env::vars_os().collect::<BTreeMap<OsString, OsString>>();
+    let at_start = environment();
+
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let plugins = dir.path().join("plugins");
+    let ids = install_every_plugin(&plugins);
+    assert!(ids.iter().any(|id| id == "vfs-archive"), "{ids:?}");
+    assert!(ids.iter().any(|id| id == "preview-media"), "{ids:?}");
+    fs::write(
+        plugins
+            .join("vfs-archive")
+            .join(platform::sevenzip::LIBRARY_FILE),
+        "not a library; the plugin opens the real one by itself, when asked",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+
+    let host = Host::load(&options(vec![(Source::BesideBinary, plugins.clone())]));
+    // Every plugin of the bundle that is for this platform is loaded.
+    let mut loaded = 0;
+    for id in &ids {
+        match status_of(&host, id) {
+            PluginStatus::Loaded => loaded += 1,
+            PluginStatus::Refused(reason) if reason.starts_with("built for ") => {}
+            other => panic!("{id}: {other:?}"),
+        }
+    }
+    assert_eq!(status_of(&host, "vfs-archive"), &PluginStatus::Loaded);
+    assert!(loaded > 10, "{loaded} of {} plugins loaded", ids.len());
+
+    let after = environment();
+    for (name, value) in &after {
+        assert_eq!(
+            at_start.get(name),
+            Some(value),
+            "{} changed or appeared",
+            name.to_string_lossy()
+        );
+    }
+    assert_eq!(after.len(), at_start.len(), "a variable is gone");
+
+    // What a program started from here is given: the console's shell, a
+    // program opened with Enter.
+    let (shell, args) = if std::env::consts::OS == "windows" {
+        ("cmd", ["/C", "echo %PATH%"])
+    } else {
+        ("sh", ["-c", "echo \"$PATH\""])
+    };
+    let output = std::process::Command::new(shell)
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("{shell}: {e}"));
+    let path = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(output.status.success() && !path.trim().is_empty(), "{path}");
+    let plugins = plugins.display().to_string();
+    assert!(
+        !path.to_lowercase().contains(&plugins.to_lowercase()),
+        "a plugin folder is on the PATH of a program started from here: {path}"
+    );
     drop(host);
 }
 
