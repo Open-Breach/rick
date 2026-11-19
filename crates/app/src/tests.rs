@@ -1168,23 +1168,35 @@ fn subtree_search_streams_matches_as_a_job_and_a_new_text_supersedes_it() {
     assert_eq!(h.names().len(), 4);
 }
 
-/// A walk whose stream holds one of its polls open, as the real walk's
-/// set-up holds its first: asked for `held`, the stream answers `before`
-/// batches that are ready at once, then says on `entered` that it is inside
-/// a poll and waits there, on the thread that polls it, for `release`. Only
-/// then does it look at its token, and it ends as the spec has a stream end:
-/// quietly when the token is cancelled, after one more batch otherwise. Any
-/// other text is answered at once.
-///
-/// The wait is on the polling thread on purpose. A stream that returned
-/// `Pending` would hand the poll back to the job runner, which looks at the
-/// token before it polls the job again; held open, the poll is one in which
-/// the runner has already looked.
+/// How [`GatedWalk`]'s stream waits at the poll it holds.
+#[derive(Clone)]
+enum Hold {
+    /// On the thread that polls it: it says on `entered` that it is inside
+    /// a poll and waits there for `release`. A cancel sent in between lands
+    /// inside the poll, after the job runner looked at the token. A stream
+    /// that returned `Pending` would not do for that: it hands the poll
+    /// back to the runner, which looks at the token before it polls again.
+    InsideThePoll {
+        entered: std::sync::mpsc::Sender<()>,
+        release: Arc<Mutex<std::sync::mpsc::Receiver<()>>>,
+    },
+    /// As a stream that has nothing yet: `Pending`, and never ready again.
+    /// The poll goes back to the runner, so the runner is the one that sees
+    /// a cancel and drops the job, whenever the cancel is sent: the usual
+    /// case.
+    Pending,
+}
+
+/// A walk whose stream holds one of its polls, as the real walk's set-up
+/// holds its first: asked for `held`, the stream answers `before` batches
+/// that are ready at once and then waits as `hold` says. Only then does it
+/// look at its token, and it ends as the spec has a stream end: quietly
+/// when the token is cancelled, after one more batch otherwise. Any other
+/// text is answered at once.
 struct GatedWalk {
     held: &'static str,
     before: u64,
-    entered: std::sync::mpsc::Sender<()>,
-    release: Arc<Mutex<std::sync::mpsc::Receiver<()>>>,
+    hold: Hold,
 }
 
 impl SearchIndex for GatedWalk {
@@ -1203,23 +1215,21 @@ impl SearchIndex for GatedWalk {
         cancel: CancelToken,
     ) -> ext::BoxStream<'static, Result<Vec<SearchHit>, Error>> {
         let text = q.text.clone();
-        let held = text == self.held;
+        let gated = text == self.held;
         let batch = move |n: u64| {
-            let id = u128::from(n) + if held { 100 } else { 1 };
+            let id = u128::from(n) + if gated { 100 } else { 1 };
             Ok(vec![SearchHit {
                 entry: hit(id, &format!("/{text}-{n}.txt")),
                 snippet: None,
             }])
         };
-        if !held {
+        if !gated {
             return stream::iter(vec![batch(0)]).boxed();
         }
         let before = self.before;
-        let entered = self.entered.clone();
-        let release = Arc::clone(&self.release);
+        let hold = self.hold.clone();
         stream::unfold(0u64, move |sent| {
-            let entered = entered.clone();
-            let release = Arc::clone(&release);
+            let hold = hold.clone();
             let cancel = cancel.clone();
             let batch = batch.clone();
             async move {
@@ -1229,11 +1239,16 @@ impl SearchIndex for GatedWalk {
                 if sent > before {
                     return None;
                 }
-                let _ = entered.send(());
-                let _ = release
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .recv_timeout(Duration::from_secs(10));
+                match hold {
+                    Hold::InsideThePoll { entered, release } => {
+                        let _ = entered.send(());
+                        let _ = release
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .recv_timeout(Duration::from_secs(10));
+                    }
+                    Hold::Pending => std::future::pending::<()>().await,
+                }
                 if cancel.is_cancelled() {
                     return None;
                 }
@@ -1255,24 +1270,15 @@ fn search_states(h: &Harness) -> Vec<model::JobState> {
         .collect()
 }
 
-/// Searches for `held` on a [`GatedWalk`] that answers `before` batches
-/// first and returns once the search job is inside the poll the walk holds
-/// open, with what lets the walk go. The batches before that poll are in
-/// the listing by then. Nothing in a test that goes on from here depends on
-/// how fast anything runs: it cancels after the poll began, and the poll
-/// ends after it let the walk go.
-fn search_held_inside_a_poll(before: u64) -> (Harness, std::sync::mpsc::Sender<()>) {
-    let (entered, has_entered) = std::sync::mpsc::channel();
-    let (release, released) = std::sync::mpsc::channel();
-    let mut h = harness_with(vec![IndexExtension::around(
-        "gated-walk",
-        Arc::new(GatedWalk {
-            held: "held",
-            before,
-            entered,
-            release: Arc::new(Mutex::new(released)),
-        }),
-    )]);
+/// Searches for `held` on a [`GatedWalk`] that answers `before` batches and
+/// then waits as `hold` says.
+fn search_held(before: u64, hold: Hold) -> Harness {
+    let walk = GatedWalk {
+        held: "held",
+        before,
+        hold,
+    };
+    let mut h = harness_with(vec![IndexExtension::around("gated-walk", Arc::new(walk))]);
     h.settle();
     let pane = h.app.model().focused;
     h.send(Command::Subtree { pane, on: true });
@@ -1280,19 +1286,40 @@ fn search_held_inside_a_poll(before: u64) -> (Harness, std::sync::mpsc::Sender<(
         pane,
         text: "held".into(),
     });
-    assert!(
-        has_entered.recv_timeout(Duration::from_secs(10)).is_ok(),
-        "the search never reached the poll the walk holds open"
-    );
+    h
+}
+
+/// Waits until the `before` batches of the held search are in the listing.
+fn batches_shown(h: &mut Harness, before: u64) {
     let shown = usize::try_from(before).unwrap_or(usize::MAX);
-    let all_shown = wait_until(&mut h, Duration::from_secs(10), |h| {
-        h.names().len() == shown
-    });
+    let all_shown = wait_until(h, Duration::from_secs(10), |h| h.names().len() == shown);
     assert!(
         all_shown,
         "the batches before the held poll never showed: {:?}",
         h.names()
     );
+}
+
+/// [`search_held`] with the walk waiting inside a poll: returns once the
+/// search job is inside that poll, with what lets the walk go. The batches
+/// before that poll are in the listing by then. Nothing in a test that goes
+/// on from here depends on how fast anything runs: it cancels after the
+/// poll began, and the poll ends after it let the walk go.
+fn search_held_inside_a_poll(before: u64) -> (Harness, std::sync::mpsc::Sender<()>) {
+    let (entered, has_entered) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let mut h = search_held(
+        before,
+        Hold::InsideThePoll {
+            entered,
+            release: Arc::new(Mutex::new(released)),
+        },
+    );
+    assert!(
+        has_entered.recv_timeout(Duration::from_secs(10)).is_ok(),
+        "the search never reached the poll the walk holds open"
+    );
+    batches_shown(&mut h, before);
     (h, release)
 }
 
@@ -1340,15 +1367,9 @@ fn a_search_cancelled_inside_a_poll_after_its_first_batch_ends_cancelled() {
     assert_eq!(h.names(), ["next-0.txt"], "only the second text's match");
 }
 
-/// `ListDone` carries the job's result: a search cancelled from the
-/// operations area, the cancel landing inside a poll, reaches its pane as
-/// cancelled and not as complete. The pane keeps the matches it has and
-/// says that the listing did not end, as it does for any listing that
-/// failed.
-#[test]
-fn a_search_cancelled_from_the_operations_area_inside_a_poll_is_not_complete_for_its_pane() {
-    let (mut h, release) = search_held_inside_a_poll(1);
-    let pane = h.app.model().focused;
+/// Cancels the held search as the cancel button of its row in the
+/// operations area does.
+fn cancel_in_the_operations_area(h: &mut Harness) {
     let search = h
         .app
         .model()
@@ -1356,19 +1377,58 @@ fn a_search_cancelled_from_the_operations_area_inside_a_poll_is_not_complete_for
         .iter()
         .find(|(_, job)| job.name.starts_with("Search"))
         .map_or_else(|| panic!("the search is in the job table"), |(id, _)| *id);
+    h.take_events();
     h.send(Command::CancelJob(search));
-    assert!(release.send(()).is_ok(), "the walk is gone");
-    h.settle();
-    assert_eq!(search_states(&h), [model::JobState::Cancelled]);
-    assert_eq!(h.names(), ["held-0.txt"], "the match it had stays");
-    let failure = h.tab(pane).failure.clone().unwrap_or_default();
+}
+
+/// What holds once a search with one match shown was cancelled in the
+/// operations area and everything has settled: a cancel is not a failure.
+fn assert_ended_quietly(h: &mut Harness) {
+    let pane = h.app.model().focused;
+    assert_eq!(search_states(h), [model::JobState::Cancelled]);
+    assert_eq!(h.names(), ["held-0.txt"], "the pane keeps the row it has");
     assert!(
-        failure.ends_with("could not be listed: cancelled"),
-        "the pane says the search did not end: {failure:?}"
+        h.tab(pane).listing.complete,
+        "the footer no longer says that the pane is listing"
+    );
+    assert_eq!(h.tab(pane).failure, None, "no banner and no Retry");
+    assert!(!h.app.is_busy(), "the window goes idle");
+    let events = h.take_events();
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::Notify { .. } | Event::JobFailed { .. })),
+        "nothing is said: {events:?}"
     );
 }
 
-/// A folder's listing in Tree view, cancelled inside a poll.
+/// A search cancelled in the operations area, the cancel landing inside a
+/// poll: the job says that it was cancelled, with `ListDone`, and the pane
+/// does not take that for a listing that failed.
+#[test]
+fn a_search_cancelled_in_the_operations_area_inside_a_poll_ends_quietly() {
+    let (mut h, release) = search_held_inside_a_poll(1);
+    cancel_in_the_operations_area(&mut h);
+    assert!(release.send(()).is_ok(), "the walk is gone");
+    h.settle();
+    assert_ended_quietly(&mut h);
+}
+
+/// The same in the usual case: the runner sees the cancel and drops the
+/// job, which then says nothing at all. The pane ends its listing all the
+/// same, where it kept saying that it was listing and the application
+/// never went idle.
+#[test]
+fn a_search_cancelled_in_the_operations_area_ends_quietly() {
+    let mut h = search_held(1, Hold::Pending);
+    batches_shown(&mut h, 1);
+    cancel_in_the_operations_area(&mut h);
+    h.settle();
+    assert_ended_quietly(&mut h);
+}
+
+/// Listings of a provider of the tests' own: a tree folder's, cancelled
+/// inside a poll, and one the provider itself calls off.
 mod held_folder {
     use std::sync::mpsc::{Receiver, Sender, channel};
 
@@ -1386,7 +1446,9 @@ mod held_folder {
     /// A provider of one folder, `/folder`, whose listing holds a poll open
     /// as [`GatedWalk`]'s stream does: it says on `entered` that it is
     /// inside a poll and waits there for `release`, then ends quietly when
-    /// its token is cancelled and after one file otherwise.
+    /// its token is cancelled and after one file otherwise. `/refused`
+    /// answers `Cancelled` by itself, its token untouched, as `ext-ssh`
+    /// does when its password prompt is dismissed.
     struct Held {
         entered: Sender<()>,
         release: Arc<Mutex<Receiver<()>>>,
@@ -1412,6 +1474,9 @@ mod held_folder {
             if loc.path.as_bytes() == b"/" {
                 return stream::once(async { Ok(vec![entry(1, "/folder", EntryKind::Dir)]) })
                     .boxed();
+            }
+            if loc.path.as_bytes() == b"/refused" {
+                return stream::once(async { Err(Error::Cancelled) }).boxed();
             }
             let entered = self.entered.clone();
             let release = Arc::clone(&self.release);
@@ -1488,17 +1553,12 @@ mod held_folder {
         }
     }
 
-    /// A folder collapsed while its children are being listed, the cancel
-    /// landing inside a poll of that listing: the listing ends cancelled
-    /// and tells the pane nothing, as when the runner sees the cancel
-    /// first. Told that it was cancelled, the pane would warn *Listing
-    /// folder: cancelled* about a folder the user merely collapsed. Expanded
-    /// again, the folder lists.
-    #[test]
-    fn a_folder_collapsed_inside_a_poll_of_its_listing_says_nothing() {
+    /// A harness with the [`Held`] provider mounted, with what says that a
+    /// listing of `/folder` is inside its poll and what lets it go.
+    fn held_harness() -> (Harness, Receiver<()>, Sender<()>) {
         let (entered, has_entered) = channel();
         let (release, released) = channel();
-        let mut h = harness_with(vec![Arc::new(HeldExtension {
+        let h = harness_with(vec![Arc::new(HeldExtension {
             manifest: Manifest {
                 id: ExtId("held"),
                 name: "Held folder",
@@ -1518,6 +1578,18 @@ mod held_folder {
                 release: Arc::new(Mutex::new(released)),
             }),
         })]);
+        (h, has_entered, release)
+    }
+
+    /// A folder collapsed while its children are being listed, the cancel
+    /// landing inside a poll of that listing: the listing ends cancelled
+    /// and tells the pane nothing, as when the runner sees the cancel
+    /// first. Told that it was cancelled, the pane would warn *Listing
+    /// folder: cancelled* about a folder the user merely collapsed. Expanded
+    /// again, the folder lists.
+    #[test]
+    fn a_folder_collapsed_inside_a_poll_of_its_listing_says_nothing() {
+        let (mut h, has_entered, release) = held_harness();
         h.settle();
         let pane = h.app.model().focused;
         h.send(Command::Navigate {
@@ -1558,6 +1630,27 @@ mod held_folder {
             .filter_map(|i| tab.row(i).map(|e| e.name.clone()))
             .collect();
         assert_eq!(rows, ["folder", "file.txt"], "a listing that ends is told");
+    }
+
+    /// A listing its provider calls off has failed, and keeps the banner
+    /// with *Retry*: `Cancelled` for an answer is not the user cancelling
+    /// the listing, whose own token is untouched.
+    #[test]
+    fn a_listing_its_provider_called_off_keeps_its_banner() {
+        let (mut h, _has_entered, _release) = held_harness();
+        h.settle();
+        let pane = h.app.model().focused;
+        h.send(Command::Navigate {
+            pane,
+            to: Location::new(ID, "/refused"),
+        });
+        h.settle();
+        let failure = h.tab(pane).failure.clone().unwrap_or_default();
+        assert!(
+            failure.ends_with("could not be listed: cancelled"),
+            "the failure stays in the banner: {failure:?}"
+        );
+        assert!(h.tab(pane).listing.complete);
     }
 }
 

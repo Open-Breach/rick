@@ -2010,6 +2010,7 @@ impl App {
             }
             Command::CancelJob(id) => {
                 self.jobs.cancel(id);
+                self.end_cancelled_listings(events);
             }
             Command::PauseJob(id) => {
                 if self.jobs.pause(id) {
@@ -4547,6 +4548,12 @@ impl App {
                 if live.generation != generation {
                     return;
                 }
+                // A listing the user cancelled has ended: the pane keeps
+                // the rows it has, and those still on their way are not
+                // added.
+                if live.cancel.is_cancelled() {
+                    return;
+                }
                 if let Some(buffer) = &mut live.buffer {
                     buffer.extend(batch);
                     return;
@@ -5343,6 +5350,23 @@ impl App {
         );
     }
 
+    /// Ends the listings whose job was just cancelled, as cancelled. The
+    /// job itself usually says nothing more: the runner drops its future
+    /// when it sees the cancel, and with it the `ListDone` its pane waits
+    /// for. Left to that, the pane's footer went on saying *listing…* and
+    /// the application stayed busy.
+    fn end_cancelled_listings(&mut self, events: &mut Vec<Event>) {
+        let cancelled: Vec<(PaneId, u64)> = self
+            .live
+            .iter()
+            .filter(|(_, live)| !live.complete && live.cancel.is_cancelled())
+            .map(|(pane, live)| (*pane, live.generation))
+            .collect();
+        for (pane, generation) in cancelled {
+            self.list_done(pane, generation, &Err(Error::Cancelled), events);
+        }
+    }
+
     fn list_done(
         &mut self,
         pane: PaneId,
@@ -5354,6 +5378,18 @@ impl App {
             return;
         };
         if live.generation != generation {
+            return;
+        }
+        // A listing the user cancelled did not fail: it ends where it is,
+        // the pane keeps the rows it has and nothing is said. It is one
+        // whose own token is cancelled, which only cancelling its job
+        // does while the pane still shows it. A provider that answers
+        // `Cancelled` with the token untouched, as `ext-ssh` does for a
+        // dismissed password prompt, has failed to list, and that keeps
+        // its banner.
+        let cancelled = matches!(result, Err(Error::Cancelled)) && live.cancel.is_cancelled();
+        if cancelled && live.complete {
+            // Told a second time, by the job after the cancel itself.
             return;
         }
         let location = live.key.location.clone();
@@ -5391,6 +5427,7 @@ impl App {
                     result
                         .as_ref()
                         .err()
+                        .filter(|_| !cancelled)
                         .map(|error| format!("{location} could not be listed: {error}")),
                 );
             }
@@ -5438,8 +5475,22 @@ impl App {
             }
             _ => {}
         }
-        // Tree view: the expanded folders list their children again, swapped
-        // in at once where they were listed before.
+        // Tree view: the expanded folders list their children again. Not
+        // after a cancel, which starts nothing.
+        if !cancelled {
+            self.list_expanded_again(pane);
+        }
+        events.push(Event::Listed {
+            pane,
+            batch,
+            done: true,
+        });
+    }
+
+    /// Lists the children of the pane's expanded folders again, swapped in
+    /// at once where they were listed before; a folder whose children are
+    /// being listed is left to that.
+    fn list_expanded_again(&mut self, pane: PaneId) {
         let expanded = self.model.tree_expanded(pane);
         for (folder, location) in expanded {
             let listed = self
@@ -5454,11 +5505,6 @@ impl App {
                 self.list_child(pane, folder, location, listed);
             }
         }
-        events.push(Event::Listed {
-            pane,
-            batch,
-            done: true,
-        });
     }
 
     fn change(&mut self, pane: PaneId, generation: u64, change: FsChange, events: &mut Vec<Event>) {
