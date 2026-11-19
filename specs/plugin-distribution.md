@@ -6,20 +6,21 @@ Related: specs/plugins.md, specs/gui-dialogues.md, specs/gui-preview.md, specs/g
 
 ## 1. Purpose and scope
 
-Rick's plugins become things a user fetches one by one. A release publishes every plugin as a package of its own; Rick reads a signed list of them, installs the ones the user asks for, and says so when a file, a folder or a connection would be served by a plugin that is not there.
+Rick ships with the plugins a file manager cannot do without, and the rest become things a user fetches one by one. A release publishes each of those as a package of its own; Rick reads a signed list of them, installs the ones the user asks for, and says so when a file, a folder or a connection would be served by a plugin that is not there.
 
-In scope: the plugin package as a release artefact, what a manifest says a plugin is for, the registry client, the *Available* view and updates in the Extensions dialogue, *Install from URL…*, and the suggestions.
+In scope: which plugins ship inside every install and which are separate, the plugin package as a release artefact, what a manifest says a plugin is for, the registry client, the *Available* view and updates in the Extensions dialogue, *Install from URL…*, and the suggestions.
 
 Out of scope, by decision or for now: plugins built outside this workspace (§3), a plugin made active without a restart, permissions that are enforced, ratings, search across descriptions, any payment. This file is the later decision where `specs/system-integration.md` §1 calls a plugin store out of scope and where `specs/plugins.md` says *Extension store. Later.*
 
 ## 2. Decisions
 
-1. **One package per plugin.** The package is the `.rkp` that *Install from file…* already reads. A release attaches one per plugin and platform.
-2. **A signed registry.** Rick reads one index, `https://get.openbreach.dev/registry/index.json`, signed with a key whose public half is compiled into Rick. Open-Breach's own plugins only.
-3. **A build fits one Rick.** A plugin loads only in the Rick release it was built with (§3). The registry names that release per build, and Rick offers a build only when it is its own.
-4. **Linux packages are their own channel.** A Rick installed from a deb or an rpm takes its plugins from the `rick-plugin-<id>` packages; Rick shows the command and downloads nothing.
-5. **Suggestions come from the cached index.** Rick never goes online because a file was selected.
-6. **Nothing is installed unasked.** Every install and every update is a click.
+1. **A default set ships inside.** Sixteen plugins are part of every install, in the archives and in the `rick` package; ten are separate (§4). Rick downloads nothing at its first start: what it needs to be a file manager is on the disk when it is unpacked, offline and behind a proxy alike.
+2. **One package per separate plugin.** The package is the `.rkp` that *Install from file…* already reads. A release attaches one per separate plugin and platform.
+3. **A signed registry.** Rick reads one index, `https://get.openbreach.dev/registry/index.json`, signed with a key whose public half is compiled into Rick. Open-Breach's own plugins only.
+4. **A build fits one Rick.** The plugin boundary stays as it is, so a plugin loads only in the Rick release it was built with (§3). The registry names that release per build, and Rick offers a build only when it is its own.
+5. **Linux packages are their own channel.** A Rick installed from a deb or an rpm takes its separate plugins from the `rick-plugin-<id>` packages; Rick shows the command and downloads nothing.
+6. **Suggestions come from the cached index.** Rick never goes online because a file was selected.
+7. **Nothing is installed unasked.** Every install and every update is a click.
 
 ## 3. What fits
 
@@ -28,14 +29,30 @@ Out of scope, by decision or for now: plugins built outside this workspace (§3)
 - **The rule.** A build of the registry fits when its `platform` is this platform and its `app_version` is this Rick's version, compared as whole strings. `api_version` is carried and shown; it decides nothing while the rule above is stricter.
 - A Rick whose version has a pre-release part (`0.6.0-dev`) fits nothing, and the *Available* view says so.
 - A Rick older than the registry's oldest release fits nothing either: *The plugins for Rick 0.5.0 are no longer published. Update Rick to install plugins.*
-- A plugin boundary that lets one build serve several Rick releases — a C ABI, or the WASM host — would turn this rule into a comparison of `api_version` and nothing else here would change. It is wanted and not scheduled (*Still open*).
+- Decided on 2026-11-18: the boundary stays. A C ABI was considered that evening and put aside, because it rewrites the `ext` boundary and every plugin while the API still changes every few days. A boundary that lets one build serve several Rick releases — a C ABI, or the WASM host — would turn the rule above into a comparison of `api_version` and nothing else here would change; it is a later possibility (*Still open*).
 
-## 4. Packages
+## 4. The default set, the separate plugins and their packages
 
+**The default set** is in every install. Besides what is compiled into the binary — the local file system and the text, code, image and PDF previewers — it is these sixteen plugins, each where it is built at all:
+
+| | Plugins |
+| --- | --- |
+| Providers | `vfs-trash`, `vfs-archive` |
+| Previewers | `preview-archive`, `preview-hex`, `preview-icons`, `preview-markup` |
+| Search | `search-walk`, and the indexers of the platform: `search-baloo` and `search-tracker` on Linux, `search-spotlight` on macOS, `search-windows` on Windows |
+| Actions | `action-rename`, `action-compress`, `action-compare`, `action-terminal`, `installer` |
+
+**The separate plugins** are these ten: `git`, `svn`, `zfs` (Linux), `ssh`, `vfs-s3`, `vfs-azure`, `vfs-gcs`, `preview-office`, `preview-3d` and `preview-media`.
+
+- **Media is split by platform.** `preview-media` belongs to the default set on Linux, where GStreamer is the system's and the plugin is small, and is separate on macOS and Windows, where the runtime travels with it. That is nine separate plugins on each platform.
+- **Where the list lives.** Each plugin crate says it in its own `Cargo.toml`, under `[package.metadata.rick]`: `separate = true`, or `separate = ["macos", "windows"]` for a split by platform. A crate that says nothing is in the default set.
+- **The archives and the `rick` package carry the default set**, in `plugins/` beside the binary as today, and no separate plugin. `cargo xtask bundle` still lays out every plugin, so a development build has them all with nothing installed by hand; the release takes the separate ones out of the tree it archives.
+- **The GStreamer runtime moves with the media plugin** on macOS and Windows: out of its place beside the binary and into the plugin's folder, so the package holds it and the plugin finds it there, as the archive plugin finds the 7-Zip library. The archives of those two platforms lose it.
 - A **plugin package** is an `.rkp`: a zip archive holding the plugin's folder, `<id>/`, exactly as `cargo xtask bundle` lays it out under `plugins/` — `plugin.toml`, the library, and what the plugin bundles beside it, such as the 7-Zip library of `vfs-archive`. The name is `<id>-<version>-<platform>.rkp`, `git-0.6.0-linux-x64.rkp`; the platforms are those of the release archives: `linux-x64`, `linux-arm64`, `macos-arm64`, `windows-x64`.
-- `cargo xtask package [--release]` makes them from the bundle: one package per plugin of the bundle in `target/<profile>/packages/`, and beside them `plugins-<platform>.json`, the manifest Trebuchet's publisher reads (its spec, 7.4). The entries of an archive are written in sorted order with a fixed timestamp, so the same bundle gives the same file and the same hash.
+- `cargo xtask package [--release]` makes them from the bundle: one package per separate plugin of the bundle in `target/<profile>/packages/`, and beside them `plugins-<platform>.json`, the manifest Trebuchet's publisher reads (its spec, 7.4). The entries of an archive are written in sorted order with a fixed timestamp, so the same bundle gives the same file and the same hash.
 - The manifest's `meta` is Rick's: `points` (the extension points, as in `plugin.toml`) and `triggers` (§5). Trebuchet copies it without reading it.
-- The release workflow runs the task on each of the four platforms and attaches the packages and the four manifests to the release. The archives themselves do not change: they carry every plugin, as today, until the set that ships with every install is decided (*Still open*).
+- The release workflow runs the task on each of the four platforms and attaches the packages and the four manifests to the release.
+- A release made before the registry client exists has its separate plugins on the release page only; *Install from file…* installs them.
 
 ## 5. What a plugin is for
 
@@ -48,7 +65,7 @@ The lists are part of `ext::Manifest`, land in `plugin.toml` and in the package 
 
 ## 6. The registry client
 
-- **What is read.** The index and its signature, `index.json.minisig`, from the address of decision 2. The public key is Trebuchet's `keys/registry.pub`, committed here as a file and compiled in. While that file is empty — the key pair does not exist yet — the registry is off: nothing is fetched, and the *Available* view says *The plugin list is not set up in this build*.
+- **What is read.** The index and its signature, `index.json.minisig`, from the address of decision 3. The public key is Trebuchet's `keys/registry.pub`, committed here as a file and compiled in. While that file is empty — the key pair does not exist yet — the registry is off: nothing is fetched, and the *Available* view says *The plugin list is not set up in this build*.
 - **When.** When the *Available* view is opened, and in the background at most once a day, after the first frame and off the UI thread. A fetch that fails is tried again at the next occasion, not in a loop.
 - **The switch.** *Look for plugins and updates online*, on the Behaviour page of the settings, on by default, `[registry] check` in `rick.toml`. Off, nothing is fetched by itself; the *Available* view then shows what was cached, its date, and **Check now**.
 - **What is sent.** One GET for each of the two files, with `rick/<version>` as the user agent and nothing else: no identifier, no list of installed plugins. The README's privacy sentence names this check beside the update check.
@@ -97,7 +114,7 @@ A suggestion says that a plugin exists for what the user is looking at. It is ma
 
 Issues in this order, each merged into `dev` when green.
 
-1. Packages and triggers (§3 *The host says so*, §4, §5): `rick` in `plugin.toml`, `cargo xtask package`, the two manifest lists, the release workflow.
+1. The split, packages and triggers (§3 *The host says so*, §4, §5): `rick` in `plugin.toml`, the two manifest lists, the separate plugins marked, `cargo xtask package`, the archives with the default set, the release workflow.
 2. In Trebuchet: the publisher's side and the plugin packages. Needs the signing key from Serge.
 3. The registry client and the Extensions dialogue (§3, §6, §7, §9).
 4. Suggestions (§8).
