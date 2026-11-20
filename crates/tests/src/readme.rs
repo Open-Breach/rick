@@ -657,12 +657,43 @@ fn install_block(title: &str, links: &[String], steps: &str) -> Option<String> {
     (!links.is_empty()).then(|| format!("**{title}** · {}\n\n{steps}", links.join(" · ")))
 }
 
+/// The line that installs Rick from the Open-Breach apt and dnf
+/// repositories: Trebuchet's install script with the package name.
+const PACKAGE_INSTALL: &str = "curl -fsSL https://get.openbreach.dev/install.sh | sh -s rick";
+
+/// Where the distro releases with a repository and the manual steps are
+/// written down, so that the README names no release: Trebuchet's
+/// `docs/install.md`.
+const PACKAGE_DOCS: &str = "https://github.com/Open-Breach/trebuchet/blob/main/docs/install.md";
+
+/// The Linux block of the Install section: the package install first,
+/// then the archive, with its `links` and the folder `linux` it unpacks
+/// to.
+fn linux_block(links: &[String], linux: &str) -> Option<String> {
+    (!links.is_empty()).then(|| {
+        format!(
+            "**Linux** · Debian, Ubuntu, Fedora and the distros based on them\n\n\
+             ```bash\n{PACKAGE_INSTALL}\n```\n\n\
+             This adds the Open-Breach repository and installs Rick with apt or dnf; updates \
+             then arrive with your system's. [Which releases, and the same steps by \
+             hand]({PACKAGE_DOCS}).\n\n\
+             Or run it from the archive, with nothing installed: {}\n\n\
+             ```bash\ntar xzf {linux}.tar.gz && ./{linux}/rick\n```\n\n\
+             Needs glibc 2.36 or later (Debian 12, Ubuntu 24.04). The first start offers to \
+             set Rick up in your desktop: the launcher entry, the default file manager, the \
+             `rick` command.",
+            links.join(" · ")
+        )
+    })
+}
+
 /// The body of the Install section (specs/readme.md, *Install*): per
 /// operating system the direct link to each archive of `platforms` for
-/// the release `version`, and the steps to get Rick running from it; then
-/// how a file is verified, where the Office and media previews come from
-/// and what they need installed, and the lines on the plugins: the ones in
-/// the archive, the separate downloads and the *Suggest plugins* setting.
+/// the release `version`, and the steps to get Rick running from it, on
+/// Linux after the package install; then how a file is verified, where
+/// the Office and media previews come from and what they need installed,
+/// and the lines on the plugins: the ones in the archive, the separate
+/// downloads, the *Suggest plugins* setting and the plugin packages.
 #[must_use]
 pub fn install(version: &str, platforms: &[String]) -> String {
     let base = format!(
@@ -688,15 +719,7 @@ pub fn install(version: &str, platforms: &[String]) -> String {
     };
     let linux = first("linux");
     let blocks = [
-        install_block(
-            "Linux",
-            &links("linux", "tar.gz"),
-            &format!(
-                "```bash\ntar xzf {linux}.tar.gz && ./{linux}/rick\n```\n\nNeeds glibc 2.36 or \
-                 later (Debian 12, Ubuntu 24.04). The first start offers to set Rick up in your desktop: \
-                 the launcher entry, the default file manager, the `rick` command."
-            ),
-        ),
+        linux_block(&links("linux", "tar.gz"), &linux),
         install_block(
             "macOS",
             &links("macos", "zip"),
@@ -721,7 +744,8 @@ pub fn install(version: &str, platforms: &[String]) -> String {
         "Plugins ship in the archive's `plugins/` folder; delete a plugin's folder and that \
          plugin is gone. The rest are separate downloads under *Extensions → Available*, and \
          Rick says so when one would serve what you are looking at. *Suggest plugins* in \
-         Settings → Behaviour turns that off."
+         Settings → Behaviour turns that off. A Rick installed from a package gets the rest as \
+         packages: `rick-plugin-git`, or `rick-plugins` for all of them."
             .to_owned(),
     );
     out.join("\n\n")
@@ -1073,14 +1097,23 @@ mod tests {
     fn the_install_section_links_every_archive_of_the_release() {
         let platforms = ["linux-x64", "linux-arm64", "windows-x64"].map(str::to_owned);
         let text = install("1.2.3", &platforms);
-        assert!(text.contains(
-            "**Linux** · [x64](https://github.com/Open-Breach/rick/releases/download/v1.2.3/\
+        // Linux leads with the package install and names no distro release
+        // there: those are in Trebuchet's docs/install.md.
+        assert!(text.starts_with(
+            "**Linux** · Debian, Ubuntu, Fedora and the distros based on them\n\n```bash\n\
+             curl -fsSL https://get.openbreach.dev/install.sh | sh -s rick\n```\n\n\
+             This adds the Open-Breach repository and installs Rick with apt or dnf; updates \
+             then arrive with your system's. [Which releases, and the same steps by hand]\
+             (https://github.com/Open-Breach/trebuchet/blob/main/docs/install.md).\n\n\
+             Or run it from the archive, with nothing installed: \
+             [x64](https://github.com/Open-Breach/rick/releases/download/v1.2.3/\
              rick-1.2.3-linux-x64.tar.gz) · [arm64](https://github.com/Open-Breach/rick/\
-             releases/download/v1.2.3/rick-1.2.3-linux-arm64.tar.gz)"
+             releases/download/v1.2.3/rick-1.2.3-linux-arm64.tar.gz)\n\n```bash\n\
+             tar xzf rick-1.2.3-linux-x64.tar.gz && ./rick-1.2.3-linux-x64/rick\n```\n\n\
+             Needs glibc 2.36 or later"
         ));
-        assert!(
-            text.contains("tar xzf rick-1.2.3-linux-x64.tar.gz && ./rick-1.2.3-linux-x64/rick")
-        );
+        // No archive for Linux, no Linux block, the package line included.
+        assert!(!install("1.2.3", &["windows-x64".to_owned()]).contains("install.sh"));
         assert!(text.contains("rick-1.2.3-windows-x64.zip"));
         // No archive for a platform, no block for it.
         assert!(!text.contains("**macOS**"));
@@ -1091,7 +1124,11 @@ mod tests {
         assert!(text.contains("gh attestation verify <file> --repo Open-Breach/rick"));
         assert!(text.contains("\n\nThe Office preview is a separate download and needs"));
         assert!(text.contains("\n\nPlugins ship in the archive's `plugins/` folder;"));
-        assert!(text.ends_with("*Suggest plugins* in Settings → Behaviour turns that off."));
+        assert!(text.ends_with(
+            "*Suggest plugins* in Settings → Behaviour turns that off. A Rick installed from a \
+             package gets the rest as packages: `rick-plugin-git`, or `rick-plugins` for all of \
+             them."
+        ));
     }
 
     #[test]
