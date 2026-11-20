@@ -166,6 +166,11 @@ fn check(answers: &[(&str, &[&str])]) -> Option<Outcome> {
         String::from_utf8_lossy(&output.stderr)
     )
     .replace("\r\n", "\n");
+    // The script opens the summary in text mode, so on Windows its lines
+    // end as that system's do, as the printed ones above.
+    let summary = fs::read_to_string(&summary)
+        .unwrap_or_default()
+        .replace("\r\n", "\n");
     let calls = fs::read_to_string(dir.path().join("calls.log"))
         .unwrap_or_default()
         .lines()
@@ -174,7 +179,7 @@ fn check(answers: &[(&str, &[&str])]) -> Option<Outcome> {
     Some(Outcome {
         status: output.status.code().unwrap_or(-1),
         printed,
-        summary: fs::read_to_string(&summary).unwrap_or_default(),
+        summary,
         calls,
     })
 }
