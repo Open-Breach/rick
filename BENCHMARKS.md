@@ -10,7 +10,11 @@ runner's OS in `crates/tests/src/bench.rs`, whose table a unit test checks
 against this file. Since issue 35 CI measures the targets without asserting
 them: the `bench` workflow runs by hand, on release tags and nightly on
 Linux x64 from `dev`, its nightly summaries on the `benchmark-history`
-branch; a release run without `RICK_BENCH_RECORD` asserts them.
+branch; a release run without `RICK_BENCH_RECORD` asserts them. Since
+issue 277 the summary of a run shows each target beside the median and the
+worst run and marks every benchmark whose median is over it; the run stays
+green. The same issue added `settings-reload`, the last table below, and
+made `session-start` an `#[ignore]`d test like the others.
 
 **Targets.** Linux: the spec's (Decisions table, QUESTIONS.md 5, 24 and
 30), asserted on a single run. macOS and Windows: the median × 1.5, rounded

@@ -2,11 +2,15 @@ name: bench
 # Tier 3 of the pipeline (issue 35): the acceptance benchmarks, measured and
 # never blocking a pull request. Every benchmark runs RUNS times in release
 # with RICK_BENCH_RECORD set (a run over its target is recorded, not
-# failed); the job summary gets the runner's hardware line and the median
-# and the worst run per benchmark, and the raw logs, the hardware line and
-# the summary are the job's artifact. BENCHMARKS.md is written from the
-# summary of a manual run; the targets in crates/tests/src/bench.rs follow
-# from it.
+# failed); the job summary gets the runner's hardware line and, per
+# benchmark, the target, the median and the worst run, and the raw logs,
+# the hardware line and the summary are the job's artifact. The summary
+# marks every benchmark whose median is over its target and counts them in
+# a line above the table (issue 277); the run stays green, so the mark is
+# where a number past its target shows. One that gets slower and stays
+# under its target shows only by comparing runs. BENCHMARKS.md is written
+# from the summary of a manual run; the targets in
+# crates/tests/src/bench.rs follow from it.
 #
 # By hand from the Actions tab and on a `v*` tag: the three runners.
 # Nightly: Linux x64 on dev, the summary committed to the benchmark-history
