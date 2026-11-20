@@ -480,21 +480,23 @@ in 8–24 ms).
 
 ### `settings-reload` — an edit of `rick.toml` on disk reaching the model
 
-No spec number: the spec says the app watches its settings files and
-reloads on change (Engineering guidelines → Configuration). Issue 3's
-acceptance asked for 500 ms, which an ordinary test asserted until issue
-277. That 500 ms stays what the user is promised; it is not the target
-here. The target is 50 ms on all three runners, set by decision on pull
-request 290 from the run below and not by the rule above, which would
-have left it at 500 ms. From the end of the write to the edit in the
-model: the platform's watcher reporting the write (inotify, FSEvents,
-`ReadDirectoryChangesW`), then the file loaded again. Headless. Test:
-`the_reload_of_settings_edited_on_disk` in `app.rs`; that an edit arrives
-at all is the ordinary test `settings_edited_on_disk_reach_the_model`,
-which waits ten seconds for it. On an idle runner the three watchers
-report within milliseconds, the slowest of them, macOS, in a quarter of
-the target; a loaded runner was seen to take 195 to 673 ms (issue 263, a
-macOS runner under load), which the summary would mark.
+Spec: an edited settings file takes effect within 500 ms (Engineering
+guidelines → Configuration). That is what the user is promised; it was
+issue 3's acceptance, which an ordinary test asserted until issue 277. The
+target here is 50 ms on all three runners, and the two numbers differ on
+purpose: the 50 ms is the benchmark's target and nothing else, set by
+decision on pull request 290 from the run below, so that a reload that got
+slower is marked long before the promise is at risk. The rule above would
+have made the target the spec's 500 ms. From the end of the write to the
+edit in the model: the platform's watcher reporting the write (inotify,
+FSEvents, `ReadDirectoryChangesW`), then the file loaded again. Headless.
+Test: `the_reload_of_settings_edited_on_disk` in `app.rs`; that an edit
+arrives at all is the ordinary test
+`settings_edited_on_disk_reach_the_model`, which waits ten seconds for it.
+On an idle runner the three watchers report within milliseconds, the
+slowest of them, macOS, in a quarter of the target; a loaded runner was
+seen to take 195 to 673 ms (issue 263, a macOS runner under load), which
+the summary would mark.
 
 | OS | Target | Median | Worst |
 | --- | --- | --- | --- |
