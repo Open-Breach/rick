@@ -152,6 +152,18 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   ships. The About dialog's *Bundled runtimes* gain the Rust standard
   library (#278).
 
+### Fixed
+
+- A search in subfolders that a new text replaced, or that was cancelled
+  in the operations area, is shown there as *Cancelled* in every case.
+  Where the cancel arrived in the moment the search was working through
+  matches it had ready, the search ended as *Done* (#285).
+- A search cancelled in the operations area ends quietly in its pane: the
+  list keeps the matches it has, the footer no longer says *listing…* and
+  nothing is reported, since a cancel is not a failure. Before, the
+  footer went on saying *listing…* for as long as the pane stayed where
+  it was, and the window never went idle (#285).
+
 ## [0.5.0] - 2026-11-15
 
 On Linux, ZFS snapshots with a time slider and AppImages in the installer.

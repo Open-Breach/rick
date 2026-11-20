@@ -503,7 +503,9 @@ fn the_licence_file_names_the_bundled_components_with_their_texts() {
         "bundled-licenses failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let text = String::from_utf8_lossy(&output.stdout);
+    // Python ends the lines of what it prints as the platform does, with
+    // `\r\n` on Windows; what is checked is the text.
+    let text = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
     assert!(text.contains("\n## Bundled components\n"), "no section");
 
     let bundled = about::bundled();
