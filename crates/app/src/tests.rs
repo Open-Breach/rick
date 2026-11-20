@@ -6940,6 +6940,16 @@ mod suggest {
     /// `rick.toml` holds `settings`, with `rows` from its plugin host and
     /// no word to the registry yet.
     fn rick(fake: &Arc<Fake>, settings: &str, rows: Vec<crate::Plugin>) -> Harness {
+        rick_with(fake, settings, rows, Vec::new())
+    }
+
+    /// [`rick`] with `extensions` compiled in.
+    fn rick_with(
+        fake: &Arc<Fake>,
+        settings: &str,
+        rows: Vec<crate::Plugin>,
+        extensions: Vec<Arc<dyn Extension>>,
+    ) -> Harness {
         let config = fake.config_dir();
         fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
         fs::write(config.join(SETTINGS_FILE), settings).unwrap_or_else(|e| panic!("{e}"));
@@ -6948,7 +6958,7 @@ mod suggest {
         let mut app = App::new(Config {
             platform: fake.clone(),
             ui: ui.clone(),
-            extensions: Vec::new(),
+            extensions,
             config_dir: Some(config),
             start: Some(local(root.path())),
         });
@@ -7170,6 +7180,63 @@ mod suggest {
             said(h.app.suggestion_for_folder([".git"])),
             Some(install("git", 1024))
         );
+    }
+
+    /// An extension that registers nothing, of the id `id`.
+    struct CompiledIn(Manifest);
+
+    impl CompiledIn {
+        fn of(id: &'static str) -> Arc<dyn Extension> {
+            Arc::new(Self(Manifest {
+                id: ExtId(id),
+                name: "Compiled in",
+                description: "",
+                version: Version::new(0, 6, 0),
+                api_version: API_VERSION,
+                requires: Capabilities::empty(),
+                points: Points::empty(),
+                platforms: Platforms::ALL,
+                previews: &[],
+                markers: &[],
+                connections: &[],
+                commands: &[],
+            }))
+        }
+    }
+
+    impl Extension for CompiledIn {
+        fn manifest(&self) -> &Manifest {
+            &self.0
+        }
+        fn register(&self, _reg: &mut Registry) -> Result<(), Error> {
+            Ok(())
+        }
+    }
+
+    /// A development build has every plugin compiled in: an extension
+    /// that is loaded is there, and the list does not suggest it, though
+    /// it is in neither plugins folder.
+    #[test]
+    fn an_extension_that_is_compiled_in_is_not_suggested_from_the_list() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        server.publish(&signer, &index());
+        let settings = registry(&server, &signer);
+        let extensions = vec![CompiledIn::of("git"), CompiledIn::of("vfs-s3")];
+        let mut h = rick_with(&fake(), &settings, Vec::new(), extensions);
+        h.send(Command::Registry(RegistryCommand::Start));
+        h.settle();
+        h.send(Command::Registry(RegistryCommand::Daily));
+        h.settle();
+        assert!(h.app.plugin_registry().index.is_some(), "the list arrived");
+
+        assert_eq!(h.app.suggestion_for_folder([".git"]), None);
+        assert_eq!(kinds(&h.app, ConnectionSection::Cloud), []);
+        // The others of the list are suggested as before.
+        assert_eq!(
+            said(h.app.suggestion_for_file("gear.stl")),
+            Some(install("preview-3d", 2048))
+        );
+        assert_eq!(kinds(&h.app, ConnectionSection::Network).len(), 1);
     }
 
     #[test]

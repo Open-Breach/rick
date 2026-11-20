@@ -10,7 +10,8 @@
 //! side panel that is drawn never make a request.
 //!
 //! - **Who is suggested.** A plugin of the list with a build that fits
-//!   this Rick and that is in neither plugins folder, with **Install**; and
+//!   this Rick and that is in neither plugins folder — nor compiled into
+//!   the binary, as a development build has them — with **Install**; and
 //!   a plugin that is in a plugins folder and disabled, from its own
 //!   manifest and with no list at all, with **Enable**
 //!   ([`Remedy`]). A plugin on the disk comes before one of the list.
@@ -257,13 +258,15 @@ impl App {
             // No list, or one that has nothing for this Rick.
             Some(Offer::PreRelease | Offer::TooOld) | None => Vec::new(),
         };
+        // In neither plugins folder, and not compiled into this binary:
+        // an extension that is loaded is there, wherever it came from.
+        let loaded = self.registry.extensions();
         let listed = offered
             .into_iter()
             .filter(|offered| {
-                !self
-                    .plugins
-                    .iter()
-                    .any(|row| row.id == offered.plugin.id && !row.removed)
+                let id = offered.plugin.id.as_str();
+                !loaded.iter().any(|ext| ext.0 == id)
+                    && !self.plugins.iter().any(|row| row.id == id && !row.removed)
             })
             .map(|offered| Candidate {
                 id: &offered.plugin.id,
