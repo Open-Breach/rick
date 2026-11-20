@@ -980,7 +980,9 @@ jobs:
           deb="$(find . -name 'rick_*_amd64.deb' | sort | sed -n 1p)"
           test -n "$deb" || { echo "no deb on the release"; exit 1; }
           echo "::group::$deb, built by Trebuchet's workflow"
-          gh attestation verify "$deb" --owner "$GITHUB_REPOSITORY_OWNER" --signer-repo Open-Breach/trebuchet
+          # TEMPORARY, for one dry run: the package is checked against the wrong
+          # signer, so that this job fails on purpose. Reverted in the next commit.
+          gh attestation verify "$deb" --owner "$GITHUB_REPOSITORY_OWNER" --signer-repo "$GITHUB_REPOSITORY"
           echo "verified: $deb"
           echo "::endgroup::"
           for archive in "rick-$version-macos-arm64.zip" "rick-$version-windows-x64.zip"; do
