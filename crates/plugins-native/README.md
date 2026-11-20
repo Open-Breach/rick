@@ -278,7 +278,19 @@ A user drops a plugin into the `plugins/` folder beside the binary or into
 the per-user one in the config directory (`~/.config/rick/plugins/` on
 Linux); the per-user copy wins when both hold the same id. Switching a
 plugin off in the Extensions dialogue
-writes its id to `[plugins] disabled` in `rick.toml`. The dialogue's
+writes its id to `[plugins] disabled` in `rick.toml`. The table has two
+more keys, for the suggestions of specs/plugin-distribution.md §8:
+
+```toml
+[plugins]
+disabled = ["svn"]      # found and listed, not loaded
+suggest = true          # Suggest plugins, on the Behaviour page
+no_suggest = ["git"]    # Don't suggest again; Suggest again takes it back
+```
+
+A plugin named in `disabled` is suggested from its own `plugin.toml`,
+with *Enable*, where what the user is looking at is what it is for. The
+dialogue's
 *Install from file…* unpacks a plugin package into the per-user folder: an
 `.rkp` file, which is a zip archive of the plugin's folder — the folder
 itself, or its contents, in which case the folder takes the package's
