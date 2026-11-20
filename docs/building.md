@@ -35,7 +35,7 @@ gh attestation verify rick_0.6.0_debian-13_amd64.deb --owner Open-Breach --signe
 gh attestation verify rick-0.6.0-macos-arm64.zip --repo Open-Breach/rick                                      # a macOS or Windows file
 ```
 
-The release workflow runs both lines on the release it has written, on a Linux package and on the macOS and the Windows archive, and checks that a file changed by one byte does not verify. An attestation proves where a file comes from, not that it is safe.
+The release workflow runs both lines itself, on a Linux package and on the macOS and the Windows archive, and checks that a file changed by one byte does not verify. It does so while the release is still a draft, and publishes only when that check has passed: where it fails, the draft stays a draft and nothing is public. An attestation proves where a file comes from, not that it is safe.
 
 `SHA256SUMS.txt` on the release page has the checksums of the archives, the packages and the lists below. The Linux archives need glibc 2.36 or later (Debian 12, Ubuntu 24.04): they are built on the oldest distribution release the packages are made for. Each deb and rpm is built on its own release. Intel Macs are not covered yet.
 
@@ -61,7 +61,7 @@ What a package installs:
 - `/usr/share/applications/rick.desktop` and the icons under `/usr/share/icons/hicolor/`;
 - the licence: `/usr/share/doc/rick/copyright` and `THIRD-PARTY-LICENSES.md` beside it in a deb, both under `/usr/share/licenses/rick/` in an rpm.
 
-The call names the release tag, so Trebuchet's workflow attests the Linux files and attaches them to the release, as a draft where the tag has no release yet. Rick's release job then adds the other platforms' files and the checksums to that same release, gives it its name and notes, and publishes it unless it is a pre-release or a dry run.
+The call names the release tag, so Trebuchet's workflow attests the Linux files and attaches them to the release, as a draft where the tag has no release yet. Rick's release job then adds the other platforms' files and the checksums to that same draft and gives it its name and notes. The order from there is verify, then publish: the `verify` job checks the draft's files, and only after it the `publish` job makes a plain tag's release public. A pre-release and a dry run stay drafts. Last, for a published release, the workflow tells Trebuchet's publisher.
 
 A package names every package it depends on, per distribution, in the workflow's call. Among them is a decoder for H.264, so that an MP4 plays with the package alone: `gstreamer1.0-libav` on Debian and Ubuntu, and on Fedora `gstreamer1-plugin-openh264` with `gstreamer1-plugins-bad-free`, whose parser that decoder needs. Fedora's plug-in is in Fedora's own repositories; the codec library it loads comes from Cisco's OpenH264 repository, which Fedora has switched on by default. Where someone has switched it off, Fedora installs a stand-in for the library and Rick says the plug-in for H.264 is missing. The packaging tools' own search for the libraries a binary links is off: Rick's binaries link the kernel libraries and the standard library that sit beside them, and that search does not get past them.
 

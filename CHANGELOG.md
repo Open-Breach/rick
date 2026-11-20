@@ -160,7 +160,8 @@ a plugin built for 0.5.0 is refused until it is rebuilt.
   `gh attestation verify <file> --owner Open-Breach --signer-repo
   Open-Breach/trebuchet` for a Linux file, `gh attestation verify <file>
   --repo Open-Breach/rick` for a macOS or Windows one. The release
-  workflow runs both on the release it has written (#282).
+  workflow runs both on the release while it is still a draft, and
+  publishes it only when they pass (#282).
 - ***Look for plugins and updates online*** on the Behaviour page of the
   settings, on by default; `[registry] check` in `rick.toml`. On, Rick
   fetches the plugin list when the *Available* list is opened and, in the
