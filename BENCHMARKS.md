@@ -352,13 +352,17 @@ finished, now four of five caught it running). Test:
 
 ### `session-start` — starting a three-window, twenty-tab session
 
-No spec number; the test asserts the big session starts within 300 ms of a
-one-tab one, and the absolute time of the big one is recorded here with
-targets from the measurements: median × 2 as for startup, with a 5 ms floor
-since the Linux and Windows medians sit near the jitter of a shared runner;
-macOS 5.6 ms × 2 = 11.2 → 12 ms (was 15 ms). `App::new` with the session
-file, headless. Test: `a_big_session_starts_about_as_fast_as_a_small_one`
-in `session.rs`, which also runs in the ordinary test suite.
+No spec number; the targets come from the measurements: median × 2 as for
+startup, with a 5 ms floor since the Linux and Windows medians sit near the
+jitter of a shared runner; macOS 5.6 ms × 2 = 11.2 → 12 ms (was 15 ms).
+`App::new` with the session file, headless. Test:
+`the_start_of_a_big_session` in `session.rs`. Until issue 277 the
+measurement sat in an ordinary test, which also asserted, in every build,
+that the big session starts within 300 ms of a one-tab one; a loaded
+runner took that margin away from it. That bound is given up for the
+targets here, which are far inside it; that both sessions start with
+their windows and tabs is still an ordinary test,
+`a_big_session_and_a_small_one_start_with_their_windows_and_tabs`.
 
 | OS | Target | Median | Worst |
 | --- | --- | --- | --- |

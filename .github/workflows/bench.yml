@@ -93,14 +93,14 @@ jobs:
         # The fixtures on the runner's temp disk, as full.yml puts them.
         # Every ignored test of the one test binary is a timing but two,
         # which are skipped: the search walk cancelled by a new text and
-        # the throttled progress events, both full.yml's.
+        # the throttled progress events, both full.yml's. Every timing is
+        # an ignored test, and none is run by name (issue 277).
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
         run: |
           set -o pipefail
           for i in $(seq 1 "$RUNS"); do
             echo "::group::run $i"
             cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test main -- --ignored --nocapture --test-threads 1 --skip a_new_text_cancels_the_running_walk --skip progress_over_the_200k_fixture 2>&1 | tee "bench-$i.log"
-            cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test main -- --nocapture --test-threads 1 session::a_big_session_starts 2>&1 | tee -a "bench-$i.log"
             echo "::endgroup::"
           done
       - name: summary
