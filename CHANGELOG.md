@@ -143,6 +143,24 @@ a plugin built for 0.5.0 is refused until it is rebuilt.
   *Look for plugins and updates online*; on by default, `[plugins]
   suggest` in `rick.toml`. Off, Rick suggests nothing anywhere, and the
   Cloud section shows only once a cloud plugin is loaded (#287, #292).
+- **Linux packages.** A release makes a deb for each supported Debian
+  and Ubuntu release and an rpm for each supported Fedora release, for
+  x86-64 and arm64, with the plugins every install has, and they go into
+  the apt and dnf repositories on get.openbreach.dev. Rick is installed
+  to `/usr/lib/rick/` with `rick` on the path. The packages and the Linux
+  archive are built by Trebuchet's workflow, each inside the container of
+  its release; the archive is built on the oldest of them, so it needs
+  glibc 2.36 where it needed 2.39. Each package is tested where it is
+  installed, in a container that has its dependencies and nothing else:
+  its plugins load, pdfium opens a PDF and a video plays. A package
+  brings GStreamer's decoder for H.264 with it, so an MP4 plays without
+  installing anything more (#282).
+- **Build attestations.** Every file of a release has a GitHub build
+  attestation, which says which workflow built it and from which commit:
+  `gh attestation verify <file> --owner Open-Breach --signer-repo
+  Open-Breach/trebuchet` for a Linux file, `gh attestation verify <file>
+  --repo Open-Breach/rick` for a macOS or Windows one. The release
+  workflow runs both on the release it has written (#282).
 - ***Look for plugins and updates online*** on the Behaviour page of the
   settings, on by default; `[registry] check` in `rick.toml`. On, Rick
   fetches the plugin list when the *Available* list is opened and, in the

@@ -1,5 +1,13 @@
 name: release
-# On a `v*` tag: a release build on every OS, one archive per platform with
+# On a `v*` tag: a release build for every platform. macOS and Windows are
+# built here, one archive each. Linux is built by Trebuchet's reusable
+# workflow linux-packages.yml (Open-Breach/trebuchet), which the `linux` job
+# calls: for every distribution release of its target list and for x86-64
+# and arm64 it runs .github/scripts/linux-package.sh inside that release's
+# container and makes a deb or an rpm of the result, and one build per
+# architecture is also the archive, rick-<version>-linux-<arch>.tar.gz,
+# with the plugin packages that fit it. What follows describes an archive,
+# with
 # the bundle `cargo xtask bundle --release` lays out — the binary, the kernel
 # dylibs and libstd it shares with the plugins, the pdfium library beside it
 # (SPEC.md: pdfium ships beside the binary), the Visual C++ runtime on
@@ -36,9 +44,24 @@ name: release
 # branch's commit (the tag itself is only created if the draft is published).
 # No signing, notarisation or installers in 0.1.
 #
+# Every file of a release has a GitHub build attestation, made by the run
+# that built it (specs/system-integration.md §9): Trebuchet's workflow
+# attests the Linux files, this one the macOS and Windows archives, their
+# plugin packages and lists, and the checksums. The `verify` job then
+# checks one file of each kind the way a user would, with
+# `gh attestation verify`. A dry run attests too: its files are real builds.
+#
+# After a published release, the `repositories` job tells Trebuchet's
+# publisher, which takes the deb and rpm files from the release page into
+# the apt and dnf repositories on get.openbreach.dev. A pre-release and a
+# dry run stay drafts and are not announced.
+#
 # Runners: the labels come from the repository variables RUNNER_LINUX_X64,
 # RUNNER_LINUX_ARM64, RUNNER_MACOS and RUNNER_WINDOWS; where one is not
-# set, the job runs on GitHub's runner of that platform.
+# set, the job runs on GitHub's runner of that platform. The Linux builds
+# run where Trebuchet's workflow puts them: on Depot's runners in this
+# organisation, on GitHub's in a fork, and on the labels of the two Linux
+# variables where they are set.
 on:
   push:
     tags: ["v*"]
@@ -59,8 +82,23 @@ jobs:
   licenses:
     runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+      # The version the Linux packages are made with: the tag's, whose
+      # release part must be the workspace's, as the build job checks for
+      # its own platforms.
+      - name: version
+        id: version
+        run: |
+          tag_version="${TAG#v}"
+          crate_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          if [ "${tag_version%%-*}" != "${crate_version%%-*}" ]; then
+            echo "tag $TAG does not match workspace version $crate_version"
+            exit 1
+          fi
+          echo "version=$tag_version" >> "$GITHUB_OUTPUT"
       # The README the archives carry describes this release
       # (specs/readme.md): the version in its status line is the tag's.
       # First, so a release cut from a commit without its README stops
@@ -93,20 +131,117 @@ jobs:
             third-party.json
           if-no-files-found: error
 
+  # Linux: the deb and rpm packages of every target and the archive of each
+  # architecture, built and smoke-tested by Trebuchet's workflow. It takes
+  # the licence lists of the job above as its build artifact, runs
+  # .github/scripts/linux-package.sh as the build, packages with the
+  # metadata of crates/rick/Cargo.toml, installs each package in a fresh
+  # container of its release and runs `rick --version` there. In that
+  # container, which has the package's dependencies and nothing of the
+  # build, it then runs .github/scripts/linux-smoke.sh: every plugin of the
+  # package loads, pdfium opens a PDF, two videos play, and where the build
+  # is also the archive its plugin packages install into the per-user
+  # folder and load, for the package and once more for the unpacked
+  # archive. What that script needs from the build, two test programs and
+  # two videos, travels in the workflow's folder for the smoke test, which
+  # no release sees. The call names the release tag, so the workflow
+  # attests its release files and attaches them to the release of the tag,
+  # a draft it makes where there is none yet; the release job below
+  # finishes that release.
+  # The dependencies are per distribution. To build: GStreamer's
+  # development files, beyond a compiler, and its tools and plug-ins to
+  # write the smoke test's videos, an H.264 encoder among them. To run, all
+  # of them by name (crates/rick/Cargo.toml says why the tools do not find
+  # them): what the binaries link — the C and C++ runtimes, GLib and
+  # GStreamer — the GStreamer plug-in sets the media previewer plays
+  # through, with a decoder for H.264 (the libav plug-in on Debian and
+  # Ubuntu; on Fedora the OpenH264 plug-in and the parser it needs, from
+  # the bad-free set), and the libraries the user interface loads by name
+  # once it opens a window, for X11 and for Wayland, with Vulkan and EGL to
+  # draw with.
+  linux:
+    needs: licenses
+    # contents: write to attach to the release; the other two for the
+    # build attestations, which a called workflow cannot grant itself.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: Open-Breach/trebuchet/.github/workflows/linux-packages.yml@main
+    with:
+      app: rick
+      version: ${{ needs.licenses.outputs.version }}
+      build-artifact: third-party-licenses
+      build-command: .github/scripts/linux-package.sh
+      smoke-command: .github/scripts/linux-smoke.sh
+      release-tag: ${{ inputs.tag || github.ref_name }}
+      bundle-dir: target/release/bundle
+      desktop-file: packaging/linux/rick.desktop
+      icon: assets/icons/linux/hicolor
+      build-deps: |
+        {
+          "debian": [
+            "libgstreamer1.0-dev", "libgstreamer-plugins-base1.0-dev",
+            "gstreamer1.0-tools", "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good",
+            "gstreamer1.0-plugins-ugly"
+          ],
+          "ubuntu": [
+            "libgstreamer1.0-dev", "libgstreamer-plugins-base1.0-dev",
+            "gstreamer1.0-tools", "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good",
+            "gstreamer1.0-plugins-ugly"
+          ],
+          "fedora": [
+            "gstreamer1-devel", "gstreamer1-plugins-base-devel",
+            "gstreamer1", "gstreamer1-plugins-base", "gstreamer1-plugins-good",
+            "gstreamer1-plugin-openh264", "gstreamer1-plugins-bad-free"
+          ]
+        }
+      runtime-deps: |
+        {
+          "debian": [
+            "libc6", "libgcc-s1", "libstdc++6", "libglib2.0-0",
+            "libgstreamer1.0-0", "libgstreamer-plugins-base1.0-0",
+            "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good", "gstreamer1.0-libav",
+            "libxkbcommon0", "libxkbcommon-x11-0", "libwayland-client0", "libwayland-egl1",
+            "libxcb1", "libx11-6", "libx11-xcb1", "libxcursor1", "libxi6",
+            "libvulkan1", "libegl1"
+          ],
+          "ubuntu": [
+            "libc6", "libgcc-s1", "libstdc++6", "libglib2.0-0",
+            "libgstreamer1.0-0", "libgstreamer-plugins-base1.0-0",
+            "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good", "gstreamer1.0-libav",
+            "libxkbcommon0", "libxkbcommon-x11-0", "libwayland-client0", "libwayland-egl1",
+            "libxcb1", "libx11-6", "libx11-xcb1", "libxcursor1", "libxi6",
+            "libvulkan1", "libegl1"
+          ],
+          "fedora": [
+            "glibc", "libgcc", "libstdc++", "glib2",
+            "gstreamer1", "gstreamer1-plugins-base", "gstreamer1-plugins-good",
+            "gstreamer1-plugin-openh264", "gstreamer1-plugins-bad-free",
+            "libxkbcommon", "libxkbcommon-x11", "libwayland-client", "libwayland-egl",
+            "libxcb", "libX11", "libX11-xcb", "libXcursor", "libXi",
+            "vulkan-loader", "libglvnd-egl"
+          ]
+        }
+
   build:
     needs: licenses
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: "${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}", platform: linux-x64, pdfium: pdfium-linux-x64 }
-          # aarch64 Linux builds natively on GitHub's arm runner, no cross
-          # toolchain needed.
-          - { os: "${{ vars.RUNNER_LINUX_ARM64 || 'ubuntu-24.04-arm' }}", platform: linux-arm64, pdfium: pdfium-linux-arm64 }
+          # Linux is the `linux` job's. The steps and branches below that
+          # are for Linux no longer run from this matrix.
           - { os: "${{ vars.RUNNER_MACOS || 'macos-latest' }}", platform: macos-arm64, pdfium: pdfium-mac-arm64 }
           - { os: "${{ vars.RUNNER_WINDOWS || 'windows-latest' }}", platform: windows-x64, pdfium: pdfium-win-x64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    # Reading is all the build needs of the repository; the other two are
+    # for the build attestations of what it makes.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       # The whole history: crates/rick/build.rs writes the names of `git
       # shortlog` into the binary for the About dialog's credits, and a
@@ -457,6 +592,16 @@ jobs:
           rm -r "$NAME"
           mkdir -p ../check
           cp "../target/release/examples/pdfium_check$exe" "../target/release/examples/preview_check$exe" ../check/
+      # A build attestation for the release files this job made: the
+      # archive, the plugin packages and their list
+      # (specs/system-integration.md §9). The Linux files are attested by
+      # Trebuchet's workflow, which builds them.
+      - uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/*.rkp
+            dist/plugins-*.json
       - uses: actions/upload-artifact@v4
         with:
           name: archive-${{ matrix.platform }}
@@ -483,8 +628,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: "${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}", platform: linux-x64 }
-          - { os: "${{ vars.RUNNER_LINUX_ARM64 || 'ubuntu-24.04-arm' }}", platform: linux-arm64 }
+          # Linux: Trebuchet's workflow tests every package and archive
+          # where it is installed, with .github/scripts/linux-smoke.sh.
           - { os: "${{ vars.RUNNER_MACOS || 'macos-latest' }}", platform: macos-arm64 }
           - { os: "${{ vars.RUNNER_WINDOWS || 'windows-latest' }}", platform: windows-x64 }
     runs-on: ${{ matrix.os }}
@@ -686,18 +831,44 @@ jobs:
           grep -q "^preview ok: .*first frame 320x240, played to " media.txt || { echo "the sample video did not play"; exit 1; }
 
   release:
-    needs: [build, smoke]
+    needs: [build, smoke, linux]
     runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 15
+    # contents: write for the release; the other two to attest the
+    # checksums, the one release file this job makes.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: { pattern: "archive-*", path: dist, merge-multiple: true }
+      # The Linux files, one artifact per target and architecture: the deb
+      # or rpm of each, and from one target per architecture the archive
+      # with its plugin packages and their list.
+      - uses: actions/download-artifact@v4
+        with: { pattern: "linux_rick_*", path: dist, merge-multiple: true }
       - name: checksums and body
         shell: bash
         run: |
           set -euo pipefail
           cd dist
+          ls -l
+          for arch in x64 arm64; do
+            test -f "rick-${TAG#v}-linux-$arch.tar.gz" || { echo "no Linux archive for $arch"; exit 1; }
+            test -f "plugins-linux-$arch.json" || { echo "no plugin list for linux-$arch"; exit 1; }
+            # The manifest of the Linux packages, as the smoke test checks
+            # it for the other platforms: nine of them, each a file that is
+            # here with the size and the SHA-256 the manifest gives.
+            python3 ../.github/scripts/check-packages.py "plugins-linux-$arch.json" "linux-$arch"
+          done
+          # The build job wrote a checksum file beside each of its files;
+          # the Linux files come without, and get theirs here.
+          for file in *; do
+            case "$file" in *.sha256) continue ;; esac
+            test -f "$file.sha256" || sha256sum "$file" > "$file.sha256"
+          done
           cat ./*.sha256 | sort -k2 > SHA256SUMS.txt
           rm ./*.sha256
           cat SHA256SUMS.txt
@@ -709,21 +880,118 @@ jobs:
             echo
             echo "Plugins that are separate downloads: Git, SVN, ZFS (Linux), SSH, S3, Azure Blob, Google Cloud Storage, Office documents, 3D models and, on macOS and Windows, audio and video with its GStreamer runtime. Each is one \`<id>-<version>-<platform>.rkp\` below. Download the ones for your platform and install them with *Install from file…* in the Extensions dialogue; they are loaded at the next start. A package fits the Rick of this release only. \`plugins-<platform>.json\` lists a platform's packages for the plugin registry."
             echo
+            echo "Linux packages: a \`.deb\` for each supported Debian and Ubuntu release and an \`.rpm\` for each supported Fedora release, for x86-64 and arm64, with the same plugins as the archives. They are also in the apt and dnf repositories on get.openbreach.dev. A package brings what a video in H.264 needs to play. On Fedora the H.264 library itself comes from Cisco's OpenH264 repository, which Fedora enables by default; with that repository switched off Rick still installs, and says the decoder is missing when it is asked to play such a video."
+            echo
             echo "\`SHA256SUMS.txt\` has the checksums of the archives, the packages and the lists. Not signed or notarised (see docs/building.md)."
+            echo
+            echo "Every file has a GitHub build attestation, which says which workflow built it and from which commit. To check a Linux file, with the GitHub CLI: \`gh attestation verify <file> --owner Open-Breach --signer-repo Open-Breach/trebuchet\`. A macOS or Windows file, or \`SHA256SUMS.txt\`: \`gh attestation verify <file> --repo Open-Breach/rick\`. An attestation proves where a file comes from, not that it is safe."
           } >> body.md
           cat body.md
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/attest@v4
         with:
-          tag_name: ${{ env.TAG }}
-          target_commitish: ${{ github.sha }}
-          name: Rick ${{ env.TAG }}
-          body_path: body.md
-          draft: ${{ contains(env.TAG, '-') || github.event_name == 'workflow_dispatch' }}
-          prerelease: ${{ contains(env.TAG, '-') }}
-          files: |
-            dist/*.tar.gz
-            dist/*.zip
-            dist/*.rkp
-            dist/plugins-*.json
-            dist/SHA256SUMS.txt
-          fail_on_unmatched_files: true
+          subject-path: dist/SHA256SUMS.txt
+      # The release of the tag. Trebuchet's job has attached the Linux files
+      # already and, where the tag had no release yet, made a draft for
+      # them. This step works on that same release: it adds the files of
+      # the other platforms and the checksums, gives the release its name
+      # and its notes, and publishes it, unless the tag is a pre-release or
+      # this is a dry run, which both stay drafts. The Linux files are
+      # uploaded once more, the same bytes, so that the release holds what
+      # SHA256SUMS.txt names even where Trebuchet's job attached nothing.
+      - name: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DRAFT: ${{ contains(env.TAG, '-') || github.event_name == 'workflow_dispatch' }}
+          PRERELEASE: ${{ contains(env.TAG, '-') }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --draft --title "Rick $TAG" --notes-file body.md --target "$GITHUB_SHA"
+          fi
+          gh release upload "$TAG" --clobber \
+            dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/*.rkp dist/plugins-*.json dist/SHA256SUMS.txt
+          gh release edit "$TAG" --title "Rick $TAG" --notes-file body.md --target "$GITHUB_SHA" \
+            --prerelease="$PRERELEASE" --draft="$DRAFT"
+          gh release view "$TAG" --json name,isDraft,isPrerelease,assets \
+            --jq '"\(.name): draft \(.isDraft), pre-release \(.isPrerelease), \(.assets | length) files"'
+
+  # The release, checked the way its users are told to check it
+  # (specs/system-integration.md §9). One Linux package and the two
+  # archives of this workflow's own, macOS and Windows, are downloaded from
+  # the release and verified with the two documented lines: the package
+  # against Trebuchet's workflow, which built it, the archives against this
+  # repository's. A copy of the package with one byte changed must not
+  # verify.
+  verify:
+    needs: release
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    # A draft is visible with write access only; a dry run's release is one.
+    permissions:
+      contents: write
+      attestations: read
+    steps:
+      - name: attestations
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          mkdir files
+          cd files
+          gh release download "$TAG" --pattern 'rick_*_amd64.deb' \
+            --pattern "rick-$version-macos-arm64.zip" --pattern "rick-$version-windows-x64.zip"
+          deb="$(find . -name 'rick_*_amd64.deb' | sort | sed -n 1p)"
+          test -n "$deb" || { echo "no deb on the release"; exit 1; }
+          echo "::group::$deb, built by Trebuchet's workflow"
+          gh attestation verify "$deb" --owner "$GITHUB_REPOSITORY_OWNER" --signer-repo Open-Breach/trebuchet
+          echo "verified: $deb"
+          echo "::endgroup::"
+          for archive in "rick-$version-macos-arm64.zip" "rick-$version-windows-x64.zip"; do
+            echo "::group::$archive, built by this workflow"
+            gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY"
+            echo "verified: $archive"
+            echo "::endgroup::"
+          done
+          # One byte of the package changed, in the middle of the file.
+          python3 -c 'import sys; d = bytearray(open(sys.argv[1], "rb").read()); d[len(d) // 2] ^= 1; open(sys.argv[2], "wb").write(d)' "$deb" changed.deb
+          echo "::group::the same package with one byte changed"
+          if gh attestation verify changed.deb --owner "$GITHUB_REPOSITORY_OWNER" --signer-repo Open-Breach/trebuchet; then
+            echo "::endgroup::"
+            echo "a package changed by one byte verified"
+            exit 1
+          fi
+          echo "::endgroup::"
+          echo "the package and both archives verify, and the changed package does not"
+
+  # The apt and dnf repositories on get.openbreach.dev: Trebuchet's publisher
+  # is told of the release and takes its deb and rpm files from the release
+  # page (Open-Breach/trebuchet, docs/publisher.md). Only for a published
+  # release: a pre-release and a dry run are drafts, which the publisher
+  # cannot fetch, and the repositories have one channel. The token may send
+  # this one event to that one repository.
+  repositories:
+    needs: [licenses, release, verify]
+    if: github.event_name == 'push' && !contains(github.ref_name, '-')
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: tell the publisher
+        env:
+          GH_TOKEN: ${{ secrets.TREBUCHET_DISPATCH_TOKEN }}
+          VERSION: ${{ needs.licenses.outputs.version }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::the secret TREBUCHET_DISPATCH_TOKEN is not set: the release is published, the repositories are not told"
+            exit 1
+          fi
+          gh api repos/Open-Breach/trebuchet/dispatches \
+            -f event_type=release \
+            -f "client_payload[app]=rick" \
+            -f "client_payload[version]=$VERSION" \
+            -f "client_payload[release_url]=https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"

@@ -603,12 +603,29 @@ pub fn file_types(facts: &Facts) -> String {
     lists.join("\n\n")
 }
 
-/// The platforms the release workflow builds an archive for, as its build
-/// matrix names them (`linux-x64`, `macos-arm64`), each once.
+/// The Linux archives of a release that calls Trebuchet's
+/// `linux-packages.yml`: that workflow makes one per architecture, whatever
+/// distribution releases it packages for (Open-Breach/trebuchet,
+/// docs/linux-packages.md, *The tarball*).
+const TREBUCHET_ARCHIVES: [&str; 2] = ["linux-x64", "linux-arm64"];
+
+/// The platforms the release workflow builds an archive for, each once:
+/// the ones its build matrix names (`macos-arm64`, `windows-x64`), and the
+/// two Linux ones where a job calls Trebuchet's `linux-packages.yml`,
+/// which builds them outside the matrix.
 #[must_use]
 pub fn release_platforms(workflow: &str) -> Vec<String> {
     let mut platforms: Vec<String> = Vec::new();
     for line in workflow.lines() {
+        let key = line.trim_start();
+        if key.starts_with("uses: ") && key.contains("/linux-packages.yml@") {
+            for name in TREBUCHET_ARCHIVES {
+                if !platforms.iter().any(|p| p == name) {
+                    platforms.push(name.to_owned());
+                }
+            }
+            continue;
+        }
         let Some((_, rest)) = line.split_once("platform: ") else {
             continue;
         };
@@ -663,8 +680,8 @@ pub fn install(version: &str, platforms: &[String]) -> String {
             "Linux",
             &links("linux", "tar.gz"),
             &format!(
-                "```bash\ntar xzf {linux}.tar.gz && ./{linux}/rick\n```\n\nNeeds glibc 2.39 or \
-                 later (Ubuntu 24.04). The first start offers to set Rick up in your desktop: \
+                "```bash\ntar xzf {linux}.tar.gz && ./{linux}/rick\n```\n\nNeeds glibc 2.36 or \
+                 later (Debian 12, Ubuntu 24.04). The first start offers to set Rick up in your desktop: \
                  the launcher entry, the default file manager, the `rick` command."
             ),
         ),
@@ -1018,6 +1035,22 @@ mod tests {
             pdfium: a }\n    - { os: macos-latest, platform: macos-arm64 }\n  smoke:\n    \
             - { os: ubuntu-24.04, platform: linux-x64 }\n";
         assert_eq!(release_platforms(workflow), ["linux-x64", "macos-arm64"]);
+    }
+
+    #[test]
+    fn the_linux_archives_come_with_the_call_to_trebuchet() {
+        let workflow = "# Linux: linux-packages.yml@main builds it\njobs:\n  linux:\n    uses: \
+            Open-Breach/trebuchet/.github/workflows/linux-packages.yml@main\n  build:\n    \
+            strategy:\n      matrix:\n        include:\n          - { os: macos-latest, \
+            platform: macos-arm64 }\n";
+        assert_eq!(
+            release_platforms(workflow),
+            ["linux-x64", "linux-arm64", "macos-arm64"]
+        );
+        // A comment that names the workflow is no call.
+        let workflow =
+            "# Linux: linux-packages.yml@main builds it\n    - { platform: macos-arm64 }\n";
+        assert_eq!(release_platforms(workflow), ["macos-arm64"]);
     }
 
     #[test]

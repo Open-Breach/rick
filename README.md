@@ -83,7 +83,7 @@ Coming:
 tar xzf rick-0.5.0-linux-x64.tar.gz && ./rick-0.5.0-linux-x64/rick
 ```
 
-Needs glibc 2.39 or later (Ubuntu 24.04). The first start offers to set Rick up in your desktop: the launcher entry, the default file manager, the `rick` command.
+Needs glibc 2.36 or later (Debian 12, Ubuntu 24.04). The first start offers to set Rick up in your desktop: the launcher entry, the default file manager, the `rick` command.
 
 **macOS** · [arm64](https://github.com/Open-Breach/rick/releases/download/v0.5.0/rick-0.5.0-macos-arm64.zip)
 
