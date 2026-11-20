@@ -373,12 +373,30 @@ pub enum OnOpen {
 }
 
 /// The `[plugins]` table.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Plugins {
     /// Ids of the plugins not to load on the next start; they stay on disk
     /// and the Extensions screen lists them as disabled.
     pub disabled: Vec<String>,
+    /// *Suggest plugins*: Rick says so when a plugin that is not there
+    /// would serve the file, the folder or the connection the user is
+    /// looking at (specs/plugin-distribution.md §8). Off, it suggests
+    /// nothing.
+    pub suggest: bool,
+    /// Ids of the plugins never to suggest: what *Don't suggest again*
+    /// writes and *Suggest again* takes back.
+    pub no_suggest: Vec<String>,
+}
+
+impl Default for Plugins {
+    fn default() -> Self {
+        Self {
+            disabled: Vec::new(),
+            suggest: true,
+            no_suggest: Vec::new(),
+        }
+    }
 }
 
 /// The `[registry]` table (specs/plugin-distribution.md §6).
@@ -899,6 +917,16 @@ pub enum SettingsChange {
         /// `false` adds it to `[plugins] disabled`, `true` removes it.
         enabled: bool,
     },
+    /// *Suggest plugins*: whether Rick suggests a plugin that is not there
+    /// (`[plugins] suggest`).
+    SuggestPlugins(bool),
+    /// Silence a plugin's suggestions for good, or take that back.
+    NoSuggest {
+        /// The plugin id.
+        id: String,
+        /// `true` adds it to `[plugins] no_suggest`, `false` removes it.
+        silenced: bool,
+    },
     /// *Look for plugins and updates online*: whether Rick fetches the
     /// plugin list by itself (`[registry] check`).
     RegistryCheck(bool),
@@ -986,6 +1014,13 @@ impl Settings {
                     self.plugins.disabled.push(id);
                 }
             }
+            SettingsChange::SuggestPlugins(v) => self.plugins.suggest = v,
+            SettingsChange::NoSuggest { id, silenced } => {
+                self.plugins.no_suggest.retain(|s| *s != id);
+                if silenced {
+                    self.plugins.no_suggest.push(id);
+                }
+            }
             SettingsChange::RegistryCheck(v) => self.registry.check = v,
             SettingsChange::IntegrationAsk(v) => self.integration.ask = v,
             SettingsChange::IntegrationCheckAtStartup(v) => self.integration.check_at_startup = v,
@@ -1063,6 +1098,58 @@ mod tests {
         assert!(text.contains("[registry]\ncheck = false\n"), "{text}");
         switched.apply(SettingsChange::RegistryCheck(true));
         assert_eq!(switched, Settings::default());
+    }
+
+    /// The `[plugins]` keys of the suggestions (specs/plugin-distribution.md
+    /// §8): `suggest` is on unless the file switches it off, and
+    /// `no_suggest` lists the plugins *Don't suggest again* silenced.
+    #[test]
+    fn plugins_are_suggested_by_default_and_a_plugin_is_silenced_by_its_id() {
+        let s = Settings::default();
+        assert!(s.plugins.suggest);
+        assert_eq!(s.plugins.no_suggest, [] as [&str; 0]);
+        let text = toml::to_string(&s).unwrap_or_default();
+        assert!(
+            text.contains("[plugins]\ndisabled = []\nsuggest = true\nno_suggest = []\n"),
+            "{text}"
+        );
+
+        // A file written before the keys existed leaves them at their
+        // defaults, and the plugins it disabled stay disabled.
+        let older: Settings =
+            toml::from_str("[plugins]\ndisabled = [\"git\"]\n").unwrap_or_default();
+        assert_eq!(older.plugins.disabled, ["git"]);
+        assert!(older.plugins.suggest);
+        assert_eq!(older.plugins.no_suggest, [] as [&str; 0]);
+
+        let read: Settings =
+            toml::from_str("[plugins]\nsuggest = false\nno_suggest = [\"git\", \"svn\"]\n")
+                .unwrap_or_default();
+        assert!(!read.plugins.suggest);
+        assert_eq!(read.plugins.no_suggest, ["git", "svn"]);
+
+        // *Don't suggest again* writes the id once, *Suggest again* takes
+        // it back, and the switch writes the one key.
+        let mut changed = Settings::default();
+        for _ in 0..2 {
+            changed.apply(SettingsChange::NoSuggest {
+                id: "git".to_owned(),
+                silenced: true,
+            });
+        }
+        assert_eq!(changed.plugins.no_suggest, ["git"]);
+        changed.apply(SettingsChange::SuggestPlugins(false));
+        let text = toml::to_string(&changed).unwrap_or_default();
+        assert!(
+            text.contains("suggest = false\nno_suggest = [\"git\"]\n"),
+            "{text}"
+        );
+        changed.apply(SettingsChange::NoSuggest {
+            id: "git".to_owned(),
+            silenced: false,
+        });
+        changed.apply(SettingsChange::SuggestPlugins(true));
+        assert_eq!(changed, Settings::default());
     }
 
     #[test]

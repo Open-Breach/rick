@@ -411,6 +411,18 @@ pub enum Command {
     /// plugin [`App::updates`](crate::App::updates) lists is installed
     /// over its folder, each as a job of its own.
     UpdateAll,
+    /// **Not now** on a suggestion (specs/plugin-distribution.md §8): the
+    /// plugin of this id is not suggested again until Rick is started
+    /// again.
+    SuggestNotNow(String),
+    /// **Don't suggest again** on a suggestion: the plugin's id is written
+    /// to `[plugins] no_suggest` of `rick.toml`, and the plugin is never
+    /// suggested.
+    SuggestNever(String),
+    /// **Suggest again** of the Extensions dialogue: the plugin's id is
+    /// taken off `[plugins] no_suggest`, and off the plugins *Not now*
+    /// silenced in this run.
+    SuggestAgain(String),
     /// Show the pane's file through one previewer whatever the scores
     /// say. It holds for this file only, until the selection moves on.
     /// The card of a file no previewer claims sent it for *Open as hex*
@@ -730,14 +742,14 @@ pub enum Event {
     },
     /// No previewer claims the pane's selection; the pane shows the File
     /// info card of SPEC.md's *No previewer*, centred: the file's facts
-    /// and what can be done about it.
+    /// and what can be done about it. Whether a plugin that is not there
+    /// would show the file is
+    /// [`App::preview_suggestion`](crate::App::preview_suggestion): the
+    /// card's head then reads *plugin available*, and its action row has
+    /// **Install** or **Enable**.
     PreviewNone {
         /// The pane.
         pane: PaneId,
-        /// A previewer plugin in the plugins directory whose manifest
-        /// claims the file's type but which is disabled, by id: the card's
-        /// head reads *plugin available*. `None`: *no previewer for …*.
-        plugin: Option<String>,
         /// The file's mode string and `owner:group`, `-rw-r--r--
         /// serge:serge`, for a local file where the platform has them.
         permissions: Option<String>,
@@ -1028,8 +1040,8 @@ impl fmt::Debug for Event {
             Self::PreviewFailed { pane, error } => {
                 pane_struct(f, "PreviewFailed", *pane, "error", error)
             }
-            Self::PreviewNone { pane, plugin, .. } => {
-                pane_struct(f, "PreviewNone", *pane, "plugin", plugin)
+            Self::PreviewNone { pane, permissions } => {
+                pane_struct(f, "PreviewNone", *pane, "permissions", permissions)
             }
             Self::PreviewEmpty { pane, permissions } => {
                 pane_struct(f, "PreviewEmpty", *pane, "permissions", permissions)

@@ -563,6 +563,17 @@ fn row(plugin: &plugins_native::Plugin) -> app::Plugin {
         version: plugin.version.clone(),
         points: plugin.points,
         previews: plugin.previews.clone(),
+        markers: plugin.markers.clone(),
+        connections: plugin
+            .connections
+            .iter()
+            .filter_map(|kind| {
+                Some(app::ConnectionKind {
+                    section: ext::ConnectionSection::named(&kind.section)?,
+                    title: kind.title.clone(),
+                })
+            })
+            .collect(),
         status: match &plugin.status {
             PluginStatus::Loaded => app::PluginStatus::Loaded,
             PluginStatus::Disabled => app::PluginStatus::Disabled,

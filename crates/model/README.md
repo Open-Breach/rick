@@ -13,7 +13,9 @@ window shares (with a job's *Waiting* state when it queues behind another on
 its volume), the side panel's data (the Places list, the mounted volumes,
 the cloud providers' rows, the trash's count), the name conflicts jobs wait
 on, the settings snapshot, with the pinned locations, the drag and the
-search settings and the icon size chosen last among them, and the integration items of
+search settings, the icon size chosen last and the `[plugins]` table —
+the plugins that are switched off, whether plugins are suggested and the
+ones never to suggest — among them, and the integration items of
 specs/system-integration.md §6: the records of `rick.toml`'s
 `[integration]` table (one per item with its state, the date of the last
 check and what Rick wrote for it, plus the `ask`, startup-check and

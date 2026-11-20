@@ -44,6 +44,12 @@ use the crate has for
 `rustls` with ring, as the cloud plugins do, `minisign-verify`, `semver`,
 `sha2`, `serde` and `serde_json`; `app` and `tests` may depend on it.
 
+What Rick suggests (specs/plugin-distribution.md §8) is read from the
+cached index alone, by `app`: a suggestion calls nothing of this crate
+that asks the network, and `[plugins] suggest` in `rick.toml` switches
+the suggestions off without touching the registry's own switch,
+`[registry] check`.
+
 ## The key
 
 The registry is off in a build whose `keys/registry.pub` is empty, which

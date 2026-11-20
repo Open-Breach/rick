@@ -31,9 +31,8 @@ and enters as a location when it browses it (unless the setting
 `archives.on_open` says `system`), anything else opens with the system
 default; nothing opens a viewer. The preview pane's *Copy* reads the whole
 file as a job and puts its text on the clipboard; a preview is reported
-with the previewer that opened it, and a file no previewer claims with the
-disabled plugin whose manifest claims its type and the file's permission
-line, for the pane's File info card (`Command::PreviewWith` shows one file
+with the previewer that opened it, and a file no previewer claims with
+the file's permission line, for the pane's File info card (`Command::PreviewWith` shows one file
 through a named previewer whatever the scores); *Always preview on <source>* writes
 `preview_always` into the source's connection and takes the size limit off
 there, whichever remote provider keeps the source; a whole file fetched
@@ -125,7 +124,34 @@ into the build counts only once the binary has said so
 test is, knows only a key its `rick.toml` names, and so never asks the
 real registry. The cache is
 `cache/` in the config directory unless the binary names the platform's
-(`App::set_cache_dir`). It depends on `types`,
+(`App::set_cache_dir`). It says which plugin that is not there would
+serve what the user is looking at (`suggest`,
+specs/plugin-distribution.md §8), from the plugin list it holds and the
+manifests of the plugins folders and from nothing else, so that a file
+selected or a folder entered never makes a request:
+`App::suggestion_for_file` by a file's extension, `suggestion_for_folder`
+by an entry of a folder's listing that is one of a plugin's markers, and
+`suggested_connections` for a section of the side panel.
+`App::preview_suggestion` is the first of them for the file a pane's
+preview shows, while no loaded previewer claims the file but the one of
+last resort — the hex view shows it and the pane has the bar — or none
+at all, and the *No previewer* card has the button.
+`App::folder_suggestion` is the second for the folder a pane shows: a
+folder of the local file system, listed as itself, whose loaded listing
+holds an entry that is a plugin's marker, hidden or not. The names of a
+listing are held against the markers as its batches arrive, as a refresh
+swaps it in and as the watch reports changes, and again when a plugin
+list or the plugin host's rows arrive after the folder was listed; a
+pane that left the folder is suggested nothing. A plugin that was
+installed or switched on in this run is suggested no longer:
+`App::plugin_pending` says that it waits for the next start, and the
+place that suggested it says *… is installed. Restart Rick to use it.* A plugin of the
+list that fits this Rick and is in neither plugins folder is suggested
+with *Install*, one that is on the disk and disabled from its own
+manifest with *Enable*, and the one on the disk first. Nothing is
+suggested with `[plugins] suggest` off, for an id in `[plugins]
+no_suggest` (`Command::SuggestNever`, taken back by `SuggestAgain`), and
+for a plugin `Command::SuggestNotNow` silenced until the next start. It depends on `types`,
 `runtime`, `platform`, `ext`, `vfs`, `vfs-local`, `vfs-rick`, `model`,
 `ops` (the built-in operations it loads) and `plugins-registry`; only
 `ui-egui`, `rick` and `tests` may depend on it.

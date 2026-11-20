@@ -26,7 +26,7 @@ use ext::Points;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::{Plugin, PluginStatus};
+use crate::{ConnectionKind, Plugin, PluginStatus};
 
 /// The folder in the config directory whose subfolders are the user's
 /// plugins.
@@ -527,6 +527,20 @@ struct Described {
     points: Vec<String>,
     #[serde(default)]
     previews: Vec<String>,
+    #[serde(default)]
+    markers: Vec<String>,
+    #[serde(default)]
+    connections: Vec<DescribedConnection>,
+}
+
+/// A `[[connections]]` table of a `plugin.toml`, as far as a row needs
+/// it.
+#[derive(Debug, Default, Deserialize)]
+struct DescribedConnection {
+    #[serde(default)]
+    section: String,
+    #[serde(default)]
+    title: String,
 }
 
 /// The row of the plugin folder `dir`, unpacked in this session: what its
@@ -552,6 +566,17 @@ pub fn describe(dir: &Path) -> Plugin {
             .filter_map(|name| Points::named(name))
             .fold(Points::empty(), |all, point| all | point),
         previews: said.previews,
+        markers: said.markers,
+        connections: said
+            .connections
+            .into_iter()
+            .filter_map(|kind| {
+                Some(ConnectionKind {
+                    section: ext::ConnectionSection::named(&kind.section)?,
+                    title: kind.title,
+                })
+            })
+            .collect(),
         status: PluginStatus::Installed,
         path: dir.to_owned(),
         built_in: false,

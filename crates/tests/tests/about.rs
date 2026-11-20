@@ -83,6 +83,8 @@ fn plugins() -> Vec<app::Plugin> {
             version: "0.3.0-dev".to_owned(),
             points: ext::Points::empty(),
             previews: Vec::new(),
+            markers: Vec::new(),
+            connections: Vec::new(),
             status: app::PluginStatus::Loaded,
             path: PathBuf::from("/opt/rick/plugins/git"),
             description: String::new(),
@@ -95,6 +97,8 @@ fn plugins() -> Vec<app::Plugin> {
             version: "1.0.0".to_owned(),
             points: ext::Points::empty(),
             previews: Vec::new(),
+            markers: Vec::new(),
+            connections: Vec::new(),
             status: app::PluginStatus::Disabled,
             path: PathBuf::from("/home/me/.config/rick/plugins/probe"),
             description: String::new(),
@@ -499,7 +503,9 @@ fn the_licence_file_names_the_bundled_components_with_their_texts() {
         "bundled-licenses failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let text = String::from_utf8_lossy(&output.stdout);
+    // Python ends the lines of what it prints as the platform does, with
+    // `\r\n` on Windows; what is checked is the text.
+    let text = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
     assert!(text.contains("\n## Bundled components\n"), "no section");
 
     let bundled = about::bundled();

@@ -181,8 +181,11 @@ title = "S3"
 ```
 
 A plugin that has none leaves the lists empty. They land in `plugin.toml`
-and in the manifest of the plugin's package; nothing in Rick reads
-`markers` and `connections` yet.
+and in the manifest of the plugin's package. The host hands all three on
+with every plugin it found, loaded or not (`Plugin::previews`, `markers`
+and `connections`), and Rick suggests a plugin by them: one of the
+registry that is not installed, and one that is installed and disabled
+from this very file (specs/plugin-distribution.md §8).
 
 **A subcommand of the command line.** A plugin can add `rick <command>
 <args…>` (specs/system-integration.md §4): the manifest declares the
@@ -275,7 +278,19 @@ A user drops a plugin into the `plugins/` folder beside the binary or into
 the per-user one in the config directory (`~/.config/rick/plugins/` on
 Linux); the per-user copy wins when both hold the same id. Switching a
 plugin off in the Extensions dialogue
-writes its id to `[plugins] disabled` in `rick.toml`. The dialogue's
+writes its id to `[plugins] disabled` in `rick.toml`. The table has two
+more keys, for the suggestions of specs/plugin-distribution.md §8:
+
+```toml
+[plugins]
+disabled = ["svn"]      # found and listed, not loaded
+suggest = true          # Suggest plugins, on the Behaviour page
+no_suggest = ["git"]    # Don't suggest again; Suggest again takes it back
+```
+
+A plugin named in `disabled` is suggested from its own `plugin.toml`,
+with *Enable*, where what the user is looking at is what it is for. The
+dialogue's
 *Install from file…* unpacks a plugin package into the per-user folder: an
 `.rkp` file, which is a zip archive of the plugin's folder — the folder
 itself, or its contents, in which case the folder takes the package's
