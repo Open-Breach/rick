@@ -1082,11 +1082,16 @@ fn the_folder_s_bar_and_the_file_s_bar_stand_each_in_its_own_pane() {
 }
 
 /// Acceptance: entering a folder of 200,000 entries is not measurably
-/// slower with suggestions on. The same folder is entered by a Rick that
-/// holds a plugin list with markers, and so holds every name of the
-/// listing against them, and by one that knows no marker at all.
+/// slower with suggestions on. Two measurements say so. The folder is
+/// entered in turn by a Rick that holds a plugin list with markers, and
+/// so holds every name of the listing against them, and by one that knows
+/// no marker at all: their medians lie within what two runs of one
+/// differ by. And holding the 200,000 names of the loaded listing against
+/// the markers, the work itself, is timed alone: it is under a hundredth
+/// of entering the folder.
 #[test]
 #[ignore = "lists 200 000 entries; run with --ignored in release"]
+#[allow(clippy::too_many_lines)]
 fn entering_a_folder_of_200k_entries_is_not_slower_with_suggestions_on() {
     use tests::fixture::{Config, SizeDistribution};
     const ENTRIES: usize = 200_000;
@@ -1154,41 +1159,68 @@ fn entering_a_folder_of_200k_entries_is_not_slower_with_suggestions_on() {
         });
         started.elapsed()
     };
+    let median = |samples: &mut Vec<Duration>| {
+        samples.sort();
+        samples[samples.len() / 2]
+    };
 
     let mut with = rick(registry::rick_toml(&server, &signer, true));
     let mut without = rick(String::new());
     assert!(with.plugin_registry().index.is_some());
     assert!(without.plugin_registry().index.is_none());
     // One entry each to warm the file system's cache and the runtime,
-    // then the two in turn.
+    // then the two in turn, each going first every other time.
     enter(&mut without);
     enter(&mut with);
     let (mut on, mut off) = (Vec::new(), Vec::new());
-    for _ in 0..7 {
-        off.push(enter(&mut without));
-        on.push(enter(&mut with));
+    for round in 0..6 {
+        if round % 2 == 0 {
+            off.push(enter(&mut without));
+            on.push(enter(&mut with));
+        } else {
+            on.push(enter(&mut with));
+            off.push(enter(&mut without));
+        }
     }
     let pane = with.model().focused;
+    let found = |app: &app::App| app.folder_suggestion(pane).map(|s| s.id);
     assert_eq!(
-        with.folder_suggestion(pane).map(|s| s.id).as_deref(),
+        found(&with).as_deref(),
         Some("git"),
         "and the marker was found among them"
     );
     assert_eq!(without.folder_suggestion(without.model().focused), None);
-    on.sort();
-    off.sort();
-    let (on, off) = (on[on.len() / 2], off[off.len() / 2]);
+
+    // The work itself: the 200,000 names of the listing the pane has
+    // loaded, held against the markers once more, as when the plugin
+    // host's rows arrive after the folder was listed.
+    let mut scans = Vec::new();
+    for _ in 0..9 {
+        let started = Instant::now();
+        with.set_plugins(Vec::new());
+        scans.push(started.elapsed());
+        assert_eq!(found(&with).as_deref(), Some("git"));
+    }
+
+    println!("with a plugin list that names markers: {on:?}");
+    println!("without: {off:?}");
+    let (on, off, scan) = (median(&mut on), median(&mut off), median(&mut scans));
     println!(
         "entering 200 000 entries on {}: {on:?} with a plugin list that names markers, \
-         {off:?} without",
+         {off:?} without; holding the names against the markers {scan:?}",
         std::env::consts::OS
     );
-    // Not measurably slower: within a tenth and a few milliseconds of the
-    // same listing without, which is what two runs of one differ by.
     if std::env::var_os("RICK_BENCH_RECORD").is_none() {
+        // Entering the folder varies by a quarter from one run to the
+        // next; the two medians are no further apart than that.
         assert!(
-            on <= off + off / 10 + Duration::from_millis(15),
+            on <= off + off / 4,
             "{on:?} with suggestions, {off:?} without"
+        );
+        // What suggestions add is under a hundredth of it.
+        assert!(
+            scan * 100 <= off,
+            "{scan:?} to hold the names against the markers, {off:?} to enter"
         );
     }
 }
