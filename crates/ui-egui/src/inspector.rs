@@ -110,6 +110,10 @@ pub struct PaneState {
     /// The popover is open: the pointer is on the info button or on the
     /// card it opened.
     popover: bool,
+    /// The plugin the pane showed the offer of, and the file it was
+    /// shown for: after **Install** the pane says so until the selection
+    /// moves on.
+    suggested: Option<(EntryId, crate::suggestion::Shown)>,
 }
 
 /// The pane handle's wiring: the drag it starts and where the window keeps
@@ -372,7 +376,8 @@ pub fn show(
                 still: app.platform().reduce_motion(),
                 dates: crate::format::Dates::of(&app.model().settings),
                 columns: &app.model().settings.preview.columns,
-                suggestion: suggestion.as_ref(),
+                suggestion: suggestion.as_ref().and_then(Suggested::offer),
+                installed: suggestion.as_ref().and_then(|said| said.pending(app)),
             };
             let act = previews.content(
                 &mut body_ui,
@@ -411,12 +416,46 @@ pub fn show(
     apply_acts(acts, view.pane, previews, requests)
 }
 
+/// What the pane has to say of a plugin for the file it shows.
+enum Suggested {
+    /// A plugin that is not there would show the file.
+    Offer(app::Suggestion),
+    /// The plugin the pane offered was installed or switched on: it
+    /// waits for the next start. The plugin, and the sentence that says
+    /// so.
+    After(crate::suggestion::Shown, String),
+}
+
+impl Suggested {
+    /// The offer, while there is one.
+    fn offer(&self) -> Option<&app::Suggestion> {
+        match self {
+            Self::Offer(offer) => Some(offer),
+            Self::After(..) => None,
+        }
+    }
+
+    /// The plugin that waits for the next start, by its id, and what it
+    /// waits as.
+    fn pending(&self, app: &App) -> Option<(&str, app::Pending)> {
+        match self {
+            Self::Offer(_) => None,
+            Self::After(shown, _) => app
+                .plugin_pending(&shown.id)
+                .map(|pending| (shown.id.as_str(), pending)),
+        }
+    }
+}
+
 /// The suggestion for the file the pane shows
 /// (specs/plugin-distribution.md §8): a plugin that is not there would
 /// show it. Where the hex view shows the file, it is the bar drawn here,
 /// at the top of the pane under the toolbar; on the *No previewer* card
-/// it is the card's button, and nothing is drawn here. Returns the
-/// suggestion either way.
+/// it is the card's button, and nothing is drawn here. After **Install**
+/// or **Enable** the plugin is no longer suggested, and the place that
+/// offered it says *… is installed. Restart Rick to use it.* with
+/// **Restart now**, until the selection moves on. Returns what there is
+/// to say either way.
 fn suggestion_bar(
     ui: &mut egui::Ui,
     app: &App,
@@ -424,22 +463,40 @@ fn suggestion_bar(
     view: &View<'_>,
     state: &mut PaneState,
     requests: &mut Vec<Request>,
-) -> Option<app::Suggestion> {
+) -> Option<Suggested> {
+    use crate::suggestion::{self, Place, Shown};
     state.rects.suggestion = None;
-    let pane = view.pane.filter(|_| view.target.is_some())?;
-    let suggestion = app.preview_suggestion(pane)?;
+    let before = state.suggested.take();
+    let pane = view.pane?;
+    let target = view.target?;
+    let said = if let Some(offer) = app.preview_suggestion(pane) {
+        Suggested::Offer(offer)
+    } else {
+        // What the pane offered for this very file.
+        let (_, shown) = before.filter(|(entry, _)| *entry == target)?;
+        let text = shown.after(app)?;
+        Suggested::After(shown, text)
+    };
+    let shown = match &said {
+        Suggested::Offer(offer) => Shown::of(offer),
+        Suggested::After(shown, _) => shown.clone(),
+    };
     let on_card = previews
         .get(pane)
         .is_some_and(|slot| slot.placeholder().is_some());
     if !on_card {
         let id = egui::Id::new("preview-suggestion");
-        let (rect, answer) = crate::suggestion::bar(ui, id, &suggestion);
+        let (rect, answer) = match &said {
+            Suggested::Offer(offer) => suggestion::bar(ui, id, offer),
+            Suggested::After(_, text) => suggestion::note(ui, id, text),
+        };
         state.rects.suggestion = Some(rect);
         if let Some(answer) = answer {
-            requests.push(answer.request(&suggestion.id));
+            requests.push(answer.request(&shown.id, Place::Pane));
         }
     }
-    Some(suggestion)
+    state.suggested = Some((target, shown));
+    Some(said)
 }
 
 /// What a button in the content asked for.
@@ -480,7 +537,9 @@ fn apply_preview_act(
                 });
             }
         }
-        PreviewAct::Suggestion(answer, id) => requests.push(answer.request(&id)),
+        PreviewAct::Suggestion(answer, id) => {
+            requests.push(answer.request(&id, crate::suggestion::Place::Pane));
+        }
         PreviewAct::Download(address) => ctx.open_url(egui::OpenUrl::new_tab(address)),
         // The pane itself stores a table's widths.
         PreviewAct::Columns(_) => {}

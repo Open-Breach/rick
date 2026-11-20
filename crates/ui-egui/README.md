@@ -60,7 +60,13 @@ with the plugin's name and description, **Install** or **Enable**, **Not
 now** and **Don't suggest again**, taking no focus and no key, its buttons
 going under the text in a pane too narrow for one line, and the same bar
 between an explorer pane's toolbar and its list while the folder holds
-the marker of a plugin that is not there, one to a pane; the Portal
+the marker of a plugin that is not there, one to a pane; after **Install**
+or **Enable** the bar that offered the plugin reads *Git is installed.
+Restart Rick to use it.* with **Restart now** until the pane leaves the
+file or the folder, the card has **Restart now** in the button's place,
+and a kind chosen in *Add…* is followed by a notice; on a Rick a package
+manager installed, **Install** opens the Extensions dialogue on the
+plugin; the Portal
 burst while a preview loads and a glyph with *No file selected* when
 there is none), the side panel (rows
 `sidebar/item-height` tall inset from the panel's edges; the editable
@@ -162,7 +168,8 @@ card that reads the host's reason with **Update**, the header's count and
 them — a notice can carry one button, and then stays until it is pressed
 or dismissed; *Install from URL…* with its prompt for an `https://`
 address, and in a Rick a package manager installed the command with its
-copy button in place of **Install**), and drag and drop of entries: rows are drag
+copy button in place of **Install**; *Not suggested* with **Suggest
+again** in the details of a plugin whose suggestions were silenced), and drag and drop of entries: rows are drag
 sources, folders, pane space, breadcrumb segments and tab headers are drop
 zones with the ghost, the live indicator and spring-loading in between (a
 pane at the Trash view trashes what lands in it); the side panel is never a

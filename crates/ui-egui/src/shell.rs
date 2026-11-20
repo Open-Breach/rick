@@ -94,6 +94,10 @@ pub struct TabUi {
     /// frame, for tests: `None` while no plugin is suggested for the
     /// folder.
     pub suggestion: Option<egui::Rect>,
+    /// The plugin the bar showed the offer of, and the folder it was
+    /// shown for: after **Install** the bar says so until the pane
+    /// leaves the folder.
+    pub suggested: Option<(Location, crate::suggestion::Shown)>,
     /// The list's vertical scroll offset in the last frame.
     pub scroll_offset: f32,
     /// Scroll to this offset on the next frame.
@@ -187,6 +191,17 @@ pub enum Request {
     /// *Restart now* of the Extensions dialogue: close Rick and start it
     /// again with its session.
     Restart,
+    /// A suggestion was answered (specs/plugin-distribution.md §8): on
+    /// the bar, on the *No previewer* card or in a list of *Add…*.
+    Suggestion {
+        /// The plugin's id.
+        id: String,
+        /// What was asked.
+        answer: crate::suggestion::Answer,
+        /// Where: a list that closes with the choice has what came of it
+        /// said in a notice.
+        place: crate::suggestion::Place,
+    },
     /// Rows were dragged past the threshold: start a drag of them.
     StartDrag {
         /// The pane.
@@ -962,6 +977,9 @@ pub struct RickUi {
     settings: settings_ui::SettingsWindow,
     shortcuts: ShortcutsScreen,
     extensions: ExtensionsDialog,
+    /// The plugins whose install was chosen in a list of *Add…*: when
+    /// one is installed, a notice says so with **Restart now**.
+    installs_from_lists: std::collections::BTreeSet<String>,
     /// The About dialog (specs/about-dialog.md), with the binary's build
     /// details once it says them.
     about: AboutDialog,
@@ -1275,6 +1293,7 @@ impl RickUi {
             settings: settings_ui::SettingsWindow::default(),
             shortcuts: ShortcutsScreen::default(),
             extensions: ExtensionsDialog::default(),
+            installs_from_lists: std::collections::BTreeSet::new(),
             about: AboutDialog::default(),
             inspector_state: inspector::PaneState::default(),
             inspector_width,
@@ -1923,7 +1942,10 @@ impl RickUi {
                 }
                 Event::Activate { window, token } => self.activate(window, token.as_deref()),
                 Event::Properties(info) => self.properties.open(*info),
-                Event::PluginInstalled { path } => self.extensions.installed(path),
+                Event::PluginInstalled { path } => {
+                    self.say_installed(&path);
+                    self.extensions.installed(path);
+                }
                 Event::PluginUpdates { count } => {
                     // *2 plugins need their build for Rick 0.6.0*.
                     let version = self.app.plugin_registry().rick.clone();
@@ -2015,6 +2037,85 @@ impl RickUi {
         }
         tracing::info!(binary = %binary.display(), "continuing in a new process");
         relaunch(binary);
+    }
+
+    /// A suggestion was answered (specs/plugin-distribution.md §8).
+    /// **Install** on a Rick a package manager installed opens the
+    /// Extensions dialogue on the plugin, where the command stands; such
+    /// a Rick downloads nothing. An answer given in a list of *Add…*,
+    /// which is gone with the choice, has what came of it said in a
+    /// notice with **Restart now**; a bar and a card say it themselves.
+    fn answer_suggestion(
+        &mut self,
+        id: String,
+        answer: crate::suggestion::Answer,
+        place: crate::suggestion::Place,
+    ) {
+        use crate::suggestion::{Answer, Place};
+        match answer {
+            Answer::Install if self.app.packaging().is_some() => {
+                self.extensions.open_available(id);
+                self.handle(Command::Registry(app::RegistryCommand::Opened));
+            }
+            Answer::Install => {
+                if place == Place::List {
+                    self.installs_from_lists.insert(id.clone());
+                }
+                self.handle(Command::InstallAvailable(id));
+            }
+            Answer::Enable => {
+                self.handle(Command::Settings(SettingsChange::Plugin {
+                    id: id.clone(),
+                    enabled: true,
+                }));
+                if place == Place::List {
+                    self.say_pending(&id);
+                }
+            }
+            Answer::NotNow => self.handle(Command::SuggestNotNow(id)),
+            Answer::Never => self.handle(Command::SuggestNever(id)),
+            Answer::Restart => self.restart(),
+        }
+    }
+
+    /// A plugin was unpacked into `path`: when its install was chosen in
+    /// a list of *Add…*, the notice says that it is installed.
+    fn say_installed(&mut self, path: &std::path::Path) {
+        let id = self
+            .app
+            .plugins()
+            .iter()
+            .find(|row| row.path == path)
+            .map(|row| row.id.clone());
+        if let Some(id) = id.filter(|id| self.installs_from_lists.remove(id)) {
+            self.say_pending(&id);
+        }
+    }
+
+    /// The notice of a plugin that waits for the next start: *S3 is
+    /// installed. Restart Rick to use it.* with **Restart now**.
+    fn say_pending(&mut self, id: &str) {
+        let Some(pending) = self.app.plugin_pending(id) else {
+            return;
+        };
+        let name = self
+            .app
+            .plugins()
+            .iter()
+            .find(|row| row.id == id)
+            .map_or(id, |row| {
+                if row.name.is_empty() {
+                    id
+                } else {
+                    row.name.as_str()
+                }
+            })
+            .to_owned();
+        self.toast_with(
+            crate::suggestion::installed_text(&name, pending),
+            t!("extensions-restart-now"),
+            Request::Restart,
+        );
     }
 
     /// *Restart now*: Rick starts again from the binary it runs from, by
@@ -2344,6 +2445,9 @@ impl RickUi {
                     Request::RickUpdate => self.open_rick_update(),
                     Request::PluginSettings(id) => self.settings.open_plugin(self.root, &id),
                     Request::Restart => self.restart(),
+                    Request::Suggestion { id, answer, place } => {
+                        self.answer_suggestion(id, answer, place);
+                    }
                     Request::StartDrag {
                         pane,
                         tab,

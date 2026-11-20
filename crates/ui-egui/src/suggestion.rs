@@ -11,6 +11,13 @@
 //! application's to say ([`app::Suggestion`]); the bar draws it and hands
 //! back what was clicked.
 //!
+//! After **Install** the bar reads *Git is installed. Restart Rick to use
+//! it.* with **Restart now** ([`note`]), and after **Enable** the same of
+//! a plugin that was switched on. A plugin that is on the disk is no
+//! longer suggested, so the place that showed the offer remembers which
+//! plugin it was ([`Shown`]) and says so for as long as the pane stays on
+//! that file or in that folder.
+//!
 //! The bar takes no focus and no key: its buttons answer the pointer only,
 //! and nothing of it is in the Tab order. It is not drawn in Figma
 //! (`specs/open.md`); it is built from the rule above and the rows it
@@ -19,10 +26,9 @@
 //! beside the three buttons, the buttons go under the text, onto as many
 //! lines as they need, rather than cut it to nothing.
 
-use app::{Command, Remedy, Suggestion};
+use app::{App, Pending, Remedy, Suggestion};
 use egui::{Align2, FontId, Rect, pos2, vec2};
 use ext::t;
-use model::SettingsChange;
 
 use crate::icons;
 use crate::shell::Request;
@@ -50,19 +56,70 @@ pub enum Answer {
     NotNow,
     /// **Don't suggest again**.
     Never,
+    /// **Restart now**, of a plugin that was installed or switched on.
+    Restart,
+}
+
+/// Where a suggestion was answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Place {
+    /// On the bar, or on the *No previewer* card: the place stays and
+    /// says what came of it.
+    Pane,
+    /// In a list of *Add…*, which closes with the choice: what came of
+    /// it is said in a notice.
+    List,
 }
 
 impl Answer {
-    /// The request that does what was asked about the plugin `id`.
+    /// The request that does what was asked about the plugin `id`, where
+    /// it was asked.
     #[must_use]
-    pub fn request(self, id: &str) -> Request {
-        let id = id.to_owned();
-        Request::Command(match self {
-            Self::Install => Command::InstallAvailable(id),
-            Self::Enable => Command::Settings(SettingsChange::Plugin { id, enabled: true }),
-            Self::NotNow => Command::SuggestNotNow(id),
-            Self::Never => Command::SuggestNever(id),
-        })
+    pub fn request(self, id: &str, place: Place) -> Request {
+        Request::Suggestion {
+            id: id.to_owned(),
+            answer: self,
+            place,
+        }
+    }
+}
+
+/// The plugin a place showed the offer of: what it remembers, to say
+/// what came of the offer once the plugin is no longer suggested.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shown {
+    /// The plugin's id.
+    pub id: String,
+    /// Its name.
+    pub name: String,
+}
+
+impl Shown {
+    /// What a place remembers of `suggestion`.
+    #[must_use]
+    pub fn of(suggestion: &Suggestion) -> Self {
+        Self {
+            id: suggestion.id.clone(),
+            name: suggestion.name.clone(),
+        }
+    }
+
+    /// What the place says now that the plugin is no longer suggested:
+    /// *Git is installed. Restart Rick to use it.* while the plugin waits
+    /// for the next start, nothing when the offer was declined.
+    #[must_use]
+    pub fn after(&self, app: &App) -> Option<String> {
+        Some(installed_text(&self.name, app.plugin_pending(&self.id)?))
+    }
+}
+
+/// *Git is installed. Restart Rick to use it.*, or the same of a plugin
+/// that was switched on.
+#[must_use]
+pub fn installed_text(name: &str, pending: Pending) -> String {
+    match pending {
+        Pending::Installed => t!("suggest-installed", name = name),
+        Pending::Enabled => t!("suggest-enabled", name = name),
     }
 }
 
@@ -202,34 +259,55 @@ fn flow(widths: &[f32], width: f32) -> Vec<(usize, f32)> {
 /// returns where it stands and what was clicked. `id` tells this bar from
 /// another pane's.
 pub fn bar(ui: &mut egui::Ui, id: egui::Id, suggestion: &Suggestion) -> (Rect, Option<Answer>) {
-    let metrics = theme::metrics(ui.ctx());
-    let scheme = theme::scheme(ui);
     let (label, answer, enabled) = remedy_button(suggestion.remedy);
-    let buttons: Vec<Button> = [
+    let buttons = [
         (label, answer, true, enabled),
         (t!("suggest-not-now"), Answer::NotNow, false, true),
         (t!("suggest-never"), Answer::Never, false, true),
-    ]
-    .into_iter()
-    .map(|(label, answer, primary, enabled)| Button {
-        width: button_width(ui, &label),
-        label,
-        answer,
-        primary,
-        enabled,
-    })
-    .collect();
+    ];
+    draw(ui, id, &text(suggestion), buttons)
+}
+
+/// Draws the bar after **Install** or **Enable**: `text`, *Git is
+/// installed. Restart Rick to use it.*, with **Restart now**. Returns
+/// where it stands and whether the button was clicked.
+pub fn note(ui: &mut egui::Ui, id: egui::Id, text: &str) -> (Rect, Option<Answer>) {
+    let buttons = [(t!("extensions-restart-now"), Answer::Restart, true, true)];
+    draw(ui, id, text, buttons)
+}
+
+/// The bar itself: the glyph, `text` and `buttons` — each its label, what
+/// it asks for, whether it is the primary one and whether it can be
+/// pressed now.
+fn draw<const N: usize>(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    text: &str,
+    buttons: [(String, Answer, bool, bool); N],
+) -> (Rect, Option<Answer>) {
+    let metrics = theme::metrics(ui.ctx());
+    let scheme = theme::scheme(ui);
+    let buttons: Vec<Button> = buttons
+        .into_iter()
+        .map(|(label, answer, primary, enabled)| Button {
+            width: button_width(ui, &label),
+            label,
+            answer,
+            primary,
+            enabled,
+        })
+        .collect();
     let widths: Vec<f32> = buttons.iter().map(|b| b.width).collect();
-    // Three buttons, two gaps.
-    let buttons_width = widths.iter().sum::<f32>() + 2.0 * GAP;
+    #[allow(clippy::cast_precision_loss)]
+    let gaps = GAP * buttons.len().saturating_sub(1) as f32;
+    let buttons_width = widths.iter().sum::<f32>() + gaps;
 
     let width = ui.available_width();
     let inner_width = (width - 2.0 * metrics.space_toolbar_x).max(0.0);
-    let text = text(suggestion);
     let font = FontId::proportional(TEXT_BODY);
     let whole = ui
         .painter()
-        .layout_no_wrap(text.clone(), font.clone(), scheme.text_primary)
+        .layout_no_wrap(text.to_owned(), font.clone(), scheme.text_primary)
         .size()
         .x;
     // The text's room beside the buttons; with less than the text needs
@@ -279,7 +357,7 @@ pub fn bar(ui: &mut egui::Ui, id: egui::Id, suggestion: &Suggestion) -> (Rect, O
         widgets::line(
             ui,
             pos2(text_left, first),
-            &text,
+            text,
             font,
             scheme.text_primary,
             text_width,

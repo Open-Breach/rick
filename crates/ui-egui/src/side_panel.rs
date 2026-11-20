@@ -797,7 +797,7 @@ fn suggested_items(
         // What choosing it does, in the plugin's own words.
         let entry = entry.on_hover_text(crate::suggestion::text(&kind.plugin));
         if entry.clicked() {
-            requests.push(answer.request(&kind.plugin.id));
+            requests.push(answer.request(&kind.plugin.id, crate::suggestion::Place::List));
             ui.close();
         }
     }
