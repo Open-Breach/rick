@@ -7,13 +7,17 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-20
+
 Plugins come in two kinds from here on: the ones every install has, and
 the ones that are separate downloads. The Extensions dialogue lists the
 separate ones and installs and updates them from a signed plugin list,
 which Rick fetches from `get.openbreach.dev` and checks against a key
 that is compiled in. Where the list does not arrive, the *Available*
-list says so in one line and nothing else does. The extension API is 23:
-a plugin built for 0.5.0 is refused until it is rebuilt.
+list says so in one line and nothing else does. On Linux, Rick is also a
+deb and an rpm, with apt and dnf repositories on `get.openbreach.dev`,
+and every file of a release has a build attestation. The extension API
+is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
 
 ### Changed
 
@@ -1855,7 +1859,8 @@ text, code, images and PDF, and Git, on Linux, macOS and Windows.
   in the middle of a write can no longer read a truncated file and lose
   the pinned folders (#14).
 
-[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Open-Breach/rick/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Open-Breach/rick/releases/tag/v0.5.0
 [0.4.1]: https://github.com/Open-Breach/rick/releases/tag/v0.4.1
 [0.4.0]: https://github.com/Open-Breach/rick/releases/tag/v0.4.0
