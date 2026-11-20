@@ -89,9 +89,18 @@ One picture of the release's GUI, taken fresh for every release.
 
 ### 5. Install (regenerated)
 
-Heading `## Install`. Three short blocks, **Linux**, **macOS**, **Windows**. Each has the direct link to the release's archive for every architecture built for that platform (`https://github.com/Open-Breach/rick/releases/download/v<version>/rick-<version>-<platform>.<ext>`) and the real steps to get Rick running, as they are in that release: two or three lines, not the reference. Today that is unpack and run; when an installer or a package arrives the steps change with it.
+Heading `## Install`. Three short blocks, **Linux**, **macOS**, **Windows**. Each has the direct link to the release's archive for every architecture built for that platform (`https://github.com/Open-Breach/rick/releases/download/v<version>/rick-<version>-<platform>.<ext>`) and the real steps to get Rick running, as they are in that release: two or three lines, not the reference.
 
-One line at the end says how plugins arrive: they ship in the archive's `plugins/` folder, and deleting a plugin's folder removes that plugin.
+The **Linux** block leads with the package install and the archive follows:
+
+- The title line: `**Linux** · Debian, Ubuntu, Fedora and the distros based on them`.
+- The line that installs the package, as code: `curl -fsSL https://get.openbreach.dev/install.sh | sh -s rick`.
+- `This adds the Open-Breach repository and installs Rick with apt or dnf; updates then arrive with your system's.` Then the link *Which releases, and the same steps by hand*, to `docs/install.md` in `Open-Breach/trebuchet`. The README names no distro release for the packages: which releases have a repository is written there and nowhere else.
+- `Or run it from the archive, with nothing installed:` and the links to the archives, then the line that unpacks and runs it and the line on what the archive needs.
+
+macOS and Windows are unpack and run; when an installer or a package arrives for them the steps change with it.
+
+One line at the end says how plugins arrive: they ship in the archive's `plugins/` folder, and deleting a plugin's folder removes that plugin. It ends on the packages: ``A Rick installed from a package gets the rest as packages: `rick-plugin-git`, or `rick-plugins` for all of them.``
 
 ### 6. Warning (fixed)
 
@@ -128,6 +137,7 @@ The current README's tour (*See what's what*, *Then put it in order*, *One tool,
 ## Rules for the release
 
 - The README update is part of the release pull request and of nothing else. Between releases the README is not touched, however far `dev` moves.
+- One exception: the Install section may be completed between releases when it describes the latest release as published. A way to install that release which went live after it, such as the packages on `get.openbreach.dev`, is added then and not held back for the next release; it is proven against what is published first, and the generator and the README test change in the same pull request. The package install of 0.6.0 came this way.
 - Regenerated: the version in the status line and the call to action, feature items 1 and 3 with the grouped file types and the tool names of item 4, the animal and the two screenshots, the Install section.
 - Left alone: sections 1, 2, 6, 7, 8 and 9, the closing lines, the status text, and the fixed wording of feature items 2, 4, 5 and 6. A change to any of them is listed in the pull request under **Decisions made**.
 - Proposed, not decided: the Coming list, and new wording for the status text when a sentence of it looks no longer true, both under **Needs a decision**.
