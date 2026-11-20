@@ -3917,6 +3917,163 @@ fn screenshots_of_the_extensions_dialogue() {
     }
 }
 
+/// A window for the suggestions' screenshots (issue 252): a Rick of the
+/// registry tests' version on `folder`, with `extensions` loaded and a
+/// registry of the test's own that offers the plugins a release
+/// publishes separately, as their manifests describe them. The server
+/// lives as long as the window is looked at.
+fn suggestions_window(
+    folder: &Path,
+    extensions: Vec<Arc<dyn ext::Extension>>,
+) -> (Harness<'static, RickUi>, plugins_registry::fixtures::Server) {
+    use ext::Extension;
+    use plugins_registry::fixtures::{Server, Signer};
+    use tests::registry;
+    let separate: Vec<(Box<dyn Extension>, u64)> = vec![
+        (Box::new(ext_git::GitExtension::new()), 4_812_800),
+        (Box::new(ext_svn::SvnExtension::new()), 1_126_400),
+        (Box::new(ext_ssh::SshExtension::new()), 6_348_800),
+        (Box::new(ext_vfs_s3::S3Extension::new()), 3_788_800),
+        (Box::new(ext_vfs_azure::AzureExtension::new()), 3_686_400),
+        (Box::new(ext_vfs_gcs::GcsExtension::new()), 3_891_200),
+        (
+            Box::new(ext_preview_office::OfficePreview::new()),
+            2_252_800,
+        ),
+        (Box::new(ext_preview_3d::Preview3d::new()), 9_420_800),
+    ];
+    let plugins: Vec<serde_json::Value> = separate
+        .iter()
+        .map(|(ext, size)| {
+            registry::plugin(ext.manifest(), &[registry::listed(registry::RICK, *size)])
+        })
+        .collect();
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(&signer, &registry::index(&plugins));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let config = fake.config_dir();
+    fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        config.join(app::SETTINGS_FILE),
+        registry::rick_toml(&server, &signer, true),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions,
+        config_dir: Some(config),
+        start: Some(local(folder)),
+    });
+    app.set_rick_version(registry::RICK);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    registry::background_check(harness.state_mut().app_mut());
+    settle(&mut harness);
+    (harness, server)
+}
+
+/// specs/plugin-distribution.md §8 (issue 252): the suggestion of a
+/// plugin that is not there, against a registry of the test's own, in
+/// Light and Dark. In the preview pane: the bar at the top of the pane
+/// where the hex view shows a 3D model, and **Install** in the action
+/// row of the *No previewer* card where the hex view is not loaded.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_plugin_suggestions() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().join("Projects").join("enclosure");
+    fs::create_dir_all(root.join("drawings")).unwrap_or_else(|e| panic!("{e}"));
+    let noise: Vec<u8> = (0..4096u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13).to_le_bytes()[0])
+        .collect();
+    for name in ["lid.stl", "base.stl", "bracket-left.stl"] {
+        fs::write(root.join(name), &noise).unwrap_or_else(|e| panic!("{e}"));
+    }
+    fs::write(root.join("README.md"), "# Enclosure\n\nPrinted in PETG.\n")
+        .unwrap_or_else(|e| panic!("{e}"));
+    fs::write(root.join("front.jpg"), media::photo_jpeg(640, 480))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let modes = [(Theme::Light, "light"), (Theme::Dark, "dark")];
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        // The pointer rests on nothing.
+        harness.event(egui::Event::PointerMoved(egui::pos2(300.0, 780.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let previewers = || -> Vec<Arc<dyn ext::Extension>> {
+        vec![
+            Arc::new(ext_preview_text::TextPreview::new()),
+            Arc::new(ext_preview_image::ImagePreview::new()),
+        ]
+    };
+
+    // Over the hex view: the bar at the top of the pane.
+    let mut extensions = previewers();
+    extensions.push(Arc::new(ext_preview_hex::HexPreview::new()));
+    let (mut harness, _server) = suggestions_window(&root, extensions);
+    harness.state_mut().set_inspector_width(640.0);
+    preview(&mut harness, "lid.stl");
+    settle(&mut harness);
+    assert!(harness.state().preview_rects().suggestion.is_some());
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("suggest-preview-bar-{mode}"));
+    }
+    std::mem::drop(harness);
+    // The same in a pane too narrow for one line: the buttons go under
+    // the text.
+    let mut extensions = previewers();
+    extensions.push(Arc::new(ext_preview_hex::HexPreview::new()));
+    let (mut harness, _server) = suggestions_window(&root, extensions);
+    harness.state_mut().set_inspector_width(300.0);
+    preview(&mut harness, "lid.stl");
+    settle(&mut harness);
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("suggest-preview-bar-narrow-{mode}"));
+    }
+    std::mem::drop(harness);
+
+    // Without the hex view: the card's button.
+    let (mut harness, _server) = suggestions_window(&root, previewers());
+    harness.state_mut().set_inspector_width(640.0);
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::ToggleInspector, pane);
+    settle(&mut harness);
+    let id = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .and_then(|(_, t)| t.listing.rows().find(|e| e.name == "lid.stl").map(|e| e.id))
+        .unwrap_or_else(|| panic!("no entry"));
+    harness.state_mut().app_mut().handle(
+        app::Command::Select {
+            pane,
+            change: SelectionChange::Set(vec![id]),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    for _ in 0..6 {
+        harness.step();
+    }
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("suggest-preview-card-{mode}"));
+    }
+}
+
 /// specs/plugin-distribution.md §7 (issue 251): the *Available* list of
 /// the Extensions dialogue against a registry of the test's own — the
 /// plugins a release publishes separately, under the headings of the
