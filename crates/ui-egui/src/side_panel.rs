@@ -30,10 +30,10 @@ use std::path::Path;
 
 use std::sync::Arc;
 
-use app::{App, Command, ConnectionOp};
+use app::{App, Command, ConnectionOp, Remedy, SuggestedConnection};
 use ext::{
-    ActionCtx, ActionGroup, Availability, ConnectionField, ConnectionFieldKind, Connector,
-    Invocation, Level,
+    ActionCtx, ActionGroup, Availability, ConnectionField, ConnectionFieldKind, ConnectionSection,
+    Connector, Invocation, Level,
 };
 use model::{PaneId, Place, Section, SidePanel, SidePanelChange, Volume, VolumeKind, WindowId};
 use types::{Entry, Location, ProviderId};
@@ -42,6 +42,7 @@ use vfs_rick::Virtual;
 use crate::dnd::{Dnd, Target, Zone};
 use crate::overview::{percent, read_only_bar, utilisation_bar, volume_icon};
 use crate::shell::Request;
+use crate::suggestion::Answer;
 use crate::theme::{self, BAR, ICON, Scheme, TEXT_BODY, TEXT_CAPS, TEXT_SECONDARY};
 use crate::{format, icons, menus};
 
@@ -499,10 +500,7 @@ pub fn show(
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.add_space(4.0);
             places(ui, app, pane, state, requests, dnd);
-            for section in Section::ALL {
-                if section == Section::Cloud && app.model().cloud_providers.is_empty() {
-                    continue;
-                }
+            for section in sections_shown(app) {
                 titled_section(ui, app, window, pane, panel, section, state, requests);
             }
             // Room for the operations drawer floating over the lists' end.
@@ -526,6 +524,18 @@ fn connectors_of(app: &App, section: Section) -> Vec<Arc<dyn Connector>> {
         })
         .cloned()
         .collect()
+}
+
+/// The kinds of connection the suggested plugins would add to `section`
+/// (specs/plugin-distribution.md §8, *Adding a connection*): a plugin of
+/// the registry that is not installed, or one that is on the disk and
+/// disabled. None under This Machine.
+fn suggested_kinds(app: &App, section: Section) -> Vec<SuggestedConnection> {
+    match section {
+        Section::Machine => Vec::new(),
+        Section::Network => app.suggested_connections(ConnectionSection::Network),
+        Section::Cloud => app.suggested_connections(ConnectionSection::Cloud),
+    }
 }
 
 /// Opens the *Add connection…* dialogue of `provider`; the shell calls
@@ -720,24 +730,77 @@ fn connection_field(ui: &mut egui::Ui, field: &ConnectionField, value: &mut Stri
 /// The menu of a section's header, on the menu card of the file list
 /// (SPEC.md *Context menu*): *Open in new tab* for its overview and,
 /// under a hairline, *Add … connection…* for each provider plugin of the
-/// section.
+/// section, followed by the kinds the suggested plugins would add.
 fn header_menu(
     title: &egui::Response,
     requests: &mut Vec<Request>,
     pane: PaneId,
     overview: &Location,
     connectors: &[Arc<dyn Connector>],
+    suggested: &[SuggestedConnection],
 ) {
     menus::card(title, |ui| {
         if menus::item(ui, None, &t!("open-in-new-tab")).clicked() {
             open(requests, pane, overview.clone(), true);
             ui.close();
         }
-        if !connectors.is_empty() {
+        if !connectors.is_empty() || !suggested.is_empty() {
             menus::divider(ui);
         }
-        add_connection_items(ui, requests, connectors);
+        add_items(ui, requests, connectors, suggested);
     });
+}
+
+/// What a section's *Add…* lists: the *Add connection…* entries of its
+/// provider plugins and, after them, the kinds of the suggested plugins.
+fn add_items(
+    ui: &mut egui::Ui,
+    requests: &mut Vec<Request>,
+    connectors: &[Arc<dyn Connector>],
+    suggested: &[SuggestedConnection],
+) {
+    add_connection_items(ui, requests, connectors);
+    if !connectors.is_empty() && !suggested.is_empty() {
+        menus::divider(ui);
+    }
+    suggested_items(ui, requests, suggested);
+}
+
+/// The kinds of connection of suggested plugins, as they follow the ones
+/// that are there (specs/plugin-distribution.md §8): the kind's title
+/// with `DOWNLOAD_SIMPLE` and the size of the plugin's package, and
+/// choosing one installs the plugin. A plugin that is on the disk and
+/// disabled has `PUZZLE_PIECE` and *Enable* in the size's place, and
+/// choosing it switches the plugin on.
+fn suggested_items(
+    ui: &mut egui::Ui,
+    requests: &mut Vec<Request>,
+    suggested: &[SuggestedConnection],
+) {
+    for kind in suggested {
+        let (glyph, right, answer) = match kind.plugin.remedy {
+            Remedy::Install {
+                installing: true, ..
+            } => {
+                let waiting = t!("extensions-installing");
+                menus::greyed_item_with(ui, Some(icons::INSTALL), &kind.title, &waiting, &waiting);
+                continue;
+            }
+            Remedy::Install { size, .. } => (
+                icons::INSTALL,
+                crate::format::size(Some(size)),
+                Answer::Install,
+            ),
+            Remedy::Enable => (icons::PLUGIN, t!("suggest-enable"), Answer::Enable),
+        };
+        let entry = menus::item_with(ui, Some(glyph), &kind.title, &right);
+        // What choosing it does, in the plugin's own words.
+        let entry = entry.on_hover_text(crate::suggestion::text(&kind.plugin));
+        if entry.clicked() {
+            requests.push(answer.request(&kind.plugin.id));
+            ui.close();
+        }
+    }
 }
 
 /// The *Add connection…* entries of a section's menu, one per provider
@@ -1451,6 +1514,7 @@ fn section_header(
         pane,
         overview,
         &connectors_of(app, section),
+        &suggested_kinds(app, section),
     );
     ui.add_space(SECTION_AIR_BELOW);
 }
@@ -1768,6 +1832,9 @@ fn network_volume_row(
 /// accounts are created. With one provider plugin of the section it opens
 /// that plugin's *Add connection…* dialogue, with several it offers one
 /// entry per plugin, and without any it says what would create them.
+/// Where a plugin that is not there would add a kind of connection, the
+/// row lists the kinds: those of the loaded plugins, then the suggested
+/// ones, each with the size of its plugin.
 fn add_row(
     ui: &mut egui::Ui,
     app: &App,
@@ -1777,7 +1844,8 @@ fn add_row(
 ) {
     let id = egui::Id::new(("side-add", section.name()));
     let connectors = connectors_of(app, section);
-    let label = if connectors.len() == 1 {
+    let suggested = suggested_kinds(app, section);
+    let label = if connectors.len() == 1 && suggested.is_empty() {
         t!("panel-add-connection")
     } else {
         t!("panel-add")
@@ -1790,14 +1858,18 @@ fn add_row(
     let response = row_widget(ui, &content, egui::Sense::click());
     state.row(id, None);
     focus_ring(ui, state, id, inset(response.rect));
-    if connectors.len() > 1 {
+    // One loaded kind and nothing suggested opens its dialogue at once;
+    // anything else is a list to choose from. A suggested kind is never
+    // chosen by the click on *Add…* itself: choosing it installs.
+    if connectors.len() > 1 || !suggested.is_empty() {
         menus::card_under(&response, |ui| {
-            add_connection_items(ui, requests, &connectors);
+            add_items(ui, requests, &connectors, &suggested);
         });
     }
     if response.clicked() {
         state.take_focus(id);
         match connectors.as_slice() {
+            _ if !suggested.is_empty() => {}
             [one] => requests.push(Request::AddConnection(one.provider())),
             [] => {
                 let text = match section {
@@ -1816,12 +1888,19 @@ fn add_row(
     }
 }
 
-/// The sections drawn, for tests: those shown in display order.
+/// The sections drawn, in display order. Cloud is absent while no cloud
+/// provider plugin is loaded and none is suggested: it shows, with
+/// *Add…*, while the registry offers one (SPEC.md *Cloud*,
+/// specs/plugin-distribution.md §8).
 #[must_use]
 pub fn sections_shown(app: &App) -> Vec<Section> {
     Section::ALL
         .into_iter()
-        .filter(|s| *s != Section::Cloud || !app.model().cloud_providers.is_empty())
+        .filter(|section| {
+            *section != Section::Cloud
+                || !app.model().cloud_providers.is_empty()
+                || !suggested_kinds(app, Section::Cloud).is_empty()
+        })
         .collect()
 }
 

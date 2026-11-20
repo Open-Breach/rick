@@ -69,6 +69,12 @@ Recent and the Trash view among the places, the Trash row's pill with the
 trash's size tinted by its disk share; the This Machine, Network and Cloud
 sections under small-capitals headers with a folding caret, This Machine
 as drive cards with a usage bar, Eject and Add… rows, nothing indented;
+*Add…* and the menu of a section's header listing, after the kinds of
+connection the loaded plugins add, the kinds of the suggested plugins —
+the title with `DOWNLOAD_SIMPLE` and the size of the plugin's package,
+which choosing it installs, or *Enable* for a plugin that is on the disk
+and disabled — and the Cloud section shown while a cloud plugin is loaded
+or suggested;
 the section overviews drawn as drive tables in the pane) with the
 operations drawer floating over its foot — along the window's foot while
 the panel is hidden — (a `bg/card` card with its summary *2 running ·
