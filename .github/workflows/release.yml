@@ -918,11 +918,12 @@ jobs:
             --jq '"\(.name): draft \(.isDraft), pre-release \(.isPrerelease), \(.assets | length) files"'
 
   # The release, checked the way its users are told to check it
-  # (specs/system-integration.md §9). One Linux package and one archive of
-  # this workflow's own are downloaded from the release and verified with
-  # the two documented lines: the package against Trebuchet's workflow,
-  # which built it, the archive against this repository's. A copy of the
-  # package with one byte changed must not verify.
+  # (specs/system-integration.md §9). One Linux package and the two
+  # archives of this workflow's own, macOS and Windows, are downloaded from
+  # the release and verified with the two documented lines: the package
+  # against Trebuchet's workflow, which built it, the archives against this
+  # repository's. A copy of the package with one byte changed must not
+  # verify.
   verify:
     needs: release
     runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
@@ -942,16 +943,20 @@ jobs:
           version="${TAG#v}"
           mkdir files
           cd files
-          gh release download "$TAG" --pattern 'rick_*_amd64.deb' --pattern "rick-$version-macos-arm64.zip"
+          gh release download "$TAG" --pattern 'rick_*_amd64.deb' \
+            --pattern "rick-$version-macos-arm64.zip" --pattern "rick-$version-windows-x64.zip"
           deb="$(find . -name 'rick_*_amd64.deb' | sort | sed -n 1p)"
-          archive="rick-$version-macos-arm64.zip"
           test -n "$deb" || { echo "no deb on the release"; exit 1; }
           echo "::group::$deb, built by Trebuchet's workflow"
           gh attestation verify "$deb" --owner "$GITHUB_REPOSITORY_OWNER" --signer-repo Open-Breach/trebuchet
+          echo "verified: $deb"
           echo "::endgroup::"
-          echo "::group::$archive, built by this workflow"
-          gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY"
-          echo "::endgroup::"
+          for archive in "rick-$version-macos-arm64.zip" "rick-$version-windows-x64.zip"; do
+            echo "::group::$archive, built by this workflow"
+            gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY"
+            echo "verified: $archive"
+            echo "::endgroup::"
+          done
           # One byte of the package changed, in the middle of the file.
           python3 -c 'import sys; d = bytearray(open(sys.argv[1], "rb").read()); d[len(d) // 2] ^= 1; open(sys.argv[2], "wb").write(d)' "$deb" changed.deb
           echo "::group::the same package with one byte changed"
@@ -961,7 +966,7 @@ jobs:
             exit 1
           fi
           echo "::endgroup::"
-          echo "both files verify, and the changed one does not"
+          echo "the package and both archives verify, and the changed package does not"
 
   # The apt and dnf repositories on get.openbreach.dev: Trebuchet's publisher
   # is told of the release and takes its deb and rpm files from the release

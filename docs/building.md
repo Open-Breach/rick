@@ -35,7 +35,7 @@ gh attestation verify rick_0.6.0_debian-13_amd64.deb --owner Open-Breach --signe
 gh attestation verify rick-0.6.0-macos-arm64.zip --repo Open-Breach/rick                                      # a macOS or Windows file
 ```
 
-The release workflow runs both lines on the release it has written, and checks that a file changed by one byte does not verify. An attestation proves where a file comes from, not that it is safe.
+The release workflow runs both lines on the release it has written, on a Linux package and on the macOS and the Windows archive, and checks that a file changed by one byte does not verify. An attestation proves where a file comes from, not that it is safe.
 
 `SHA256SUMS.txt` on the release page has the checksums of the archives, the packages and the lists below. The Linux archives need glibc 2.36 or later (Debian 12, Ubuntu 24.04): they are built on the oldest distribution release the packages are made for. Each deb and rpm is built on its own release. Intel Macs are not covered yet.
 
