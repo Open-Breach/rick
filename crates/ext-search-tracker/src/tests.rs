@@ -50,12 +50,30 @@ fn present() -> (Arc<Fake>, TrackerIndex) {
     (fake, index)
 }
 
+/// Waits for the answer of the loop's first probe, which starts with the
+/// index. Until it is in, a probe the test asks for runs beside it, and
+/// the two record their answers as they come back: one from before the
+/// test changed the service can then land after the test's own. Rick has
+/// the loop alone and no second prober. Once the first answer is in, the
+/// loop asks again [`PROBE_EVERY`] later, long after the test.
+fn after_the_first_probe(index: &TrackerIndex) {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !index.state().probed() {
+        assert!(
+            std::time::Instant::now() < until,
+            "the loop's first probe did not answer"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 #[test]
 fn the_probe_decides_availability_and_follows_the_service() {
     let fake = Fake::new();
     // The indexer is installed and not running.
     backend::tests::make_absent(&fake);
     let index = TrackerIndex::new(Arc::clone(&fake) as Arc<dyn Service>);
+    after_the_first_probe(&index);
     assert!(!ext::runtime::block_on(index.probe()));
     assert!(matches!(index.availability(), Availability::Disabled(_)));
     assert!(index.state().probed());
