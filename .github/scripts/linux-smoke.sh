@@ -14,12 +14,16 @@
 #     one in Motion JPEG and one in H.264, whose decoder the package has
 #     to have brought;
 #   - where this build's plugin packages are at hand, each installs into
-#     the per-user folder and loads from there.
+#     the per-user folder and loads from there;
+#   - once the `rick-plugin-<id>` packages are installed, every separate
+#     plugin loads from beside the binary.
 #
-# It runs once after the package is installed and, in the job whose build
-# is also the archive, once more for the unpacked archive:
+# It runs once after the package is installed, in the job whose build is
+# also the archive once more for the unpacked archive, and a last time
+# after Trebuchet's test has installed the deb or rpm of every separate
+# plugin on top of the `rick` package:
 #
-#   TREBUCHET_SMOKE        package or tarball
+#   TREBUCHET_SMOKE        package, tarball or plugins
 #   TREBUCHET_SMOKE_DIR    the unpacked archive, for tarball
 #   TREBUCHET_DIST         the build job's files for the release: the
 #                          package, and the archive and the plugin
@@ -62,7 +66,7 @@ esac
 # Where the binary and everything beside it is, the command a user starts,
 # the XDG data folder, and where the licence texts are.
 case "$what" in
-  package)
+  package | plugins)
     root=/usr/lib/rick
     rick=rick
     share=/usr/share
@@ -78,9 +82,42 @@ case "$what" in
     share="$root/share"
     texts=("$root/LICENSE" "$root/THIRD-PARTY-LICENSES.md" "$root/README.md" "$root/CHANGELOG.md" "$root/7-Zip-License.txt")
     ;;
-  *) fail "TREBUCHET_SMOKE is '$what', neither package nor tarball" ;;
+  *) fail "TREBUCHET_SMOKE is '$what', neither package, tarball nor plugins" ;;
 esac
 echo "Rick's smoke test of the $what on $target, $platform, in $root"
+
+# The plugin packages, as a user of the deb or the rpm gets the separate
+# plugins (specs/plugin-distribution.md §2, decision 5): Trebuchet's test
+# has installed `rick-plugin-<id>` for each of them, with the package
+# manager, on top of the `rick` package. Every plugin of the platform is
+# now beside the binary, the default set and the separate ones, and loads
+# from there, with nothing in the per-user folder. That is all this run
+# checks: the package itself was tested in the run before.
+if [ "$what" = plugins ]; then
+  user_plugins="${XDG_CONFIG_HOME:-$HOME/.config}/rick/plugins"
+  if [ -d "$user_plugins" ] && [ -n "$(ls -A "$user_plugins")" ]; then
+    fail "$user_plugins is not empty in this container"
+  fi
+  [ "$(cat "$root/package" 2> /dev/null)" = "$format" ] || fail "$root/package does not say $format"
+  "$repo/.github/scripts/check-plugins.sh" "$root" --sevenzip
+  # Each of them is its package's, and none is the `rick` package's.
+  while IFS= read -r folder; do
+    id="$(basename "$folder")"
+    case "$format" in
+      deb) owner="$(dpkg-query --search "$folder/plugin.toml" | cut -d : -f 1)" ;;
+      rpm) owner="$(rpm --query --file --queryformat '%{NAME}\n' "$folder/plugin.toml")" ;;
+    esac
+    if [ "$owner" = "rick-plugin-$id" ]; then
+      echo "$id: installed by $owner"
+    elif [ "$owner" != rick ]; then
+      fail "$folder belongs to '$owner', neither rick nor rick-plugin-$id"
+    fi
+  done < <(find "$root/plugins" -mindepth 1 -maxdepth 1 -type d | sort)
+  separate="$(find "$dist" -maxdepth 1 \( -name 'rick-plugin-*.deb' -o -name 'rick-plugin-*.rpm' \) | wc -l)"
+  [ "$separate" -eq 9 ] || fail "$separate plugin packages in $dist, and Linux has nine separate plugins"
+  echo "Rick's smoke test passed for the plugin packages on $target"
+  exit 0
+fi
 
 # The licence texts. For a package the list of its files is asked as well
 # as the disk, because an image may be set up to install less than the
