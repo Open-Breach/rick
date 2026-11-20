@@ -135,7 +135,14 @@ by an entry of a folder's listing that is one of a plugin's markers, and
 `App::preview_suggestion` is the first of them for the file a pane's
 preview shows, while no loaded previewer claims the file but the one of
 last resort — the hex view shows it and the pane has the bar — or none
-at all, and the *No previewer* card has the button. A plugin of the
+at all, and the *No previewer* card has the button.
+`App::folder_suggestion` is the second for the folder a pane shows: a
+folder of the local file system, listed as itself, whose loaded listing
+holds an entry that is a plugin's marker, hidden or not. The names of a
+listing are held against the markers as its batches arrive, as a refresh
+swaps it in and as the watch reports changes, and again when a plugin
+list or the plugin host's rows arrive after the folder was listed; a
+pane that left the folder is suggested nothing. A plugin of the
 list that fits this Rick and is in neither plugins folder is suggested
 with *Install*, one that is on the disk and disabled from its own
 manifest with *Enable*, and the one on the disk first. Nothing is

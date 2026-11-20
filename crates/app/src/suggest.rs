@@ -23,6 +23,12 @@
 //!   follows while no loaded previewer claims it but the one of last
 //!   resort, or none at all ([`App::preview_suggestion`]): the hex view
 //!   then has the bar above it, and the *No previewer* card the button.
+//!   In the file list, for the folder of the local file system a pane
+//!   shows, when the listing the pane has loaded holds an entry that is
+//!   a plugin's marker ([`App::folder_suggestion`]). The application
+//!   notes such entries as the listing arrives and changes — a name held
+//!   against a handful of markers, so a folder of 200,000 entries costs
+//!   nothing that can be measured — and looks at no file for it.
 //! - **When not.** With *Suggest plugins* off (`[plugins] suggest`), for a
 //!   plugin *Don't suggest again* silenced (`[plugins] no_suggest`,
 //!   [`Command::SuggestNever`](crate::Command::SuggestNever)), and for one
@@ -31,12 +37,14 @@
 //!   [`Command::SuggestAgain`](crate::Command::SuggestAgain) takes both
 //!   back.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use ext::ConnectionSection;
+use ext::{ConnectionSection, Depth, FsChange};
+use model::{PaneId, TabId};
 use plugins_registry::Offer;
+use types::{Entry, Location};
 
-use crate::{App, Plugin, PluginStatus};
+use crate::{App, ListKey, Plugin, PluginStatus};
 
 /// A kind of connection a plugin adds to *Add…* in the side panel, as its
 /// manifest lists it.
@@ -87,12 +95,28 @@ pub struct SuggestedConnection {
     pub plugin: Suggestion,
 }
 
-/// What the user said of the suggestions in this run of Rick.
+/// What the application keeps for the suggestions in this run of Rick.
 #[derive(Debug, Default)]
 pub(crate) struct Suggestions {
     /// The plugins *Not now* silenced: not suggested until Rick is started
     /// again.
     not_now: BTreeSet<String>,
+    /// What the listing a pane has loaded holds of the plugins' markers,
+    /// for the panes that show a folder of the local file system.
+    folders: BTreeMap<PaneId, Folder>,
+}
+
+/// The folder a pane shows and the markers in its loaded listing.
+#[derive(Debug)]
+struct Folder {
+    /// The tab the listing is for.
+    tab: TabId,
+    /// The folder.
+    location: Location,
+    /// The names of the listing's entries that are a marker of some
+    /// plugin, of the plugin list or of a plugins folder, whether that
+    /// plugin may be suggested now or not.
+    found: BTreeSet<String>,
 }
 
 /// The suffixes of `name` after each of its dots, lower case: `tar.gz` and
@@ -286,6 +310,156 @@ impl App {
     pub fn preview_suggestion(&self, pane: model::PaneId) -> Option<Suggestion> {
         let job = self.preview.get(&pane).filter(|job| job.unclaimed)?;
         self.suggestion_for_file(&job.full.name)
+    }
+
+    /// The plugin suggested for the folder `pane` shows
+    /// (specs/plugin-distribution.md §8, *The file list*): the folder is
+    /// one of the local file system, and the listing the pane has loaded
+    /// — hidden entries included — holds an entry named in the plugin's
+    /// `markers`. `None` for a pane that shows search results or a
+    /// flattened listing, and as soon as the pane has left the folder.
+    #[must_use]
+    pub fn folder_suggestion(&self, pane: PaneId) -> Option<Suggestion> {
+        let folder = self.suggestions.folders.get(&pane)?;
+        if folder.found.is_empty() {
+            return None;
+        }
+        // Still there: a pane that moved on has no bar, whatever the
+        // listing it left behind held.
+        let (tab, shown) = self.model.active_tab(pane)?;
+        if tab != folder.tab || shown.location != folder.location {
+            return None;
+        }
+        self.suggestion_for_folder(folder.found.iter().map(String::as_str))
+    }
+
+    /// The names that make a folder some plugin's business: the `markers`
+    /// of the plugin list and of the manifests in the plugins folders,
+    /// whether the plugin may be suggested now or not.
+    fn marker_names(&self) -> Vec<&str> {
+        let listed = self
+            .plugin_registry
+            .view
+            .index
+            .iter()
+            .flat_map(|index| index.plugins())
+            .flat_map(|plugin| &plugin.meta.triggers.markers);
+        let on_disk = self.plugins.iter().flat_map(|row| &row.markers);
+        listed.chain(on_disk).map(String::as_str).collect()
+    }
+
+    /// The names of `entries` that are a plugin's marker. A name is held
+    /// against a handful of markers: nothing of a large listing is kept.
+    fn markers_in<'a>(&self, entries: impl IntoIterator<Item = &'a Entry>) -> Vec<String> {
+        let markers = self.marker_names();
+        if markers.is_empty() {
+            return Vec::new();
+        }
+        entries
+            .into_iter()
+            .filter(|entry| markers.contains(&entry.name.as_str()))
+            .map(|entry| entry.name.clone())
+            .collect()
+    }
+
+    /// A pane's listing starts for `key`. A folder of the local file
+    /// system, listed as itself, is one whose markers are noted; search
+    /// results, a flattened listing and every other provider's are not.
+    /// With `reconcile` the listing that is shown stays until the new one
+    /// is complete, and so do the markers noted for it, when it is the
+    /// same folder in the same tab.
+    pub(crate) fn suggest_listing(&mut self, pane: PaneId, key: &ListKey, reconcile: bool) {
+        let noted = key.search.is_none()
+            && key.opts.depth == Depth::One
+            && key.location.provider == vfs_local::PROVIDER_ID;
+        if !noted {
+            self.suggestions.folders.remove(&pane);
+            return;
+        }
+        let same = self
+            .suggestions
+            .folders
+            .get(&pane)
+            .is_some_and(|folder| folder.tab == key.tab && folder.location == key.location);
+        if !(same && reconcile) {
+            self.suggestions.folders.insert(
+                pane,
+                Folder {
+                    tab: key.tab,
+                    location: key.location.clone(),
+                    found: BTreeSet::new(),
+                },
+            );
+        }
+    }
+
+    /// A batch of a pane's listing arrived.
+    pub(crate) fn suggest_listed(&mut self, pane: PaneId, batch: &[Entry]) {
+        if !self.suggestions.folders.contains_key(&pane) {
+            return;
+        }
+        let found = self.markers_in(batch);
+        if let Some(folder) = self.suggestions.folders.get_mut(&pane) {
+            folder.found.extend(found);
+        }
+    }
+
+    /// A pane's listing was replaced by `entries` in one step, as a
+    /// refresh ends.
+    pub(crate) fn suggest_relisted(&mut self, pane: PaneId, entries: &[Entry]) {
+        if !self.suggestions.folders.contains_key(&pane) {
+            return;
+        }
+        let found = self.markers_in(entries);
+        if let Some(folder) = self.suggestions.folders.get_mut(&pane) {
+            folder.found = found.into_iter().collect();
+        }
+    }
+
+    /// The folder a pane shows is about to change by `change`, which the
+    /// listing has not taken yet: an entry that goes is still in it.
+    pub(crate) fn suggest_change(&mut self, pane: PaneId, change: &FsChange) {
+        if !self.suggestions.folders.contains_key(&pane) {
+            return;
+        }
+        let (gone, came) = match change {
+            FsChange::Created(entry) | FsChange::Modified(entry) => (None, Some(entry)),
+            FsChange::Removed(id) => (Some(*id), None),
+            FsChange::Renamed { from, to } => (Some(*from), Some(to)),
+            // The pane lists again, and the new listing is looked at.
+            FsChange::Rescan => (None, None),
+        };
+        let gone = gone.and_then(|id| {
+            let (_, tab) = self.model.active_tab(pane)?;
+            tab.listing.get(id).map(|entry| entry.name.clone())
+        });
+        let came = self.markers_in(came);
+        if let Some(folder) = self.suggestions.folders.get_mut(&pane) {
+            if let Some(gone) = gone {
+                folder.found.remove(&gone);
+            }
+            folder.found.extend(came);
+        }
+    }
+
+    /// The markers changed — a plugin list arrived, or the plugin host's
+    /// rows did: the listings the panes have loaded are looked at again.
+    pub(crate) fn suggest_markers_changed(&mut self) {
+        let panes: Vec<(PaneId, TabId)> = self
+            .suggestions
+            .folders
+            .iter()
+            .map(|(pane, folder)| (*pane, folder.tab))
+            .collect();
+        for (pane, tab) in panes {
+            let found = match self.model.active_tab(pane) {
+                Some((shown, state)) if shown == tab => self.markers_in(state.listing.entries()),
+                _ => Vec::new(),
+            };
+            if let Some(folder) = self.suggestions.folders.get_mut(&pane) {
+                folder.found = found.into_iter().collect();
+            }
+        }
     }
 
     /// The plugin suggested for a folder whose listing holds entries of

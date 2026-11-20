@@ -992,5 +992,8 @@ impl App {
         view.index = Some(Arc::new(cached.index));
         view.fetched = Some(cached.fetched);
         view.problem = None;
+        // Another list, other markers: the folders the panes show are
+        // looked at again.
+        self.suggest_markers_changed();
     }
 }

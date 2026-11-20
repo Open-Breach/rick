@@ -1283,6 +1283,7 @@ impl App {
     /// Records the plugins the host found, for the Extensions dialogue.
     pub fn set_plugins(&mut self, plugins: Vec<Plugin>) {
         self.plugins = plugins;
+        self.suggest_markers_changed();
     }
 
     /// Unpacks a plugin package into the per-user plugins folder as a job
@@ -3923,6 +3924,7 @@ impl App {
         }
         // Search results never reconcile: the walk streams in afresh.
         let reconcile = reconcile && key.search.is_none();
+        self.suggest_listing(pane, &key, reconcile);
         if !reconcile {
             self.model.clear_listing(pane);
         }
@@ -4553,6 +4555,7 @@ impl App {
                     return;
                 }
                 self.model.listing_batch(pane, batch.clone());
+                self.suggest_listed(pane, &batch);
                 self.decorate(pane, &batch, events);
                 events.push(Event::Listed {
                     pane,
@@ -5430,6 +5433,7 @@ impl App {
             Some(entries) if result.is_ok() => {
                 let before = self.selected_ids(pane);
                 self.model.replace_listing(pane, entries.clone());
+                self.suggest_relisted(pane, &entries);
                 let after = self.selected_ids(pane);
                 if before != after {
                     events.push(Event::SelectionChanged { pane, ids: after });
@@ -5509,6 +5513,7 @@ impl App {
             return;
         }
         let before = self.selected_ids(pane);
+        self.suggest_change(pane, &change);
         if self.model.apply_change(pane, change.clone()) {
             let after = self.selected_ids(pane);
             if before != after {
