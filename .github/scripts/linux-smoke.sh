@@ -77,20 +77,51 @@ case "$what" in
 esac
 echo "Rick's smoke test of the $what on $target, $platform, in $root"
 
-# The files.
-for file in "${texts[@]}" "$root/third-party.json" "$root/libpdfium.so" \
-  "$root/licenses/pdfium/LICENSE" "$root/licenses/rust/COPYRIGHT-library.html"; do
-  [ -s "$file" ] || fail "no $file"
-done
-[ "$(find "$root/licenses/pdfium" -type f | wc -l)" -gt 5 ] \
-  || fail "$root/licenses/pdfium holds no texts of the libraries built into pdfium"
+# The licence texts. For a package the list of its files is asked as well
+# as the disk, because an image may be set up to install less than the
+# package holds: Ubuntu's container images tell dpkg to leave
+# /usr/share/doc out, all of it but the copyright files. A text that is in
+# the package and left out for that reason is said so and not held against
+# the package; a desktop installs it.
+listed=""
+docs_left_out=""
+if [ "$what" = package ]; then
+  case "$format" in
+    deb)
+      listed="$(dpkg-query --listfiles rick)"
+      if grep -qs '^path-exclude=/usr/share/doc/' /etc/dpkg/dpkg.cfg.d/*; then docs_left_out=yes; fi
+      ;;
+    rpm) listed="$(rpm --query --list rick)" ;;
+  esac
+fi
 for file in "${texts[@]}"; do
+  if [ "$what" = package ]; then
+    grep -qxF "$file" <<< "$listed" || fail "the package does not hold $file"
+  fi
+  if [ ! -s "$file" ]; then
+    case "$docs_left_out:$file" in
+      yes:*/copyright) fail "no $file" ;;
+      yes:/usr/share/doc/*)
+        echo "$file is in the package and not on disk: this image's dpkg leaves /usr/share/doc out"
+        continue
+        ;;
+      *) fail "no $file" ;;
+    esac
+  fi
   case "$file" in
     *THIRD-PARTY-LICENSES.md)
       grep -q '^## Bundled components$' "$file" || fail "$file does not name the bundled components"
       ;;
   esac
 done
+
+# What sits beside the binary.
+for file in "$root/third-party.json" "$root/libpdfium.so" \
+  "$root/licenses/pdfium/LICENSE" "$root/licenses/rust/COPYRIGHT-library.html"; do
+  [ -s "$file" ] || fail "no $file"
+done
+[ "$(find "$root/licenses/pdfium" -type f | wc -l)" -gt 5 ] \
+  || fail "$root/licenses/pdfium holds no texts of the libraries built into pdfium"
 find "$root" -maxdepth 1 -name 'libstd-*.so' | grep -q . || fail "no libstd beside the binary"
 [ -f "$root/libext.so" ] || fail "no ext library beside the binary"
 case "$what" in

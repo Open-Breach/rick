@@ -43,7 +43,7 @@ In that fresh container the workflow also runs `.github/scripts/linux-smoke.sh`,
 - the media previewer plays a video through the system's GStreamer;
 - where the build is also the archive, each of its plugin packages is unpacked into the per-user folder and loads from there.
 
-The container has the package's dependencies and nothing of the build, so a library missing from the dependency list fails the release there. The test programs it runs, `pdfium_check` and `preview_check`, and the video come from the same build, as one tar file among the job's files; the release does not publish it. Two things a container cannot show: a window, with the libraries the user interface loads for X11, Wayland, Vulkan and EGL when it opens one, and sound.
+The container has the package's dependencies and nothing of the build, so a library missing from the dependency list fails the release there. The test programs it runs, `pdfium_check` and `preview_check`, and the video come from the same build, as one tar file among the job's files; the release does not publish it. Two things a container cannot show: a window, with the libraries the user interface loads for X11, Wayland, Vulkan and EGL when it opens one, and sound. And one thing Ubuntu's container images leave out: they install nothing under `/usr/share/doc` but the `copyright` files, so for `THIRD-PARTY-LICENSES.md` the test there asks the package's list of files and not the disk.
 
 What a package installs:
 
