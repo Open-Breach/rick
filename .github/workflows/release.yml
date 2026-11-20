@@ -44,7 +44,11 @@ name: release
 # pre-release. Run by hand from a branch with a tag name, it is a dry run:
 # the same build, smoke test and verification, then a draft release under
 # that name on the branch's commit (the tag itself is only created if the
-# draft is published). No signing, notarisation or installers in 0.1.
+# draft is published). Leave the branch alone while a dry run is going:
+# GitHub refuses the draft (HTTP 403, in the Linux job that attaches)
+# where the run's commit is no longer the head of a branch and its
+# workflow files are on none. No signing, notarisation or installers in
+# 0.1.
 #
 # Every file of a release has a GitHub build attestation, made by the run
 # that built it (specs/system-integration.md §9): Trebuchet's workflow
