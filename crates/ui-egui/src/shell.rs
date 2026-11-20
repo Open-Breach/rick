@@ -90,6 +90,10 @@ pub struct TabUi {
     pub list_names: Option<crate::views::NameWidths>,
     /// The time slider's drag, run and rectangles.
     pub timeline: crate::timeline_bar::BarState,
+    /// The suggestion bar between the toolbar and the list in the last
+    /// frame, for tests: `None` while no plugin is suggested for the
+    /// folder.
+    pub suggestion: Option<egui::Rect>,
     /// The list's vertical scroll offset in the last frame.
     pub scroll_offset: f32,
     /// Scroll to this offset on the next frame.
@@ -1670,6 +1674,13 @@ impl RickUi {
     pub fn timeline_bar(&self, tab: TabId) -> Option<(egui::Rect, Option<egui::Rect>)> {
         let state = &self.tabs.get(&tab)?.timeline;
         state.rect.map(|rect| (rect, state.axis))
+    }
+
+    /// The suggestion bar of a tab in the last frame, for tests: `None`
+    /// while no plugin is suggested for the folder the tab shows.
+    #[must_use]
+    pub fn suggestion_bar(&self, tab: TabId) -> Option<egui::Rect> {
+        self.tabs.get(&tab).and_then(|t| t.suggestion)
     }
 
     /// The footer row of a tab in the last frame, for tests.

@@ -58,7 +58,9 @@ suggestion bar of `suggestion.rs` under the toolbar where the hex view
 shows a file a plugin that is not there claims — one line on `bg/subtle`
 with the plugin's name and description, **Install** or **Enable**, **Not
 now** and **Don't suggest again**, taking no focus and no key, its buttons
-going under the text in a pane too narrow for one line; the Portal
+going under the text in a pane too narrow for one line, and the same bar
+between an explorer pane's toolbar and its list while the folder holds
+the marker of a plugin that is not there, one to a pane; the Portal
 burst while a preview loads and a glyph with *No file selected* when
 there is none), the side panel (rows
 `sidebar/item-height` tall inset from the panel's edges; the editable
