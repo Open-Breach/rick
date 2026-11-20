@@ -42,6 +42,14 @@ whose numbers are quoted below where a target was set from them. The
 artifacts `bench-Linux`, `bench-macOS` and `bench-Windows` hold the five
 raw logs, the hardware line and the summary of each runner.
 
+`session-start` and `settings-reload` are from bench run
+[44646909483](https://github.com/Open-Breach/rick/actions/runs/44646909483),
+2026-11-20, five runs per benchmark (issue 277). It ran on the runners
+the repository's `RUNNER_*` variables name today, which are not the ones
+under *Runners*: Linux on an AMD EPYC 9R45, 8 vCPU, 31 GB; macOS on an
+Apple M4 (Virtual), 9 vCPU, 17 GB; Windows on an AMD EPYC 9R45, 16 vCPU,
+63 GB. Every other table still holds the run of 2026-11-08.
+
 **What changed on macOS since 0.1.** 0.1 shipped four macOS targets set to
 what the runner did rather than the spec: the listing's first batch (400 ms)
 and complete listing (3 s), the PDF's first frame (1.2 s) and the tree view's
@@ -366,13 +374,16 @@ that the big session starts within 300 ms of a one-tab one; a loaded
 runner took that margin away from it. That bound is given up for the
 targets here, which are far inside it; that both sessions start with
 their windows and tabs is still an ordinary test,
-`a_big_session_and_a_small_one_start_with_their_windows_and_tabs`.
+`a_big_session_and_a_small_one_start_with_their_windows_and_tabs`. The
+numbers are the run of issue 277; the targets are the ones the 0.2 run
+set (0.6, 5.6 and 1.5 ms then) and hold on these runners too, the worst
+macOS run 1.3 ms under its 12 ms.
 
 | OS | Target | Median | Worst |
 | --- | --- | --- | --- |
-| Linux | 5 ms | 0.6 ms | 0.7 ms |
-| macOS | 12 ms | 5.6 ms | 6.9 ms |
-| Windows | 5 ms | 1.5 ms | 1.6 ms |
+| Linux | 5 ms | 0.4 ms | 0.4 ms |
+| macOS | 12 ms | 4.9 ms | 10.7 ms |
+| Windows | 5 ms | 1.0 ms | 1.1 ms |
 
 ### `office-convert` — a three-page DOCX converted by LibreOffice and its first page rendered
 
@@ -473,11 +484,14 @@ model: the platform's watcher reporting the write (inotify, FSEvents,
 `ReadDirectoryChangesW`), then the file loaded again. Headless. Test:
 `the_reload_of_settings_edited_on_disk` in `app.rs`; that an edit arrives
 at all is the ordinary test `settings_edited_on_disk_reach_the_model`,
-which waits ten seconds for it. The macOS and Windows targets are
-provisional, the Linux 500 ms, until a measured run sets them.
+which waits ten seconds for it. macOS: 12.3 ms × 1.5 = 19 ms, and
+Windows: 0.3 ms × 1.5 = 0.5 ms, both under the Linux 500 ms, which is
+their target. On an idle runner the three watchers report within
+milliseconds; the 500 ms is what a loaded one was seen to take from them
+(issue 263: 195 to 673 ms on a macOS runner under load).
 
 | OS | Target | Median | Worst |
 | --- | --- | --- | --- |
-| Linux | 500 ms | — | — |
-| macOS | 500 ms | — | — |
-| Windows | 500 ms | — | — |
+| Linux | 500 ms | 0.3 ms | 0.4 ms |
+| macOS | 500 ms | 12.3 ms | 12.7 ms |
+| Windows | 500 ms | 0.3 ms | 0.3 ms |
