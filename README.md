@@ -3,9 +3,9 @@
 Rick is a fast, lean file manager for professionals. It runs on Linux, macOS and Windows from a single codebase and behaves the same on all three. A small core does the basics; everything else comes from an extensible plugin ecosystem.
 
 <!-- generated:status -->
-v0.5.0 · Rick is early and not fully tested yet, so expect bugs. Tab navigation and some performance work are still unfinished. Please help us find what's broken and tell us what you see.
+v0.6.0 · Rick is early and not fully tested yet, so expect bugs. Tab navigation and some performance work are still unfinished. Please help us find what's broken and tell us what you see.
 
-[Download v0.5.0](#install) for Linux, macOS or Windows, try it, and tell us [what breaks](https://github.com/Open-Breach/rick/issues). [Opinions](https://github.com/Open-Breach/rick/issues) welcome too, good or bad, as long as they're respectful.
+[Download v0.6.0](#install) for Linux, macOS or Windows, try it, and tell us [what breaks](https://github.com/Open-Breach/rick/issues). [Opinions](https://github.com/Open-Breach/rick/issues) welcome too, good or bad, as long as they're respectful.
 <!-- /generated:status -->
 
 ## Why Rick exists
@@ -71,27 +71,34 @@ Coming:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-dark.png">
-  <img alt="Rick with two panes side by side and the preview pane showing a 3D model of a sheep" src="docs/screenshots/readme-light.png">
+  <img alt="Rick with two panes side by side and the preview pane showing a 3D model of a pig" src="docs/screenshots/readme-light.png">
 </picture>
 
 ## Install
 
 <!-- generated:install -->
-**Linux** · [x64](https://github.com/Open-Breach/rick/releases/download/v0.5.0/rick-0.5.0-linux-x64.tar.gz) · [arm64](https://github.com/Open-Breach/rick/releases/download/v0.5.0/rick-0.5.0-linux-arm64.tar.gz)
+**Linux** · [x64](https://github.com/Open-Breach/rick/releases/download/v0.6.0/rick-0.6.0-linux-x64.tar.gz) · [arm64](https://github.com/Open-Breach/rick/releases/download/v0.6.0/rick-0.6.0-linux-arm64.tar.gz)
 
 ```bash
-tar xzf rick-0.5.0-linux-x64.tar.gz && ./rick-0.5.0-linux-x64/rick
+tar xzf rick-0.6.0-linux-x64.tar.gz && ./rick-0.6.0-linux-x64/rick
 ```
 
 Needs glibc 2.36 or later (Debian 12, Ubuntu 24.04). The first start offers to set Rick up in your desktop: the launcher entry, the default file manager, the `rick` command.
 
-**macOS** · [arm64](https://github.com/Open-Breach/rick/releases/download/v0.5.0/rick-0.5.0-macos-arm64.zip)
+**macOS** · [arm64](https://github.com/Open-Breach/rick/releases/download/v0.6.0/rick-0.6.0-macos-arm64.zip)
 
 Unzip, drag `Rick.app` to Applications and open it. The app is not notarised yet: allow it under System Settings → Privacy & Security.
 
-**Windows** · [x64](https://github.com/Open-Breach/rick/releases/download/v0.5.0/rick-0.5.0-windows-x64.zip)
+**Windows** · [x64](https://github.com/Open-Breach/rick/releases/download/v0.6.0/rick-0.6.0-windows-x64.zip)
 
 Unpack and run `rick.exe`. SmartScreen may warn the first time.
+
+Every file of a release has a GitHub build attestation. It proves where a file comes from, not that it is safe. To check one with the GitHub CLI:
+
+```bash
+gh attestation verify <file> --owner Open-Breach --signer-repo Open-Breach/trebuchet   # a Linux file
+gh attestation verify <file> --repo Open-Breach/rick                                   # a macOS or Windows file
+```
 
 Office documents preview through LibreOffice when it is installed; on Linux, audio and video need the GStreamer plug-ins.
 
@@ -117,6 +124,8 @@ Contributions are accepted under the same Apache-2.0 license.
 </p>
 
 ---
+
+Rick has no telemetry and no crash reports. It makes one request you did not start: once a day, and when you open the list of available plugins, it fetches the list of its plugins from get.openbreach.dev, two files, and sends only its version. That address is served through Cloudflare, which sees your IP address as it does for any web request. *Look for plugins and updates online* in Settings → Behaviour turns that off. All other network traffic is the one you start: a remote provider you added, a plugin you install.
 
 [Building from source](docs/building.md) · [The command line](docs/command-line.md) · [The architecture](docs/architecture.md) · [The changelog](CHANGELOG.md)
 
