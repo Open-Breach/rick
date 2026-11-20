@@ -632,14 +632,30 @@ impl App {
         }
         self.plugin_registry.said = true;
         events.push(Event::PluginUpdates { count });
+        self.remember(ANNOUNCED_FILE, rick);
+    }
+
+    /// Notes in the cache, beside the plugin list, what was just said:
+    /// `text` in `file`. An internal job, so the application is busy
+    /// until the file is written: whoever waits for the application to
+    /// come to rest — the next thing a test does, the start after this
+    /// one — finds what was said, not a write still on its way.
+    fn remember(&mut self, file: &'static str, text: String) {
         let folder = Cache::new(&self.plugin_registry.cache_dir).dir().to_owned();
-        runtime::handle().spawn_blocking(move || {
-            let written = std::fs::create_dir_all(&folder)
-                .and_then(|()| std::fs::write(folder.join(ANNOUNCED_FILE), rick));
+        let handle = self.jobs.spawn(move |_job| async move {
+            let written = runtime::handle()
+                .spawn_blocking(move || {
+                    std::fs::create_dir_all(&folder)
+                        .and_then(|()| std::fs::write(folder.join(file), text))
+                })
+                .await
+                .unwrap_or_else(|join| Err(std::io::Error::other(join)));
             if let Err(error) = written {
-                tracing::warn!(%error, "the announced updates are not remembered");
+                tracing::warn!(%error, file, "what was announced is not remembered");
             }
+            Ok(())
         });
+        self.internal.insert(handle.id);
     }
 
     /// The plugins of the per-user plugins folder that have an update:
@@ -954,14 +970,7 @@ impl App {
         events.push(Event::RickUpdate {
             version: version.clone(),
         });
-        let folder = Cache::new(&self.plugin_registry.cache_dir).dir().to_owned();
-        runtime::handle().spawn_blocking(move || {
-            let written = std::fs::create_dir_all(&folder)
-                .and_then(|()| std::fs::write(folder.join(RELEASE_FILE), version));
-            if let Err(error) = written {
-                tracing::warn!(%error, "the announced release is not remembered");
-            }
-        });
+        self.remember(RELEASE_FILE, version);
     }
 
     /// How long until the background check is due again: until a day
