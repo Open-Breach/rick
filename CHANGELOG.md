@@ -54,9 +54,9 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   folder the plugin's business (`.git`, `.svn`), and `connections`, what
   the plugin adds to *Add…* in the side panel (SSH, S3, Azure Blob,
   Google Cloud Storage). With `previews` they are the plugin's triggers
-  and `plugin.toml` carries all three. Nothing reads the two new lists
-  yet. Every plugin is rebuilt against the new contract, and one built
-  against 22 is refused.
+  and `plugin.toml` carries all three. Rick suggests a plugin by them
+  (below). Every plugin is rebuilt against the new contract, and one
+  built against 22 is refused.
 
 ### Added
 
@@ -105,6 +105,43 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   installed from a deb or an rpm is told to update through its package
   manager instead. *Look for plugins and updates online* switches it off
   with the rest (#281).
+- **Rick says so when a plugin that is not there would serve what you
+  are looking at.** It knows from the plugin list it already holds and
+  from the manifests of the plugins on the disk; it asks nobody for it,
+  and nothing is installed without a click. A plugin of the list that
+  fits this Rick and is not installed is offered with **Install**, one
+  that is installed and switched off with **Enable**, with no plugin
+  list at all. While the list has no key, which is every build for now,
+  only those are suggested. There are three places (#287):
+  - *The preview pane.* A file whose type a plugin shows, and that only
+    the hex view takes, has a bar at the top of the pane: the plugin's
+    name and what it does, **Install**, **Not now** and **Don't suggest
+    again**. Without the hex view the *No previewer* card reads *plugin
+    available* and has **Install** with the plugin's name after *Open
+    with…* (#288).
+  - *The file list.* A pane that enters a folder holding a plugin's
+    marker, `.git` or `.svn`, hidden or not, has the same bar between
+    its toolbar and its list. One bar a pane, on the local file system
+    only; it goes when the pane leaves the folder. Entering a folder of
+    200,000 entries takes as long as before (#289).
+  - *Adding a connection.* *Add…* of Network and Cloud, and the menu of
+    their headers, list the kinds of connection such plugins would add
+    after the ones that are there, each with the size of its plugin;
+    choosing one installs the plugin. The Cloud section, absent while no
+    cloud plugin is loaded, shows with *Add…* while one is on offer
+    (#291).
+
+  **Not now** silences a plugin until Rick is started again. **Don't
+  suggest again** writes its id to `[plugins] no_suggest` in `rick.toml`,
+  and the Extensions dialogue then says *Not suggested* of it, with
+  **Suggest again**. After **Install** the bar reads *Git is installed.
+  Restart Rick to use it.* with **Restart now**. In a Rick installed
+  from a deb or an rpm, **Install** opens the Extensions dialogue on the
+  plugin, where the command of the package manager stands (#292).
+- ***Suggest plugins*** on the Behaviour page of the settings, under
+  *Look for plugins and updates online*; on by default, `[plugins]
+  suggest` in `rick.toml`. Off, Rick suggests nothing anywhere, and the
+  Cloud section shows only once a cloud plugin is loaded (#287, #292).
 - ***Look for plugins and updates online*** on the Behaviour page of the
   settings, on by default; `[registry] check` in `rick.toml`. On, Rick
   fetches the plugin list when the *Available* list is opened and, in the
