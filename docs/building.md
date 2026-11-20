@@ -35,7 +35,7 @@ gh attestation verify rick_0.6.0_debian-13_amd64.deb --owner Open-Breach --signe
 gh attestation verify rick-0.6.0-macos-arm64.zip --repo Open-Breach/rick                                      # a macOS or Windows file
 ```
 
-The release workflow runs both lines itself, on a Linux package and on the macOS and the Windows archive, and checks that a file changed by one byte does not verify. It does so while the release is still a draft, and publishes only when that check has passed: where it fails, the draft stays a draft and nothing is public. An attestation proves where a file comes from, not that it is safe.
+The release workflow runs both lines itself, on a Linux package and on the macOS and the Windows archive, and checks that a file changed by one byte does not verify. It does so while the release is still a draft, and publishes only when that check has passed: where it fails, the draft stays a draft and nothing is public. The check is `.github/scripts/verify-attestations.py`. It ends in one of three ways: *verified*; *not verified*, which is a file that does not verify or a changed file that does; and *could not check*, which is `gh` failing without an answer, say for want of a connection, after a few tries. Only *verified* publishes, and a changed file counts as refused only when `gh` says there is no attestation for its checksum. An attestation proves where a file comes from, not that it is safe.
 
 `SHA256SUMS.txt` on the release page has the checksums of the archives, the packages and the lists below. The Linux archives need glibc 2.36 or later (Debian 12, Ubuntu 24.04): they are built on the oldest distribution release the packages are made for. Each deb and rpm is built on its own release. Intel Macs are not covered yet.
 
