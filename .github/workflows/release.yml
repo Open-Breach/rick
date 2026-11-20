@@ -37,24 +37,36 @@ name: release
 # GStreamer; on Linux it is in the archive and uses the system's. Then a
 # smoke test of every archive and of its packages, and a GitHub Release with
 # the archives, the packages and the manifests of the four platforms, their
-# SHA-256 sums and the tag's changelog section as its body. A tag with a
-# pre-release suffix (v0.1.0-rc1) makes a draft pre-release; a plain tag
-# publishes. Run by hand from a branch with a tag name, it is a dry run: the
-# same build and smoke test, then a draft release under that name on the
-# branch's commit (the tag itself is only created if the draft is published).
-# No signing, notarisation or installers in 0.1.
+# SHA-256 sums and the tag's changelog section as its body. The release is
+# written as a draft, and a draft it stays until its files have verified
+# (below): only then does the `publish` job make a plain tag's release
+# public. A tag with a pre-release suffix (v0.1.0-rc1) stays a draft
+# pre-release. Run by hand from a branch with a tag name, it is a dry run:
+# the same build, smoke test and verification, then a draft release under
+# that name on the branch's commit (the tag itself is only created if the
+# draft is published). Leave the branch alone while a dry run is going:
+# GitHub refuses the draft (HTTP 403, in the Linux job that attaches)
+# where the run's commit is no longer the head of a branch and its
+# workflow files are on none. No signing, notarisation or installers in
+# 0.1.
 #
 # Every file of a release has a GitHub build attestation, made by the run
 # that built it (specs/system-integration.md §9): Trebuchet's workflow
 # attests the Linux files, this one the macOS and Windows archives, their
 # plugin packages and lists, and the checksums. The `verify` job then
-# checks one file of each kind the way a user would, with
-# `gh attestation verify`. A dry run attests too: its files are real builds.
+# checks files of the draft the way a user would, with
+# `gh attestation verify`: a Linux package and the two archives must
+# verify, and a copy with one byte changed must not. Where it fails, the
+# release stays a draft and nothing is public. A dry run attests and
+# verifies too: its files are real builds.
 #
-# After a published release, the `repositories` job tells Trebuchet's
-# publisher, which takes the deb and rpm files from the release page into
-# the apt and dnf repositories on get.openbreach.dev. A pre-release and a
-# dry run stay drafts and are not announced.
+# The order is: build, attest, draft, verify, publish, and then the
+# `repositories` job tells Trebuchet's publisher, which takes the deb and
+# rpm files from the release page into the apt and dnf repositories on
+# get.openbreach.dev. A pre-release and a dry run stay drafts and are not
+# announced. Telling the publisher takes a token, the secret
+# TREBUCHET_DISPATCH_TOKEN: a real release run looks for it first, before
+# anything is built, and stops there if it is not set.
 #
 # Runners: the labels come from the repository variables RUNNER_LINUX_X64,
 # RUNNER_LINUX_ARM64, RUNNER_MACOS and RUNNER_WINDOWS; where one is not
@@ -85,6 +97,26 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
+      # A release ends by telling Trebuchet's publisher, with a token that
+      # is a secret of this repository. Without it the release would be
+      # built, verified and published, and the package repositories never
+      # told. So a real release run looks for the token here, in the first
+      # step of the job every other job waits for, and stops before
+      # anything is built. A pre-release and a dry run tell nobody and need
+      # none. That the token is set is all this can tell: whether it still
+      # works shows when it is used.
+      - name: the publisher's token
+        if: github.event_name == 'push' && !contains(github.ref_name, '-')
+        env:
+          TREBUCHET_DISPATCH_TOKEN: ${{ secrets.TREBUCHET_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$TREBUCHET_DISPATCH_TOKEN" ]; then
+            message="The secret TREBUCHET_DISPATCH_TOKEN is not set. A release ends by telling Trebuchet's publisher with it (Open-Breach/trebuchet, docs/publisher.md). Nothing was built and nothing is published. Set the secret in this repository and run this workflow again."
+            echo "::error::$message"
+            { echo "### Stopped before the build"; echo; echo "$message"; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "TREBUCHET_DISPATCH_TOKEN is set"
       - uses: actions/checkout@v4
       # The version the Linux packages are made with: the tag's, whose
       # release part must be the workspace's, as the build job checks for
@@ -893,17 +925,19 @@ jobs:
       # The release of the tag. Trebuchet's job has attached the Linux files
       # already and, where the tag had no release yet, made a draft for
       # them. This step works on that same release: it adds the files of
-      # the other platforms and the checksums, gives the release its name
-      # and its notes, and publishes it, unless the tag is a pre-release or
-      # this is a dry run, which both stay drafts. The Linux files are
-      # uploaded once more, the same bytes, so that the release holds what
-      # SHA256SUMS.txt names even where Trebuchet's job attached nothing.
-      - name: release
+      # the other platforms and the checksums, and gives the release its
+      # name and its notes. It does not publish: the release stays the
+      # draft it is until the `verify` job has passed, and the `publish`
+      # job makes it public. Whether it is a draft is not touched here, so
+      # a run repeated for a release that is out already leaves it out.
+      # The Linux files are uploaded once more, the same bytes, so that the
+      # release holds what SHA256SUMS.txt names even where Trebuchet's job
+      # attached nothing.
+      - name: draft
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          DRAFT: ${{ contains(env.TAG, '-') || github.event_name == 'workflow_dispatch' }}
           PRERELEASE: ${{ contains(env.TAG, '-') }}
         run: |
           set -euo pipefail
@@ -913,22 +947,24 @@ jobs:
           gh release upload "$TAG" --clobber \
             dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/*.rkp dist/plugins-*.json dist/SHA256SUMS.txt
           gh release edit "$TAG" --title "Rick $TAG" --notes-file body.md --target "$GITHUB_SHA" \
-            --prerelease="$PRERELEASE" --draft="$DRAFT"
+            --prerelease="$PRERELEASE"
           gh release view "$TAG" --json name,isDraft,isPrerelease,assets \
             --jq '"\(.name): draft \(.isDraft), pre-release \(.isPrerelease), \(.assets | length) files"'
 
-  # The release, checked the way its users are told to check it
-  # (specs/system-integration.md §9). One Linux package and the two
-  # archives of this workflow's own, macOS and Windows, are downloaded from
-  # the release and verified with the two documented lines: the package
-  # against Trebuchet's workflow, which built it, the archives against this
-  # repository's. A copy of the package with one byte changed must not
-  # verify.
+  # The draft, checked the way a release's users are told to check it
+  # (specs/system-integration.md §9), before anyone can download it. One
+  # Linux package and the two archives of this workflow's own, macOS and
+  # Windows, are downloaded from the draft and verified with the two
+  # documented lines: the package against Trebuchet's workflow, which built
+  # it, the archives against this repository's. A copy of the package with
+  # one byte changed must not verify. Publishing waits for this job: where
+  # it fails, the release stays a draft, nothing is public, and the job's
+  # summary says so.
   verify:
     needs: release
     runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 10
-    # A draft is visible with write access only; a dry run's release is one.
+    # A draft is visible with write access only.
     permissions:
       contents: write
       attestations: read
@@ -967,15 +1003,80 @@ jobs:
           fi
           echo "::endgroup::"
           echo "the package and both archives verify, and the changed package does not"
+          {
+            echo "### Verified"
+            echo
+            echo "Of the draft of \`$TAG\`: \`${deb#./}\` and both archives verify, and a copy of the package with one byte changed does not."
+          } >> "$GITHUB_STEP_SUMMARY"
+      # What a failed check leaves, said where the run is looked at first.
+      # The release is asked, not assumed: a run repeated for a release
+      # that was out before stays out.
+      - name: not published
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          case "$(gh release view "$TAG" --json isDraft --jq .isDraft 2> /dev/null || echo none)" in
+            true) left="The release stays a draft: nothing is public, and the package repositories are not told." ;;
+            false) left="The release of this tag was public before this run, and still is. The package repositories are not told." ;;
+            *) left="No release of this tag was found: nothing is public." ;;
+          esac
+          {
+            echo "### Not published"
+            echo
+            echo "The check of the attestations of \`$TAG\` did not pass. $left The log of this job says what failed."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "$left"
+
+  # Publishing, the last step of a release, and only after the files of the
+  # draft have verified. A plain tag's draft becomes the published release
+  # here. A tag with a pre-release suffix and a dry run stay drafts: the job
+  # runs for them all the same and says what it left, so that a dry run
+  # goes through the whole order.
+  publish:
+    needs: verify
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PUBLISH: ${{ github.event_name == 'push' && !contains(env.TAG, '-') }}
+        run: |
+          set -euo pipefail
+          if [ "$PUBLISH" = true ]; then
+            gh release edit "$TAG" --draft=false
+            said="Published, after its files verified."
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            said="A dry run: its files verified, and it stays a draft. A plain tag is published at this step."
+          else
+            said="A pre-release: its files verified, and it stays a draft."
+          fi
+          state="$(gh release view "$TAG" --json name,isDraft,isPrerelease,assets \
+            --jq '"\(.name): draft \(.isDraft), pre-release \(.isPrerelease), \(.assets | length) files"')"
+          echo "$said"
+          echo "$state"
+          { echo "### $TAG"; echo; echo "$said"; echo; echo "$state"; } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$PUBLISH" = true ] && [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != false ]; then
+            echo "::error::$TAG is still a draft after publishing"
+            exit 1
+          fi
 
   # The apt and dnf repositories on get.openbreach.dev: Trebuchet's publisher
   # is told of the release and takes its deb and rpm files from the release
   # page (Open-Breach/trebuchet, docs/publisher.md). Only for a published
-  # release: a pre-release and a dry run are drafts, which the publisher
-  # cannot fetch, and the repositories have one channel. The token may send
-  # this one event to that one repository.
+  # release, so after the `publish` job: a pre-release and a dry run are
+  # drafts, which the publisher cannot fetch, and the repositories have one
+  # channel. The token may send this one event to that one repository; the
+  # first job of the run has looked for it already.
   repositories:
-    needs: [licenses, release, verify]
+    needs: [licenses, publish]
     if: github.event_name == 'push' && !contains(github.ref_name, '-')
     runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 5
