@@ -14,8 +14,8 @@ pub struct Key(PublicKey);
 impl Key {
     /// Reads a public key as minisign writes it: the base64 line, with or
     /// without the comment line a `.pub` file has above it. An empty text
-    /// is no key, `None`: that is the committed `keys/registry.pub` until
-    /// the key pair exists.
+    /// is no key, `None`: that is a build whose `keys/registry.pub` was
+    /// emptied, and its registry is off.
     ///
     /// # Errors
     ///

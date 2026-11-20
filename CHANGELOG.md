@@ -10,9 +10,10 @@ the pull request that brought the change.
 Plugins come in two kinds from here on: the ones every install has, and
 the ones that are separate downloads. The Extensions dialogue lists the
 separate ones and installs and updates them from a signed plugin list,
-once that list has its key: the key is not in the source yet, so in every
-build for now the list is off and Rick fetches nothing. The extension API
-is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
+which Rick fetches from `get.openbreach.dev` and checks against a key
+that is compiled in. Where the list does not arrive, the *Available*
+list says so in one line and nothing else does. The extension API is 23:
+a plugin built for 0.5.0 is refused until it is rebuilt.
 
 ### Changed
 
@@ -111,8 +112,8 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   and nothing is installed without a click. A plugin of the list that
   fits this Rick and is not installed is offered with **Install**, one
   that is installed and switched off with **Enable**, with no plugin
-  list at all. While the list has no key, which is every build for now,
-  only those are suggested. There are three places (#287):
+  list at all. A Rick that has no plugin list yet suggests only those.
+  There are three places (#287):
   - *The preview pane.* A file whose type a plugin shows, and that only
     the hex view takes, has a bar at the top of the pane: the plugin's
     name and what it does, **Install**, **Not now** and **Don't suggest
@@ -165,8 +166,10 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   fetches the plugin list when the *Available* list is opened and, in the
   background, once a day: one minute after the start when the list it
   has is more than a day old, and again every 24 hours while it stays
-  open. The start itself asks nobody. Off, it fetches nothing by itself
-  and shows what it has; **Check now** still asks (#271, #280).
+  open. A check in the background that gets no list says nothing and is
+  tried again 24 hours later, not sooner. The start itself asks nobody.
+  Off, it fetches nothing by itself and shows what it has; **Check now**
+  still asks (#271, #280, #294).
 - **The plugin list and what Rick sends for it.** The list is
   `https://get.openbreach.dev/registry/index.json` with a minisign
   signature beside it. Rick makes one request for each of the two files,
@@ -176,10 +179,13 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   cached one; a list that does not verify is not used and the last good
   one stays. A build of the list fits when it is for this platform and
   for exactly this release of Rick, so a pre-release Rick is offered
-  nothing. **The key file is empty in the source for now**, and a build
-  without a key reads and fetches nothing: *The plugin list is not set up
-  in this build*. `[registry] url` and `public_key` point a Rick at
-  another list and key, for development (#265).
+  nothing. The key is the registry's own, Trebuchet's
+  `keys/registry.pub`, committed in the source as a file (#294). A Rick
+  without a key, which is a build whose file was emptied or a
+  `public_key` in `rick.toml` that is no key, reads and fetches nothing:
+  *The plugin list is not set up in this build*. `[registry] url` and
+  `public_key` point a Rick at another list and key, for development
+  (#265).
 - `installed.toml` in the per-user plugins folder notes where each plugin
   there came from, the plugin list, a file or an address, with its
   version and the SHA-256 of its package. *Remove* drops the entry

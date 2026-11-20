@@ -4455,6 +4455,98 @@ fn screenshots_of_the_available_plugins() {
     }
 }
 
+/// specs/plugin-distribution.md §6 and §7: a Rick whose registry has no
+/// list to give — the key is compiled in before the registry is
+/// published, and its address answers 404. The window a minute after the
+/// start, when the background check has failed: nothing in it says so.
+/// And the *Available* view of the Extensions dialogue, with the one
+/// line and **Check now**, in Light and Dark. The registry is the test's
+/// own, which is why the footer names its address; a build's own
+/// registry is not named there.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_a_registry_without_a_list() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+    use plugins_registry::fixtures::{Server, Signer};
+    use tests::registry;
+    let (_keep, root) = sample_tree();
+    // Nothing is published: the list's address answers 404.
+    let (server, signer) = (Server::start(), Signer::new(1));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let config = fake.config_dir();
+    fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        config.join(app::SETTINGS_FILE),
+        registry::rick_toml(&server, &signer, true),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_vfs_archive::ArchiveExtension::new()),
+            Arc::new(ext_vfs_trash::TrashExtension::new()),
+            Arc::new(ext_preview_hex::HexPreview::new()),
+        ],
+        config_dir: Some(config),
+        start: Some(local(&root)),
+    });
+    app.set_rick_version(registry::RICK);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 840.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    // A minute after the start, in a test's time: the background check,
+    // which gets no list.
+    registry::background_check(harness.state_mut().app_mut());
+    settle(&mut harness);
+    assert_eq!(server.requests().len(), 1, "asked once");
+    assert_eq!(harness.state().toasts(), [], "and nothing is said");
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        // The pointer rests outside the dialogue, on no button.
+        harness.event(egui::Event::PointerMoved(egui::pos2(40.0, 820.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let modes = [(Theme::Light, "light"), (Theme::Dark, "dark")];
+
+    // The window as the failed check leaves it.
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("registry-no-list-window-{mode}"));
+    }
+    // The Available view: opening it asks again, and the line stays.
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::Extensions, pane);
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness
+        .get_by_role_and_label(Role::RadioButton, "Available")
+        .click();
+    for _ in 0..4 {
+        harness.step();
+    }
+    settle(&mut harness);
+    assert_eq!(server.requests().len(), 2, "opening the view asks");
+    harness.get_by_label("The plugin list could not be fetched.");
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(
+            &mut harness,
+            &format!("extensions-available-no-list-{mode}"),
+        );
+    }
+}
+
 /// specs/plugin-distribution.md §7, *Updates* (issue 251): after Rick was
 /// updated, a plugin the registry installed is refused as built for the
 /// Rick before, and the list has this Rick's build of it — the start's

@@ -10,7 +10,7 @@ its minisign signature beside it, one GET each with `rick/<version>` as
 the user agent and nothing that tells one install from another. `Source`
 says where the index is and which key signs it — the key compiled in from
 `keys/registry.pub`, or what `[registry] url` and `public_key` of
-`rick.toml` name; while that file is empty there is no key, and without a
+`rick.toml` name; a build whose file is empty has no key, and without a
 key nothing is fetched. `fetch` hands back an index only when its
 signature verifies (`minisign-verify`, the legacy form refused) and its
 `schema` is one this Rick reads; `Cache` keeps the last index that
@@ -52,18 +52,28 @@ the suggestions off without touching the registry's own switch,
 
 ## The key
 
-The registry is off in a build whose `keys/registry.pub` is empty, which
-is how the file is committed until the key pair exists: the *Available*
-view says *The plugin list is not set up in this build* and Rick makes no
-request. To turn it on, put the content of Trebuchet's `keys/registry.pub`
-into that file: the base64 line, with or without the `untrusted comment:`
-line a minisign `.pub` file has above it. Nothing else changes, and the
-test `the_source_is_this_build_s_unless_rick_toml_says_otherwise` says
-whether the file is empty or a key.
+`keys/registry.pub` is Trebuchet's `keys/registry.pub`, the public half
+of the key that signs the index, copied byte for byte: the comment line
+that names the key's id, `197B77080066F36E`, and the base64 line. It is
+compiled in, so a build has the registry on. Only the public half is
+here; the secret one is a secret of Trebuchet's repository and nothing of
+Rick needs it.
 
-A key that leaks is replaced there too, with a release of Rick: the
-releases before keep refusing a list the new key signed
+The test `the_key_compiled_in_is_a_minisign_public_key_and_trebuchet_s_file`
+holds the file to that: it reads as a minisign public key whose id is the
+comment's, and its SHA-256 is the one of Trebuchet's file, which the test
+has written down with the commit it was read at. The comparison asks
+nobody, so it runs with every other test; what it cannot see is a key
+that Trebuchet replaces later.
+
+A key that leaks is replaced there, and then here: the new file is copied
+over this one, the test takes the new hash and id, and a release of Rick
+carries it. The releases before keep refusing a list the new key signed
 (Trebuchet's spec, 7.5).
+
+A build whose `keys/registry.pub` is empty has no key and its registry is
+off: the *Available* view says *The plugin list is not set up in this
+build* and Rick makes no request.
 
 ## Another registry
 

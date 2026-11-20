@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Records a benchmark run on the `benchmark-history` branch (issue 35): one
 # Markdown file per run under nightly/, named by the date and the platform,
-# with the commit measured, the runner's hardware line and the median and
-# worst table of bench-summary.py. The nightly bench run on dev records
-# here, so a regression can be traced to a day range, and so to the pull
-# requests that landed in it. The branch is created on the first run;
-# nothing else is on it.
+# with the commit measured, the runner's hardware line and the summary of
+# bench-summary.py. A bench run started by hand records here when asked.
+# The folder has its name from the nightly run on dev, which recorded here
+# every night until the schedule was taken out (decided on pull request
+# 290); the files of that time stay. The branch is created on the first
+# run; nothing else is on it.
 #
 #   bench-history.sh <summary.md> <hardware.md> <platform>
 #
@@ -40,12 +41,12 @@ for attempt in 1 2 3; do
     cat > history/README.md <<'README'
 # Benchmark history
 
-The summaries of the `bench` workflow's nightly runs
-(`.github/workflows/bench.yml` on `main`, which checks `dev` out), one file
+The summaries of the runs of the `bench` workflow
+(`.github/workflows/bench.yml`) that were asked to record here, one file
 per run under `nightly/`, named by date and platform: the commit measured,
-the runner's hardware line and the median and worst of every acceptance
-benchmark. A manual run records here too when asked. The workflow writes
-this branch; nothing else does.
+the runner's hardware line and the summary of every acceptance benchmark.
+The folder's name is from the nightly run on `dev`, which the workflow had
+until November 2026. The workflow writes this branch; nothing else does.
 README
   fi
   mkdir -p history/nightly
