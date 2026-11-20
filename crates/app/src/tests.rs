@@ -5828,6 +5828,48 @@ mod registry {
         }
     }
 
+    /// What was said is in the cache by the time the application is at
+    /// rest: remembering it is a job of the application's own, not a
+    /// write left on its way. A window's test deleted the file right
+    /// after the toast and, on Windows, found none yet
+    /// (`available::with_the_switch_off_a_newer_rick_is_not_said`).
+    #[test]
+    fn the_application_is_busy_until_what_it_said_is_remembered() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(
+            &signer,
+            &released(&json!({ "version": "0.7.0", "url": PAGE })),
+        );
+        let mut h = start(&fake, &table(&server, &signer, true));
+        let remembered = fake
+            .config_dir()
+            .join(CACHE_DIR)
+            .join(plugins_registry::CACHE_DIR)
+            .join("release-announced");
+        h.registry(RegistryCommand::Start);
+        h.send(Command::Registry(RegistryCommand::Daily));
+
+        // Turn by turn, up to the one that says the release.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        runtime::block_on(async {
+            while told(&h.events).is_empty() {
+                assert!(Instant::now() < deadline, "nothing was said");
+                h.app.tick(&mut h.events).await;
+            }
+        });
+        // No further turn and no pause: once nothing runs, the file is
+        // there.
+        while h.app.is_busy() {
+            assert!(Instant::now() < deadline, "did not come to rest");
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            fs::read_to_string(&remembered).ok().as_deref(),
+            Some("0.7.0"),
+            "the application is at rest and has not remembered what it said"
+        );
+    }
+
     #[test]
     fn the_update_is_said_whenever_the_list_first_names_it() {
         let (server, signer, fake) = (Server::start(), Signer::new(1), fake());

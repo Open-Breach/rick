@@ -7,12 +7,15 @@
 //! `gstreamer-1.0/` beside it on macOS and in `lib/gstreamer-1.0/` of its
 //! folder on Windows, which is where `cargo xtask bundle` puts them. So
 //! the elements are always those of the runtime that was loaded, whichever
-//! plugins folder it came from. [`Player`] is a `playbin3` whose video sink is an
+//! plugins folder it came from. [`Player`] is a `playbin` whose video sink is an
 //! `appsink` asking for RGBA frames, kept as the latest frame for `render`;
 //! it is the [`Transport`]. [`discover`] reads duration, streams and tags
 //! with the Discoverer, and [`waveform`] decodes the audio to mono samples
-//! for the waveform. Hardware decoders are GStreamer's choice: `playbin3`
+//! for the waveform. Hardware decoders are GStreamer's choice: `playbin`
 //! picks the highest-ranked decoder it finds.
+//!
+//! Not `playbin3` ([`PLAYER`] says why): in GStreamer 1.24 it sometimes
+//! never shows the first frame of a small local file.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -219,6 +222,23 @@ pub(crate) fn is_quarter_turn(orientation: &str) -> bool {
     orientation.ends_with("rotate-90") || orientation.ends_with("rotate-270")
 }
 
+/// The elements the player is built on, in the order they are looked for:
+/// `playbin`, and `playbin3` only where there is no `playbin`.
+///
+/// `playbin3` of GStreamer 1.24 can lose a small local file at its start.
+/// Its `uridecodebin3` sets the source going before its `decodebin3` is
+/// paused, and `decodebin3` gives the element it adds for a new input the
+/// state it has itself at that moment. When the thread that changes the
+/// states is held up between the two — a busy machine is enough — the
+/// source's first buffer comes to an element that is not paused yet, is
+/// refused as flushing, and the source's queue stops its task for good.
+/// Nothing is reported: the pipeline waits for a first frame that cannot
+/// come, [`Player::open`] gives up after [`PREROLL_TIMEOUT`], and the
+/// video is shown without playback. About one open in a hundred ended
+/// that way with several players opening side by side, on GStreamer
+/// 1.24.2; with `playbin`, under the same load, none did.
+pub const PLAYER: [&str; 2] = ["playbin", "playbin3"];
+
 /// The shared state the sink's callback and the transport read and write.
 #[derive(Debug, Default)]
 struct Shared {
@@ -226,7 +246,7 @@ struct Shared {
     looping: AtomicBool,
 }
 
-/// A `playbin3` with an RGBA video sink: the transport of a media
+/// A `playbin` with an RGBA video sink: the transport of a media
 /// document.
 pub struct Player {
     pipeline: gst::Element,
@@ -280,11 +300,10 @@ impl Player {
 
     fn build(uri: &str, video: bool, muted: bool, cancel: &CancelToken) -> Result<Self, GstError> {
         let shared = Arc::new(Shared::default());
-        let factory = if gst::ElementFactory::find("playbin3").is_some() {
-            "playbin3"
-        } else {
-            "playbin"
-        };
+        let factory = PLAYER
+            .into_iter()
+            .find(|name| gst::ElementFactory::find(name).is_some())
+            .unwrap_or(PLAYER[0]);
         let mut builder = gst::ElementFactory::make(factory).property("uri", uri);
         if video {
             let on_sample = Arc::clone(&shared);
