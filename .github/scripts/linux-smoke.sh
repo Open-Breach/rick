@@ -10,7 +10,9 @@
 #   - the files are where docs/building.md says, with the licence texts;
 #   - every plugin of the package loads, and no other is in it;
 #   - pdfium, from beside the binary, opens a PDF and renders a page;
-#   - the media previewer plays a video through the system's GStreamer;
+#   - the media previewer plays two videos through the system's GStreamer,
+#     one in Motion JPEG and one in H.264, whose decoder the package has
+#     to have brought;
 #   - where this build's plugin packages are at hand, each installs into
 #     the per-user folder and loads from there.
 #
@@ -189,19 +191,23 @@ pdf="$(LD_LIBRARY_PATH="$root" "$root/pdfium_check")" || fail "pdfium did not op
 echo "$pdf"
 grep -q "^pdfium ok: 3 pages" <<< "$pdf" || fail "unexpected answer from pdfium_check"
 
-# A video, played for real: the test program loads the plugins as Rick
-# does and plays the clip through the previewer that claims it, with the
-# GStreamer the package asked for.
-if ! media="$(LD_LIBRARY_PATH="$root" "$root/preview_check" "$programs/sample.avi" --play)"; then
-  echo "the sample did not play; once more with GStreamer's warnings:"
-  GST_DEBUG=2 LD_LIBRARY_PATH="$root" "$root/preview_check" "$programs/sample.avi" --play 2>&1 \
-    | grep -v "^plugin .*: loaded, " | tail -40 || true
-  fail "the media previewer did not play the sample video"
-fi
-echo "$media"
-grep -q "^plugin preview-media: loaded, beside the binary, " <<< "$media" \
-  || fail "the media plugin was not loaded from beside the binary"
-grep -q "^preview ok: .*first frame 320x240, played to " <<< "$media" || fail "the sample video did not play"
+# Two videos, played for real: the test program loads the plugins as Rick
+# does and plays each clip through the previewer that claims it, with the
+# GStreamer the package asked for. Motion JPEG needs the base and good
+# plug-in sets. H.264 needs the decoder the package depends on beside them:
+# without it this is where the test stops.
+for clip in sample.avi sample-h264.mp4; do
+  if ! media="$(LD_LIBRARY_PATH="$root" "$root/preview_check" "$programs/$clip" --play)"; then
+    echo "$clip did not play; once more with GStreamer's warnings:"
+    GST_DEBUG=2 LD_LIBRARY_PATH="$root" "$root/preview_check" "$programs/$clip" --play 2>&1 \
+      | grep -v "^plugin .*: loaded, " | tail -40 || true
+    fail "the media previewer did not play $clip"
+  fi
+  echo "$media"
+  grep -q "^plugin preview-media: loaded, beside the binary, " <<< "$media" \
+    || fail "the media plugin was not loaded from beside the binary"
+  grep -q "^preview ok: .*first frame 320x240, played to " <<< "$media" || fail "$clip did not play"
+done
 
 # The plugin packages, installed the way Install from file… does it: each
 # is unpacked into the per-user plugins folder, its folder whole, and every

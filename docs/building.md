@@ -40,7 +40,7 @@ In that fresh container the workflow also runs `.github/scripts/linux-smoke.sh`,
 
 - every plugin of the package loads, and no other plugin is in it;
 - pdfium, from beside the binary, opens a PDF and renders a page;
-- the media previewer plays a video through the system's GStreamer;
+- the media previewer plays two videos through the system's GStreamer, one in Motion JPEG and one in H.264;
 - where the build is also the archive, each of its plugin packages is unpacked into the per-user folder and loads from there.
 
 The container has the package's dependencies and nothing of the build, so a library missing from the dependency list fails the release there. The test programs it runs, `pdfium_check` and `preview_check`, and the video come from the same build, as one tar file among the job's files; the release does not publish it. Two things a container cannot show: a window, with the libraries the user interface loads for X11, Wayland, Vulkan and EGL when it opens one, and sound. And one thing Ubuntu's container images leave out: they install nothing under `/usr/share/doc` but the `copyright` files, so for `THIRD-PARTY-LICENSES.md` the test there asks the package's list of files and not the disk.
@@ -52,7 +52,7 @@ What a package installs:
 - `/usr/share/applications/rick.desktop` and the icons under `/usr/share/icons/hicolor/`;
 - the licence: `/usr/share/doc/rick/copyright` and `THIRD-PARTY-LICENSES.md` beside it in a deb, both under `/usr/share/licenses/rick/` in an rpm.
 
-A package names every package it depends on, per distribution, in the workflow's call. The packaging tools' own search for the libraries a binary links is off: Rick's binaries link the kernel libraries and the standard library that sit beside them, and that search does not get past them.
+A package names every package it depends on, per distribution, in the workflow's call. Among them is a decoder for H.264, so that an MP4 plays with the package alone: `gstreamer1.0-libav` on Debian and Ubuntu, and on Fedora `gstreamer1-plugin-openh264` with `gstreamer1-plugins-bad-free`, whose parser that decoder needs. Fedora's plug-in is in Fedora's own repositories; the codec library it loads comes from Cisco's OpenH264 repository, which Fedora has switched on by default. Where someone has switched it off, Fedora installs a stand-in for the library and Rick says the plug-in for H.264 is missing. The packaging tools' own search for the libraries a binary links is off: Rick's binaries link the kernel libraries and the standard library that sit beside them, and that search does not get past them.
 
 The separate plugins are not packaged yet; `rick-plugin-<id>` packages are Trebuchet's next step. After a published release the workflow tells Trebuchet's publisher, which puts the packages into the apt and dnf repositories on `get.openbreach.dev`.
 

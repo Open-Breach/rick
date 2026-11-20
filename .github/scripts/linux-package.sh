@@ -40,8 +40,8 @@
 #   smoke/      What .github/scripts/linux-smoke.sh needs from this build
 #               to test the package where it is installed: the test
 #               programs pdfium_check and preview_check, which only run
-#               against the libraries they were built with, and a short
-#               video. They leave as one tar file in TREBUCHET_DIST, which
+#               against the libraries they were built with, and two short
+#               videos. They leave as one tar file in TREBUCHET_DIST, which
 #               the release job does not publish.
 #
 # Before it packages, it checks the bundle the way the release's smoke test
@@ -128,18 +128,35 @@ cp "$bundle/plugins/vfs-archive/7-Zip-License.txt" "$bundle/7-Zip-License.txt"
 mkdir -p "$bundle/share/polkit-1/actions"
 cp packaging/linux/org.openbreach.rick.zfs.policy "$bundle/share/polkit-1/actions/"
 
-# For the smoke test: the two test programs of this build, and a video for
-# preview_check to play. Motion JPEG in AVI is what the two GStreamer
-# plug-in sets the package asks for decode by themselves, so the clip plays
-# where the package's dependencies are all there is. It is the test
-# pattern, three seconds of it, written by the GStreamer of this container.
+# For the smoke test: the two test programs of this build, and two videos
+# for preview_check to play, where the package's dependencies are all there
+# is. Both are the test pattern, three seconds of it, written by the
+# GStreamer of this container.
+#   sample.avi         Motion JPEG, which GStreamer's base and good plug-in
+#                      sets decode by themselves.
+#   sample-h264.mp4    H.264, as most videos are: it plays only where the
+#                      package brought a decoder for it. Debian's and
+#                      Ubuntu's containers have the x264 encoder to write
+#                      it with, Fedora's the OpenH264 one, whose output
+#                      the parser turns into what an MP4 holds.
 smoke=target/release/smoke
 rm -rf "$smoke"
 mkdir -p "$smoke"
 cp target/release/examples/pdfium_check target/release/examples/preview_check "$smoke/"
-gst-launch-1.0 -q videotestsrc num-buffers=90 pattern=smpte ! \
-  video/x-raw,width=320,height=240,framerate=30/1 ! videoconvert ! \
-  jpegenc ! avimux ! filesink location="$smoke/sample.avi"
+pattern="videotestsrc num-buffers=90 pattern=smpte ! video/x-raw,format=I420,width=320,height=240,framerate=30/1"
+# The pipelines are words for gst-launch, split on purpose.
+# shellcheck disable=SC2086
+gst-launch-1.0 -q $pattern ! jpegenc ! avimux ! filesink location="$smoke/sample.avi"
+if gst-inspect-1.0 --exists x264enc; then
+  h264="x264enc speed-preset=ultrafast tune=zerolatency key-int-max=15 bitrate=300"
+elif gst-inspect-1.0 --exists openh264enc && gst-inspect-1.0 --exists h264parse; then
+  h264="openh264enc bitrate=300000 ! h264parse"
+else
+  echo "linux-package.sh: no H.264 encoder in this container to write the smoke test's clip with" >&2
+  exit 1
+fi
+# shellcheck disable=SC2086
+gst-launch-1.0 -q $pattern ! $h264 ! mp4mux ! filesink location="$smoke/sample-h264.mp4"
 ls -l "$smoke"
 
 if [ -n "${TREBUCHET_DIST:-}" ]; then
@@ -147,7 +164,7 @@ if [ -n "${TREBUCHET_DIST:-}" ]; then
   # One per job, named after it: the release job gathers the files of
   # every job into one folder.
   tar --create --file "$TREBUCHET_DIST/rick-${TREBUCHET_VERSION:?}-smoke-${TREBUCHET_TARGET:?}-$platform.tar" \
-    --directory "$smoke" pdfium_check preview_check sample.avi
+    --directory "$smoke" pdfium_check preview_check sample.avi sample-h264.mp4
   # The plugin packages and their manifest belong to the archive of this
   # build, so they leave with it, once per architecture.
   if [ "${TREBUCHET_TARBALL:-}" = true ]; then

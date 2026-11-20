@@ -114,7 +114,9 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   its release; the archive is built on the oldest of them, so it needs
   glibc 2.36 where it needed 2.39. Each package is tested where it is
   installed, in a container that has its dependencies and nothing else:
-  its plugins load, pdfium opens a PDF and a video plays (#282).
+  its plugins load, pdfium opens a PDF and a video plays. A package
+  brings GStreamer's decoder for H.264 with it, so an MP4 plays without
+  installing anything more (#282).
 - ***Look for plugins and updates online*** on the Behaviour page of the
   settings, on by default; `[registry] check` in `rick.toml`. On, Rick
   fetches the plugin list when the *Available* list is opened and, in the

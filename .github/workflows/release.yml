@@ -132,18 +132,22 @@ jobs:
   # container of its release and runs `rick --version` there. In that
   # container, which has the package's dependencies and nothing of the
   # build, it then runs .github/scripts/linux-smoke.sh: every plugin of the
-  # package loads, pdfium opens a PDF, a video plays, and where the build
+  # package loads, pdfium opens a PDF, two videos play, and where the build
   # is also the archive its plugin packages install into the per-user
   # folder and load, for the package and once more for the unpacked
   # archive. Nothing is attached by it: the release job below gathers its
-  # files with the others'. The dependencies are per distribution. To
-  # build: GStreamer's development files, beyond a compiler, and its tools
-  # and plug-ins to write the smoke test's video. To run, all of them by name
-  # (crates/rick/Cargo.toml says why the tools do not find them): what the
-  # binaries link — the C and C++ runtimes, GLib and GStreamer — the
-  # GStreamer plug-in sets the media previewer plays through, and the
-  # libraries the user interface loads by name once it opens a window, for
-  # X11 and for Wayland, with Vulkan and EGL to draw with.
+  # files with the others'.
+  # The dependencies are per distribution. To build: GStreamer's
+  # development files, beyond a compiler, and its tools and plug-ins to
+  # write the smoke test's videos, an H.264 encoder among them. To run, all
+  # of them by name (crates/rick/Cargo.toml says why the tools do not find
+  # them): what the binaries link — the C and C++ runtimes, GLib and
+  # GStreamer — the GStreamer plug-in sets the media previewer plays
+  # through, with a decoder for H.264 (the libav plug-in on Debian and
+  # Ubuntu; on Fedora the OpenH264 plug-in and the parser it needs, from
+  # the bad-free set), and the libraries the user interface loads by name
+  # once it opens a window, for X11 and for Wayland, with Vulkan and EGL to
+  # draw with.
   linux:
     needs: licenses
     permissions:
@@ -162,15 +166,18 @@ jobs:
         {
           "debian": [
             "libgstreamer1.0-dev", "libgstreamer-plugins-base1.0-dev",
-            "gstreamer1.0-tools", "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good"
+            "gstreamer1.0-tools", "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good",
+            "gstreamer1.0-plugins-ugly"
           ],
           "ubuntu": [
             "libgstreamer1.0-dev", "libgstreamer-plugins-base1.0-dev",
-            "gstreamer1.0-tools", "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good"
+            "gstreamer1.0-tools", "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good",
+            "gstreamer1.0-plugins-ugly"
           ],
           "fedora": [
             "gstreamer1-devel", "gstreamer1-plugins-base-devel",
-            "gstreamer1", "gstreamer1-plugins-base", "gstreamer1-plugins-good"
+            "gstreamer1", "gstreamer1-plugins-base", "gstreamer1-plugins-good",
+            "gstreamer1-plugin-openh264", "gstreamer1-plugins-bad-free"
           ]
         }
       runtime-deps: |
@@ -178,7 +185,7 @@ jobs:
           "debian": [
             "libc6", "libgcc-s1", "libstdc++6", "libglib2.0-0",
             "libgstreamer1.0-0", "libgstreamer-plugins-base1.0-0",
-            "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good",
+            "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good", "gstreamer1.0-libav",
             "libxkbcommon0", "libxkbcommon-x11-0", "libwayland-client0", "libwayland-egl1",
             "libxcb1", "libx11-6", "libx11-xcb1", "libxcursor1", "libxi6",
             "libvulkan1", "libegl1"
@@ -186,7 +193,7 @@ jobs:
           "ubuntu": [
             "libc6", "libgcc-s1", "libstdc++6", "libglib2.0-0",
             "libgstreamer1.0-0", "libgstreamer-plugins-base1.0-0",
-            "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good",
+            "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good", "gstreamer1.0-libav",
             "libxkbcommon0", "libxkbcommon-x11-0", "libwayland-client0", "libwayland-egl1",
             "libxcb1", "libx11-6", "libx11-xcb1", "libxcursor1", "libxi6",
             "libvulkan1", "libegl1"
@@ -194,6 +201,7 @@ jobs:
           "fedora": [
             "glibc", "libgcc", "libstdc++", "glib2",
             "gstreamer1", "gstreamer1-plugins-base", "gstreamer1-plugins-good",
+            "gstreamer1-plugin-openh264", "gstreamer1-plugins-bad-free",
             "libxkbcommon", "libxkbcommon-x11", "libwayland-client", "libwayland-egl",
             "libxcb", "libX11", "libX11-xcb", "libXcursor", "libXi",
             "vulkan-loader", "libglvnd-egl"
