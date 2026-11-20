@@ -86,6 +86,18 @@ pub struct Suggestion {
     pub remedy: Remedy,
 }
 
+/// What became of a plugin that was installed or switched on in this run
+/// of Rick: it is on the disk and waits for the next start, which loads
+/// it. The place that suggested it then says *… is installed. Restart
+/// Rick to use it.*
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pending {
+    /// Unpacked into the per-user plugins folder in this run.
+    Installed,
+    /// Disabled at the start and switched on since.
+    Enabled,
+}
+
 /// A kind of connection a suggested plugin would add to a section's
 /// *Add…*.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,6 +233,26 @@ impl App {
                 .no_suggest
                 .iter()
                 .any(|silenced| silenced == id)
+    }
+
+    /// Whether the plugin `id` was installed or switched on in this run
+    /// and waits for the next start: it is no longer suggested, and what
+    /// suggested it says that Rick is to be restarted. `None` for a
+    /// plugin that is loaded, for one that is still disabled, and for one
+    /// that is not there.
+    #[must_use]
+    pub fn plugin_pending(&self, id: &str) -> Option<Pending> {
+        let row = self
+            .plugins
+            .iter()
+            .find(|row| row.id == id && !row.removed)?;
+        match row.status {
+            PluginStatus::Installed => Some(Pending::Installed),
+            PluginStatus::Disabled if !self.model.settings.plugins.disabled.contains(&row.id) => {
+                Some(Pending::Enabled)
+            }
+            _ => None,
+        }
     }
 
     /// The plugins that may be suggested now, those on the disk first:

@@ -105,7 +105,7 @@ pub use registry::{
 };
 pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
 pub use settings::SETTINGS_FILE;
-pub use suggest::{ConnectionKind, Remedy, SuggestedConnection, Suggestion};
+pub use suggest::{ConnectionKind, Pending, Remedy, SuggestedConnection, Suggestion};
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
