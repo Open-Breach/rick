@@ -1,34 +1,82 @@
 name: release
-# On a `v*` tag: a release build on every OS, one archive per platform with
+# On a `v*` tag: a release build for every platform. macOS and Windows are
+# built here, one archive each. Linux is built by Trebuchet's reusable
+# workflow linux-packages.yml (Open-Breach/trebuchet), which the `linux` job
+# calls: for every distribution release of its target list and for x86-64
+# and arm64 it runs .github/scripts/linux-package.sh inside that release's
+# container and makes a deb or an rpm of the result, with one more for each
+# separate plugin, rick-plugin-<id>, and rick-plugins for all of them; and
+# one build per architecture is also the archive,
+# rick-<version>-linux-<arch>.tar.gz, with the plugin packages that fit it.
+# What follows describes an archive, with
 # the bundle `cargo xtask bundle --release` lays out — the binary, the kernel
 # dylibs and libstd it shares with the plugins, the pdfium library beside it
-# (SPEC.md: pdfium ships beside the binary), the GStreamer runtime on macOS
-# and Windows (SPEC.md: bundled there, the system's on Linux; QUESTIONS.md
-# 89), the Visual C++ runtime on Windows (every module imports it, and a
-# machine without the Visual C++ Redistributable has none), `plugins/` with
-# every plugin (QUESTIONS.md 81) and the 7-Zip library
+# (SPEC.md: pdfium ships beside the binary), the Visual C++ runtime on
+# Windows (every module imports it, and a machine without the Visual C++
+# Redistributable has none), `plugins/` with the default set of plugins
+# (specs/plugin-distribution.md §4) and the 7-Zip library
 # with its licence beside the archive plugin (issue 51; built from the
 # pinned sources on Linux and macOS, the pinned installer's 7z.dll on
 # Windows, see .github/scripts/sevenzip.sh) — plus LICENSE, README,
 # CHANGELOG and the third-party licences, as THIRD-PARTY-LICENSES.md at the
-# root and as third-party.json beside the binary, the component list the
-# About dialog shows (specs/about-dialog.md; issue 101), and on Linux the
+# root (the crates of Cargo.lock, then the components shipped outside Cargo
+# from about/bundled.toml) and as third-party.json beside the binary, the
+# component list the About dialog shows (specs/about-dialog.md; issue 101),
+# licenses/ with the texts pdfium and the standard library bring with them
+# (`cargo xtask bundle` copies them), and on Linux the
 # desktop entry and the icons under share/ in
 # the XDG layout (specs/app-icons.md); on macOS the bundle goes into
 # Rick.app (Contents/MacOS/ with the plugins beside the binary as
 # everywhere, Info.plist from packaging/macos/ with the version filled in,
 # Resources/Rick.icns) and the archive is the folder with Rick.app and the
-# texts, zipped with ditto; a smoke test of every archive; then a GitHub Release with the archives, their
-# SHA-256 sums and the tag's changelog section as its body. A tag with a
-# pre-release suffix (v0.1.0-rc1) makes a draft pre-release; a plain tag
-# publishes. Run by hand from a branch with a tag name, it is a dry run: the
-# same build and smoke test, then a draft release under that name on the
-# branch's commit (the tag itself is only created if the draft is published).
-# No signing, notarisation or installers in 0.1.
+# texts, zipped with ditto. The separate plugins are not in the archives:
+# `cargo xtask package --release` makes one `<id>-<version>-<platform>.rkp`
+# of each from the bundle and `plugins-<platform>.json`, the manifest the
+# plugin registry's publisher reads, and their folders leave the tree
+# before it is archived. On macOS and Windows the media plugin is one of
+# them, with the GStreamer runtime in its folder, so those archives hold no
+# GStreamer; on Linux it is in the archive and uses the system's. Then a
+# smoke test of every archive and of its packages, and a GitHub Release with
+# the archives, the packages and the manifests of the four platforms, their
+# SHA-256 sums and the tag's changelog section as its body. The release is
+# written as a draft, and a draft it stays until its files have verified
+# (below): only then does the `publish` job make a plain tag's release
+# public. A tag with a pre-release suffix (v0.1.0-rc1) stays a draft
+# pre-release. Run by hand from a branch with a tag name, it is a dry run:
+# the same build, smoke test and verification, then a draft release under
+# that name on the branch's commit (the tag itself is only created if the
+# draft is published). Leave the branch alone while a dry run is going:
+# GitHub refuses the draft (HTTP 403, in the Linux job that attaches)
+# where the run's commit is no longer the head of a branch and its
+# workflow files are on none. No signing, notarisation or installers in
+# 0.1.
+#
+# Every file of a release has a GitHub build attestation, made by the run
+# that built it (specs/system-integration.md §9): Trebuchet's workflow
+# attests the Linux files, this one the macOS and Windows archives, their
+# plugin packages and lists, and the checksums. The `verify` job then
+# checks files of the draft the way a user would, with
+# `gh attestation verify`: a Linux package and the two archives must
+# verify, and a copy with one byte changed must have no attestation. A
+# failure of `gh` that is no answer is neither: it fails the job as a
+# check that could not be made. Where the job fails, the release stays a
+# draft and nothing is public. A dry run attests and verifies too: its
+# files are real builds.
+#
+# The order is: build, attest, draft, verify, publish, and then the
+# `repositories` job tells Trebuchet's publisher, which takes the deb and
+# rpm files from the release page into the apt and dnf repositories on
+# get.openbreach.dev. A pre-release and a dry run stay drafts and are not
+# announced. Telling the publisher takes a token, the secret
+# TREBUCHET_DISPATCH_TOKEN: a real release run looks for it first, before
+# anything is built, and stops there if it is not set.
 #
 # Runners: the labels come from the repository variables RUNNER_LINUX_X64,
 # RUNNER_LINUX_ARM64, RUNNER_MACOS and RUNNER_WINDOWS; where one is not
-# set, the job runs on GitHub's runner of that platform.
+# set, the job runs on GitHub's runner of that platform. The Linux builds
+# run where Trebuchet's workflow puts them: on Depot's runners in this
+# organisation, on GitHub's in a fork, and on the labels of the two Linux
+# variables where they are set.
 on:
   push:
     tags: ["v*"]
@@ -49,8 +97,43 @@ jobs:
   licenses:
     runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
+      # A release ends by telling Trebuchet's publisher, with a token that
+      # is a secret of this repository. Without it the release would be
+      # built, verified and published, and the package repositories never
+      # told. So a real release run looks for the token here, in the first
+      # step of the job every other job waits for, and stops before
+      # anything is built. A pre-release and a dry run tell nobody and need
+      # none. That the token is set is all this can tell: whether it still
+      # works shows when it is used.
+      - name: the publisher's token
+        if: github.event_name == 'push' && !contains(github.ref_name, '-')
+        env:
+          TREBUCHET_DISPATCH_TOKEN: ${{ secrets.TREBUCHET_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$TREBUCHET_DISPATCH_TOKEN" ]; then
+            message="The secret TREBUCHET_DISPATCH_TOKEN is not set. A release ends by telling Trebuchet's publisher with it (Open-Breach/trebuchet, docs/publisher.md). Nothing was built and nothing is published. Set the secret in this repository and run this workflow again."
+            echo "::error::$message"
+            { echo "### Stopped before the build"; echo; echo "$message"; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "TREBUCHET_DISPATCH_TOKEN is set"
       - uses: actions/checkout@v4
+      # The version the Linux packages are made with: the tag's, whose
+      # release part must be the workspace's, as the build job checks for
+      # its own platforms.
+      - name: version
+        id: version
+        run: |
+          tag_version="${TAG#v}"
+          crate_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          if [ "${tag_version%%-*}" != "${crate_version%%-*}" ]; then
+            echo "tag $TAG does not match workspace version $crate_version"
+            exit 1
+          fi
+          echo "version=$tag_version" >> "$GITHUB_OUTPUT"
       # The README the archives carry describes this release
       # (specs/readme.md): the version in its status line is the tag's.
       # First, so a release cut from a commit without its README stops
@@ -68,6 +151,11 @@ jobs:
       # targets is not in it, or when it names a crate Cargo.lock does not
       # have (specs/about-dialog.md, Generation; QUESTIONS.md 261).
       - run: cargo about generate --features ext-preview-media/gstreamer about.hbs -o THIRD-PARTY-LICENSES.md
+      # cargo-about knows the crates. What ships outside Cargo — pdfium,
+      # 7-Zip, GStreamer, the standard library, the fonts and the icon font
+      # — follows from about/bundled.toml, so that the file names everything
+      # a release carries and not only the About dialog does.
+      - run: python3 .github/scripts/bundled-licenses.py about/bundled.toml >> THIRD-PARTY-LICENSES.md
       - run: cargo about generate --features ext-preview-media/gstreamer about-json.hbs -o third-party.json
       - run: python3 .github/scripts/check-third-party.py third-party.json --features ext-preview-media/gstreamer
       - uses: actions/upload-artifact@v4
@@ -78,20 +166,145 @@ jobs:
             third-party.json
           if-no-files-found: error
 
+  # Linux: the deb and rpm packages of every target and the archive of each
+  # architecture, built and smoke-tested by Trebuchet's workflow. It takes
+  # the licence lists of the job above as its build artifact, runs
+  # .github/scripts/linux-package.sh as the build, packages with the
+  # metadata of crates/rick/Cargo.toml, installs each package in a fresh
+  # container of its release and runs `rick --version` there. In that
+  # container, which has the package's dependencies and nothing of the
+  # build, it then runs .github/scripts/linux-smoke.sh: every plugin of the
+  # package loads, pdfium opens a PDF, two videos play, and where the build
+  # is also the archive its plugin packages install into the per-user
+  # folder and load, for the package and once more for the unpacked
+  # archive. What that script needs from the build, two test programs and
+  # two videos, travels in the workflow's folder for the smoke test, which
+  # no release sees. The call names the release tag, so the workflow
+  # attests its release files and attaches them to the release of the tag,
+  # a draft it makes where there is none yet; the release job below
+  # finishes that release.
+  # The dependencies are per distribution. To build: GStreamer's
+  # development files, beyond a compiler, and its tools and plug-ins to
+  # write the smoke test's videos, an H.264 encoder among them. To run, all
+  # of them by name (crates/rick/Cargo.toml says why the tools do not find
+  # them): what the binaries link — the C and C++ runtimes, GLib and
+  # GStreamer — the GStreamer plug-in sets the media previewer plays
+  # through, with a decoder for H.264 (the libav plug-in on Debian and
+  # Ubuntu; on Fedora the OpenH264 plug-in and the parser it needs, from
+  # the bad-free set), and the libraries the user interface loads by name
+  # once it opens a window, for X11 and for Wayland, with Vulkan and EGL to
+  # draw with.
+  linux:
+    needs: licenses
+    # contents: write to attach to the release; the other two for the
+    # build attestations, which a called workflow cannot grant itself.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: Open-Breach/trebuchet/.github/workflows/linux-packages.yml@main
+    with:
+      app: rick
+      version: ${{ needs.licenses.outputs.version }}
+      build-artifact: third-party-licenses
+      build-command: .github/scripts/linux-package.sh
+      smoke-command: .github/scripts/linux-smoke.sh
+      release-tag: ${{ inputs.tag || github.ref_name }}
+      bundle-dir: target/release/bundle
+      desktop-file: packaging/linux/rick.desktop
+      icon: assets/icons/linux/hicolor
+      # The separate plugins as packages of their own, `rick-plugin-<id>`
+      # (specs/plugin-distribution.md §2, decision 5, and §4): the nine of
+      # Linux, each from the folder linux-package.sh takes out of the
+      # bundle, installed beside the binary's other plugins and pinned to
+      # the `rick` package of exactly this version. `rick-plugins` is all
+      # of them. The summary is what `apt show` and `dnf info` print.
+      plugins-dir: /usr/lib/rick/plugins
+      plugins: |
+        [
+          { "id": "git", "summary": "Git for the Rick file manager: status badges, the branch and the Git actions",
+            "files": "target/release/plugin-packages/git" },
+          { "id": "svn", "summary": "Subversion for the Rick file manager: status badges and the SVN actions",
+            "files": "target/release/plugin-packages/svn" },
+          { "id": "zfs", "summary": "ZFS for the Rick file manager: snapshots, file versions and restore",
+            "files": "target/release/plugin-packages/zfs" },
+          { "id": "ssh", "summary": "SSH for the Rick file manager: remote hosts as locations",
+            "files": "target/release/plugin-packages/ssh" },
+          { "id": "vfs-s3", "summary": "S3 for the Rick file manager: Amazon S3 and compatible stores as locations",
+            "files": "target/release/plugin-packages/vfs-s3" },
+          { "id": "vfs-azure", "summary": "Azure Blob for the Rick file manager: storage accounts as locations",
+            "files": "target/release/plugin-packages/vfs-azure" },
+          { "id": "vfs-gcs", "summary": "Google Cloud Storage for the Rick file manager: projects as locations",
+            "files": "target/release/plugin-packages/vfs-gcs" },
+          { "id": "preview-office", "summary": "Office documents in the preview of the Rick file manager",
+            "files": "target/release/plugin-packages/preview-office" },
+          { "id": "preview-3d", "summary": "3D models in the preview of the Rick file manager",
+            "files": "target/release/plugin-packages/preview-3d" }
+        ]
+      build-deps: |
+        {
+          "debian": [
+            "libgstreamer1.0-dev", "libgstreamer-plugins-base1.0-dev",
+            "gstreamer1.0-tools", "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good",
+            "gstreamer1.0-plugins-ugly"
+          ],
+          "ubuntu": [
+            "libgstreamer1.0-dev", "libgstreamer-plugins-base1.0-dev",
+            "gstreamer1.0-tools", "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good",
+            "gstreamer1.0-plugins-ugly"
+          ],
+          "fedora": [
+            "gstreamer1-devel", "gstreamer1-plugins-base-devel",
+            "gstreamer1", "gstreamer1-plugins-base", "gstreamer1-plugins-good",
+            "gstreamer1-plugin-openh264", "gstreamer1-plugins-bad-free"
+          ]
+        }
+      runtime-deps: |
+        {
+          "debian": [
+            "libc6", "libgcc-s1", "libstdc++6", "libglib2.0-0",
+            "libgstreamer1.0-0", "libgstreamer-plugins-base1.0-0",
+            "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good", "gstreamer1.0-libav",
+            "libxkbcommon0", "libxkbcommon-x11-0", "libwayland-client0", "libwayland-egl1",
+            "libxcb1", "libx11-6", "libx11-xcb1", "libxcursor1", "libxi6",
+            "libvulkan1", "libegl1"
+          ],
+          "ubuntu": [
+            "libc6", "libgcc-s1", "libstdc++6", "libglib2.0-0",
+            "libgstreamer1.0-0", "libgstreamer-plugins-base1.0-0",
+            "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good", "gstreamer1.0-libav",
+            "libxkbcommon0", "libxkbcommon-x11-0", "libwayland-client0", "libwayland-egl1",
+            "libxcb1", "libx11-6", "libx11-xcb1", "libxcursor1", "libxi6",
+            "libvulkan1", "libegl1"
+          ],
+          "fedora": [
+            "glibc", "libgcc", "libstdc++", "glib2",
+            "gstreamer1", "gstreamer1-plugins-base", "gstreamer1-plugins-good",
+            "gstreamer1-plugin-openh264", "gstreamer1-plugins-bad-free",
+            "libxkbcommon", "libxkbcommon-x11", "libwayland-client", "libwayland-egl",
+            "libxcb", "libX11", "libX11-xcb", "libXcursor", "libXi",
+            "vulkan-loader", "libglvnd-egl"
+          ]
+        }
+
   build:
     needs: licenses
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: "${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}", platform: linux-x64, pdfium: pdfium-linux-x64 }
-          # aarch64 Linux builds natively on GitHub's arm runner, no cross
-          # toolchain needed.
-          - { os: "${{ vars.RUNNER_LINUX_ARM64 || 'ubuntu-24.04-arm' }}", platform: linux-arm64, pdfium: pdfium-linux-arm64 }
+          # Linux is the `linux` job's. The steps and branches below that
+          # are for Linux no longer run from this matrix.
           - { os: "${{ vars.RUNNER_MACOS || 'macos-latest' }}", platform: macos-arm64, pdfium: pdfium-mac-arm64 }
           - { os: "${{ vars.RUNNER_WINDOWS || 'windows-latest' }}", platform: windows-x64, pdfium: pdfium-win-x64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    # Reading is all the build needs of the repository; the other two are
+    # for the build attestations of what it makes.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       # The whole history: crates/rick/build.rs writes the names of `git
       # shortlog` into the binary for the About dialog's credits, and a
@@ -101,8 +314,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
       - uses: Swatinem/rust-cache@v2
       # GStreamer for the media previewer (issue 18). Linux: the system
-      # packages, development files for the build and the codec plug-ins
-      # for the smoke test; the archive relies on the user's GStreamer.
+      # packages, development files for the build, the codec plug-ins and
+      # the tools for the sample the smoke test plays; the archive relies
+      # on the user's GStreamer.
       # macOS and Windows: the official runtime and development packages,
       # installed where their installers put them; the runtime is copied
       # into the bundle (RICK_GSTREAMER_DIR, QUESTIONS.md 106). The new
@@ -114,7 +328,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-            gstreamer1.0-plugins-ugly gstreamer1.0-libav
+            gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools
       # The downloaded packages are cached per GStreamer release: about
       # 920 MB on macOS and 520 MB on Windows, from a server that is slow
       # and cuts transfers short. A tag run's own cache
@@ -283,27 +497,64 @@ jobs:
           Get-ChildItem -Path $crt.FullName | Select-Object Name, Length
           "RICK_VCRUNTIME_DIR=$($crt.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
       # The bundle: binary, kernel dylibs, libstd, pdfium (from the PDF
-      # previewer's setting), the GStreamer runtime (from RICK_GSTREAMER_DIR on
-      # macOS and Windows), the Visual C++ runtime (from RICK_VCRUNTIME_DIR on
-      # Windows), plugins/ with the 7-Zip library beside the
-      # archive plugin (from RICK_SEVENZIP_DIR), from one build of every library,
-      # binary and example in the workspace with the media previewer's
-      # playback on, the previewer's pdfium_check example for the smoke
-      # test among them.
+      # previewer's setting), the Visual C++ runtime (from RICK_VCRUNTIME_DIR on
+      # Windows), plugins/ with the GStreamer runtime in the media plugin's
+      # folder (from RICK_GSTREAMER_DIR on macOS and Windows) and the 7-Zip
+      # library beside the archive plugin (from RICK_SEVENZIP_DIR), from one
+      # build of every library, binary and example in the workspace with the
+      # media previewer's playback on, the pdfium_check and preview_check
+      # examples for the smoke test among them.
       - run: cargo xtask bundle --release --features ext-preview-media/gstreamer
       # The official macOS libraries are universal; the archive is for
-      # Apple silicon, so the other half goes.
+      # Apple silicon, so the other half goes. Then the run paths are
+      # printed, for the record of how the runtime is found from the
+      # plugin's folder: the plugin's to gstreamer/lib beside itself, and
+      # those every library and element of the runtime carries to the lib
+      # folder it lies in or under.
       - name: thin the gstreamer libraries
         if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
-          find target/release/bundle/gstreamer -type f \( -name '*.dylib' -o -name 'gst-plugin-scanner' \) | while read -r file; do
+          media=target/release/bundle/plugins/preview-media
+          find "$media/gstreamer" -type f -name '*.dylib' | while read -r file; do
             if lipo -info "$file" 2>/dev/null | grep -q "arm64"; then
               lipo -thin arm64 "$file" -output "$file.thin" 2>/dev/null && mv "$file.thin" "$file" || true
             fi
           done
-          du -sh target/release/bundle/gstreamer
+          du -sh "$media/gstreamer"
+          for file in "$media/libext_preview_media.dylib" \
+                      "$media/gstreamer/lib/libgstreamer-1.0.0.dylib" \
+                      "$media/gstreamer/lib/gstreamer-1.0/libgstcoreelements.dylib"; do
+            echo "run paths of $file:"
+            otool -l "$file" | grep -A2 LC_RPATH | grep ' path ' || echo "  none"
+          done
+          echo "what the plugin links of GStreamer:"
+          otool -L "$media/libext_preview_media.dylib" | grep -i gst
+      # A short video for the smoke test to play: the test pattern as
+      # MPEG-4 part 2, written by the GStreamer the build has (the system's
+      # on Linux, the official runtime on macOS and Windows). GStreamer
+      # decodes that codec itself on every platform, through libav, whose
+      # library lies in the media plugin's folder on macOS and Windows; so
+      # the test is of the runtime, not of the machine. H.264 would be:
+      # the macOS runners are virtual machines without a hardware video
+      # decoder, and GStreamer's hardware decoder of macOS stops playback
+      # there (vtdec_hw, "VTDecompressionSessionCreate returned -12906").
+      - name: media sample
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p check
+          gst-inspect-1.0 --exists avenc_mpeg4 || { echo "no MPEG-4 encoder (avenc_mpeg4) in this GStreamer"; exit 1; }
+          gst-launch-1.0 -q videotestsrc num-buffers=90 pattern=smpte ! \
+            video/x-raw,width=320,height=240,framerate=30/1 ! videoconvert ! \
+            avenc_mpeg4 ! mp4mux ! filesink location=check/sample.mp4
+          ls -l check/sample.mp4
+      # The packages of the separate plugins and the manifest that lists
+      # them (specs/plugin-distribution.md §4), from the bundle as it now
+      # is: on macOS after the libraries were thinned, since the media
+      # plugin's package holds them.
+      - run: cargo xtask package --release
       - uses: actions/download-artifact@v4
         with: { name: third-party-licenses }
       - name: package
@@ -329,10 +580,28 @@ jobs:
             sed -e "s/@SHORT_VERSION@/${VERSION%%-*}/g" -e "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Info.plist"
             plutil -lint "$app/Info.plist"
             bin="$app/MacOS"
+            # licenses/, the texts pdfium and the standard library bring,
+            # sits with the other texts beside the bundle.
+            mv "$app/MacOS/licenses" "dist/$NAME/licenses"
           else
             cp -R target/release/bundle/. "dist/$NAME/"
             bin="dist/$NAME"
           fi
+          # The archive carries the default set: the separate plugins, the
+          # ones this platform's manifest lists a package for, leave the
+          # tree (specs/plugin-distribution.md §4). The ZFS plugin's helper
+          # rick-zfs stays beside the binary on Linux, where the plugin
+          # looks for it once its package is installed.
+          packages=target/release/packages
+          manifest="$packages/plugins-${{ matrix.platform }}.json"
+          separate="$(python3 -c 'import json,sys; print(" ".join(p["id"] for p in json.load(open(sys.argv[1], encoding="utf-8"))["plugins"]))' "$manifest")"
+          echo "separate plugins: $separate"
+          for id in $separate; do
+            test -d "$bin/plugins/$id" || { echo "no plugins/$id in the bundle to take out"; exit 1; }
+            rm -r "$bin/plugins/$id"
+          done
+          ls "$bin/plugins"
+          cp "$packages"/*.rkp "$manifest" dist/
           cp LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md "dist/$NAME/"
           # The component list the About dialog reads at start: beside the
           # binary, on macOS in the bundle's Resources
@@ -372,20 +641,36 @@ jobs:
             tar czf "$NAME.tar.gz" "$NAME"
             archive="$NAME.tar.gz"
           fi
-          if command -v sha256sum > /dev/null; then
-            sha256sum "$archive" > "$archive.sha256"
-          else
-            shasum -a 256 "$archive" > "$archive.sha256"
-          fi
-          cat "$archive.sha256"
+          # One checksum file each, for the archive, the packages and the
+          # manifest; the release job gathers them into SHA256SUMS.txt.
+          for file in "$archive" ./*.rkp ./plugins-*.json; do
+            file="${file#./}"
+            if command -v sha256sum > /dev/null; then
+              sha256sum "$file" > "$file.sha256"
+            else
+              shasum -a 256 "$file" > "$file.sha256"
+            fi
+            cat "$file.sha256"
+          done
           rm -r "$NAME"
           mkdir -p ../check
-          cp "../target/release/examples/pdfium_check$exe" ../check/
+          cp "../target/release/examples/pdfium_check$exe" "../target/release/examples/preview_check$exe" ../check/
+      # A build attestation for the release files this job made: the
+      # archive, the plugin packages and their list
+      # (specs/system-integration.md §9). The Linux files are attested by
+      # Trebuchet's workflow, which builds them.
+      - uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/*.rkp
+            dist/plugins-*.json
       - uses: actions/upload-artifact@v4
         with:
           name: archive-${{ matrix.platform }}
           path: dist/
           if-no-files-found: error
+      # The two test binaries and the sample video.
       - uses: actions/upload-artifact@v4
         with:
           name: pdfium-check-${{ matrix.platform }}
@@ -393,16 +678,21 @@ jobs:
           if-no-files-found: error
 
   # Each archive, as a user gets it: unpacked in an empty directory, the
-  # binary reports its version, lists every plugin of the platform as
-  # loaded, and pdfium loads from beside it.
+  # binary reports its version, lists the default set of the platform as
+  # loaded and holds no separate plugin, and pdfium loads from beside it.
+  # Then the packages of the platform: each is the file its manifest says,
+  # and unpacked into the empty per-user plugins folder, as Install from
+  # file… does it, every one of them loads from there. The media plugin
+  # plays a video: from the archive on Linux, from its package on macOS
+  # and Windows.
   smoke:
     needs: build
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: "${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}", platform: linux-x64 }
-          - { os: "${{ vars.RUNNER_LINUX_ARM64 || 'ubuntu-24.04-arm' }}", platform: linux-arm64 }
+          # Linux: Trebuchet's workflow tests every package and archive
+          # where it is installed, with .github/scripts/linux-smoke.sh.
           - { os: "${{ vars.RUNNER_MACOS || 'macos-latest' }}", platform: macos-arm64 }
           - { os: "${{ vars.RUNNER_WINDOWS || 'windows-latest' }}", platform: windows-x64 }
     runs-on: ${{ matrix.os }}
@@ -411,12 +701,13 @@ jobs:
       # For .github/scripts/check-plugins.sh, the per-platform plugin check.
       - uses: actions/checkout@v4
       # The Linux archives use the system GStreamer: the media plugin links
-      # it and loads only where it is installed, as a user's desktop has it.
+      # it and loads only where it is installed, as a user's desktop has it,
+      # with the plug-in packages that decode the sample video.
       - name: gstreamer and desktop-file-utils (linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 gstreamer1.0-plugins-good desktop-file-utils
+          sudo apt-get install -y --no-install-recommends libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav desktop-file-utils
       - uses: actions/download-artifact@v4
         with: { name: "archive-${{ matrix.platform }}", path: dist }
       - uses: actions/download-artifact@v4
@@ -430,7 +721,15 @@ jobs:
           exe=""
           if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
           cd dist
-          if command -v sha256sum > /dev/null; then sha256sum -c "$name".*.sha256; else shasum -a 256 -c "$name".*.sha256; fi
+          dist="$PWD"
+          for sums in ./*.sha256; do
+            if command -v sha256sum > /dev/null; then sha256sum -c "$sums"; else shasum -a 256 -c "$sums"; fi
+          done
+          # The manifest of this platform's packages (Open-Breach/trebuchet,
+          # docs/spec.md 7.4): nine of them, each a file that is here with
+          # the size and the SHA-256 the manifest gives, built for this
+          # release of Rick.
+          python3 "$GITHUB_WORKSPACE/.github/scripts/check-packages.py" "plugins-${{ matrix.platform }}.json" "${{ matrix.platform }}"
           mkdir empty && cd empty
           case "${{ runner.os }}" in
             Windows) 7z x "../$name.zip" > /dev/null ;;
@@ -442,6 +741,16 @@ jobs:
           for file in LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md 7-Zip-License.txt; do
             test -f "$file" || { echo "missing $file"; exit 1; }
           done
+          # The licence texts of what ships outside Cargo: the components
+          # of about/bundled.toml in the file, and in licenses/ the texts
+          # the pdfium build and the toolchain brought, pdfium's own with
+          # those of the libraries built into it.
+          grep -q '^## Bundled components$' THIRD-PARTY-LICENSES.md || { echo "THIRD-PARTY-LICENSES.md has no bundled components"; exit 1; }
+          grep -q '^### pdfium ' THIRD-PARTY-LICENSES.md || { echo "THIRD-PARTY-LICENSES.md does not name pdfium"; exit 1; }
+          for file in licenses/pdfium/LICENSE licenses/rust/COPYRIGHT-library.html; do
+            test -s "$file" || { echo "missing $file"; exit 1; }
+          done
+          test "$(ls licenses/pdfium | wc -l)" -gt 5 || { echo "licenses/pdfium holds no texts of the libraries built into pdfium"; ls licenses/pdfium; exit 1; }
           # macOS: the bundle (specs/app-icons.md) — a valid Info.plist
           # naming the binary and the icon, the icon set, and the binary
           # with everything beside it in Contents/MacOS, where the checks
@@ -471,14 +780,13 @@ jobs:
           python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert isinstance(d,list) and len(d) > 100, "too few entries"; print(len(d), "third-party entries")' \
             "$([ "${{ runner.os }}" = "macOS" ] && echo ../Resources/third-party.json || echo third-party.json)"
           test -f libpdfium.so || test -f libpdfium.dylib || test -f pdfium.dll || { echo "no pdfium library beside the binary"; exit 1; }
-          # The GStreamer runtime the media previewer plays through, bundled
-          # on macOS and Windows (QUESTIONS.md 106).
-          case "${{ runner.os }}" in
-            macOS) test -f gstreamer/lib/libgstreamer-1.0.0.dylib || { echo "no bundled GStreamer"; exit 1; }
-                   ls gstreamer/lib/gstreamer-1.0 | head -5 ;;
-            Windows) test -f gstreamer-1.0-0.dll || { echo "no bundled GStreamer"; exit 1; }
-                     ls gstreamer-1.0 | head -5 ;;
-          esac
+          # The macOS and Windows archives hold no GStreamer: the runtime
+          # travels in the media plugin's package
+          # (specs/plugin-distribution.md §4).
+          if [ "${{ runner.os }}" != "Linux" ]; then
+            found="$(find . -iname '*gst*' -o -iname '*gstreamer*' | head -5)"
+            test -z "$found" || { echo "GStreamer in the archive:"; echo "$found"; exit 1; }
+          fi
           # Linux: the desktop entry and the icons under share/
           # (specs/app-icons.md): the entry valid and naming the app id
           # `rick` as its icon and its StartupWMClass, and every file of
@@ -507,16 +815,15 @@ jobs:
           printf '%s\n' "$out" | sed -n 1p | grep -Eq "^Rick ${version%%-*}(-[0-9A-Za-z.]+)?$" || { echo "unexpected version line"; exit 1; }
           printf '%s\n' "$out" | sed -n 2p | grep -Eq "^[0-9a-f]{7,} · (Linux|macOS|Windows) [a-z0-9_]+ · plugin ABI [0-9]+ · built [0-9]{4}-[0-9]{2}-[0-9]{2}$" || { echo "unexpected build line"; exit 1; }
           printf '%s\n' "$out" | sed -n 3p | grep -q "^rustc " || { echo "no toolchain line"; exit 1; }
-          printf '%s\n' "$out" | grep -Eq "^git [0-9][^ ]* loaded$" || { echo "the git plugin is not listed as loaded"; exit 1; }
-          # The plugins, bundled and loaded from plugins/<id>/: Git and SVN,
-          # the archive and trash providers of issue 20, the previewers of
-          # issue 18 and the markup previewer of issue 51, the hex fallback
-          # of issue 17, the subdirectory search and this platform's index
-          # connector of issue 22; and the 7-Zip library with its licence
-          # beside the archive plugin (issue 51). The media previewer
-          # loading on macOS and Windows shows the bundled GStreamer runtime
-          # resolves; on Linux the runner's system GStreamer does.
-          "$GITHUB_WORKSPACE/.github/scripts/check-plugins.sh" . --sevenzip
+          printf '%s\n' "$out" | grep -Eq "^vfs-trash [0-9][^ ]* loaded$" || { echo "the trash plugin is not listed as loaded"; exit 1; }
+          # The default set, in plugins/<id>/ and loaded: the trash and
+          # archive providers, the archive, markup, hex and icon previewers,
+          # the subdirectory search and this platform's index connectors,
+          # the actions and the installer, on Linux the media previewer
+          # with the runner's system GStreamer; no separate plugin and
+          # nothing else in plugins/; and the 7-Zip library with its
+          # licence beside the archive plugin (issue 51).
+          "$GITHUB_WORKSPACE/.github/scripts/check-plugins.sh" . --sevenzip --archive
           # pdfium from beside the binary: the previewer's test binary, copied
           # next to rick, with no setting (a fresh runner) and no system
           # pdfium. The example has no run path of its own, so the library
@@ -539,20 +846,92 @@ jobs:
             # Visual Studio and rick.exe starting here proves nothing.
             python3 "$GITHUB_WORKSPACE/.github/scripts/check-vcruntime.py" .
           fi
+          # The packages, installed the way Install from file… does it:
+          # each is unpacked into the per-user plugins folder, which is
+          # empty on this runner, its folder whole. Every separate plugin
+          # of the platform then loads, which it can only do from there.
+          case "${{ runner.os }}" in
+            macOS) user_plugins="$HOME/Library/Application Support/Rick/plugins" ;;
+            Windows) user_plugins="$(cygpath -u "$APPDATA")/Rick/plugins" ;;
+            *) user_plugins="${XDG_CONFIG_HOME:-$HOME/.config}/rick/plugins" ;;
+          esac
+          if [ -d "$user_plugins" ] && [ -n "$(ls -A "$user_plugins")" ]; then
+            echo "$user_plugins is not empty on this runner"; ls "$user_plugins"; exit 1
+          fi
+          if [ "${{ runner.os }}" != "Linux" ]; then
+            if command -v gst-inspect-1.0 > /dev/null || [ -e /Library/Frameworks/GStreamer.framework ]; then
+              echo "this runner has a GStreamer of its own; the media test would prove nothing"; exit 1
+            fi
+          fi
+          mkdir -p "$user_plugins"
+          for package in "$dist"/*-"${{ matrix.platform }}".rkp; do
+            echo "installing $(basename "$package")"
+            python3 -m zipfile -e "$package" "$user_plugins"
+          done
+          ls "$user_plugins"
+          "$GITHUB_WORKSPACE/.github/scripts/check-plugins.sh" . --archive --installed
+          # The media preview, played for real: the host's test binary
+          # loads the plugins as rick does and plays the sample video
+          # through the previewer that claims it. On Linux the plugin is
+          # the archive's, with the system GStreamer. On macOS and Windows
+          # it is the one just installed from its package, and the runtime
+          # in its folder has to be found from there, on a runner that has
+          # no GStreamer of its own.
+          cp "$GITHUB_WORKSPACE/check/preview_check$exe" .
+          chmod +x "preview_check$exe"
+          from="per-user"
+          if [ "${{ runner.os }}" = "Linux" ]; then from="beside the binary"; fi
+          sample="$GITHUB_WORKSPACE/check/sample.mp4"
+          if ! LD_LIBRARY_PATH=. DYLD_LIBRARY_PATH=. "./preview_check$exe" "$sample" --play | tee media.txt; then
+            # GStreamer's own account of what refused, for whoever reads
+            # this log: its warnings and errors, which name the element.
+            echo "the sample did not play; once more with GStreamer's warnings:"
+            GST_DEBUG=2 LD_LIBRARY_PATH=. DYLD_LIBRARY_PATH=. "./preview_check$exe" "$sample" --play 2>&1 \
+              | grep -v "^plugin .*: loaded, " | tail -40 || true
+            exit 1
+          fi
+          grep -q "^plugin preview-media: loaded, $from, " media.txt || { echo "the media plugin was not loaded from $from"; exit 1; }
+          grep -q "^preview ok: .*first frame 320x240, played to " media.txt || { echo "the sample video did not play"; exit 1; }
 
   release:
-    needs: [build, smoke]
+    needs: [build, smoke, linux]
     runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 15
+    # contents: write for the release; the other two to attest the
+    # checksums, the one release file this job makes.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: { pattern: "archive-*", path: dist, merge-multiple: true }
+      # The Linux files, one artifact per target and architecture: the deb
+      # or rpm of each, and from one target per architecture the archive
+      # with its plugin packages and their list.
+      - uses: actions/download-artifact@v4
+        with: { pattern: "linux_rick_*", path: dist, merge-multiple: true }
       - name: checksums and body
         shell: bash
         run: |
           set -euo pipefail
           cd dist
+          ls -l
+          for arch in x64 arm64; do
+            test -f "rick-${TAG#v}-linux-$arch.tar.gz" || { echo "no Linux archive for $arch"; exit 1; }
+            test -f "plugins-linux-$arch.json" || { echo "no plugin list for linux-$arch"; exit 1; }
+            # The manifest of the Linux packages, as the smoke test checks
+            # it for the other platforms: nine of them, each a file that is
+            # here with the size and the SHA-256 the manifest gives.
+            python3 ../.github/scripts/check-packages.py "plugins-linux-$arch.json" "linux-$arch"
+          done
+          # The build job wrote a checksum file beside each of its files;
+          # the Linux files come without, and get theirs here.
+          for file in *; do
+            case "$file" in *.sha256) continue ;; esac
+            test -f "$file.sha256" || sha256sum "$file" > "$file.sha256"
+          done
           cat ./*.sha256 | sort -k2 > SHA256SUMS.txt
           rm ./*.sha256
           cat SHA256SUMS.txt
@@ -560,19 +939,174 @@ jobs:
           python3 .github/scripts/changelog-section.py "$TAG" CHANGELOG.md > body.md
           {
             echo
-            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, SVN, archive, trash, Office, media, archive-preview, markup (Markdown, HTML, CSV), hex-preview and subdirectory-search plugins and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo), the 7-Zip library (LGPL) beside the archive plugin for the disk images, the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), on Linux the desktop entry and the icons under \`share/\` in the XDG layout (copy \`share/\` into \`~/.local/share/\` and put \`rick\` on the PATH, or install the tarball with Rick's installer plugin), on macOS all of it inside \`Rick.app\` (drag it to Applications), LICENSE, README, CHANGELOG, THIRD-PARTY-LICENSES, the 7-Zip licence and \`third-party.json\` beside the binary (the component list the About dialog shows); \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see docs/building.md)."
+            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, and \`plugins/\` with the plugins every install has: the trash and the archives, the previewers for archives, markup (Markdown, HTML, CSV), icons and the hex view, the subdirectory search and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo), bulk rename, compress and extract, compare, the console and the installer, and on Linux the audio and video previewer (it uses the system's GStreamer: install the gstreamer1.0 plug-in packages for playback). Also the 7-Zip library (LGPL) beside the archive plugin for the disk images, on Linux the desktop entry and the icons under \`share/\` in the XDG layout (copy \`share/\` into \`~/.local/share/\` and put \`rick\` on the PATH, or install the tarball with Rick's installer plugin), on macOS all of it inside \`Rick.app\` (drag it to Applications), LICENSE, README, CHANGELOG, THIRD-PARTY-LICENSES, the 7-Zip licence and \`third-party.json\` beside the binary (the component list the About dialog shows)."
+            echo
+            echo "Plugins that are separate downloads: Git, SVN, ZFS (Linux), SSH, S3, Azure Blob, Google Cloud Storage, Office documents, 3D models and, on macOS and Windows, audio and video with its GStreamer runtime. Each is one \`<id>-<version>-<platform>.rkp\` below. Download the ones for your platform and install them with *Install from file…* in the Extensions dialogue; they are loaded at the next start. A package fits the Rick of this release only. \`plugins-<platform>.json\` lists a platform's packages for the plugin registry."
+            echo
+            echo "Linux packages: a \`.deb\` for each supported Debian and Ubuntu release and an \`.rpm\` for each supported Fedora release, for x86-64 and arm64, with the same plugins as the archives. The separate plugins are packages of their own there, \`rick-plugin-<id>\`, and \`rick-plugins\` is all of them; each fits the \`rick\` package of this release only, and the package manager keeps them together. They are also in the apt and dnf repositories on get.openbreach.dev. A package brings what a video in H.264 needs to play. On Fedora the H.264 library itself comes from Cisco's OpenH264 repository, which Fedora enables by default; with that repository switched off Rick still installs, and says the decoder is missing when it is asked to play such a video."
+            echo
+            echo "\`SHA256SUMS.txt\` has the checksums of the archives, the packages and the lists. Not signed or notarised (see docs/building.md)."
+            echo
+            echo "Every file has a GitHub build attestation, which says which workflow built it and from which commit. To check a Linux file, with the GitHub CLI: \`gh attestation verify <file> --owner Open-Breach --signer-repo Open-Breach/trebuchet\`. A macOS or Windows file, or \`SHA256SUMS.txt\`: \`gh attestation verify <file> --repo Open-Breach/rick\`. An attestation proves where a file comes from, not that it is safe."
           } >> body.md
           cat body.md
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/attest@v4
         with:
-          tag_name: ${{ env.TAG }}
-          target_commitish: ${{ github.sha }}
-          name: Rick ${{ env.TAG }}
-          body_path: body.md
-          draft: ${{ contains(env.TAG, '-') || github.event_name == 'workflow_dispatch' }}
-          prerelease: ${{ contains(env.TAG, '-') }}
-          files: |
-            dist/*.tar.gz
-            dist/*.zip
-            dist/SHA256SUMS.txt
-          fail_on_unmatched_files: true
+          subject-path: dist/SHA256SUMS.txt
+      # The release of the tag. Trebuchet's job has attached the Linux files
+      # already and, where the tag had no release yet, made a draft for
+      # them. This step works on that same release: it adds the files of
+      # the other platforms and the checksums, and gives the release its
+      # name and its notes. It does not publish: the release stays the
+      # draft it is until the `verify` job has passed, and the `publish`
+      # job makes it public. Whether it is a draft is not touched here, so
+      # a run repeated for a release that is out already leaves it out.
+      # The Linux files are uploaded once more, the same bytes, so that the
+      # release holds what SHA256SUMS.txt names even where Trebuchet's job
+      # attached nothing.
+      - name: draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ contains(env.TAG, '-') }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --draft --title "Rick $TAG" --notes-file body.md --target "$GITHUB_SHA"
+          fi
+          gh release upload "$TAG" --clobber \
+            dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/*.rkp dist/plugins-*.json dist/SHA256SUMS.txt
+          gh release edit "$TAG" --title "Rick $TAG" --notes-file body.md --target "$GITHUB_SHA" \
+            --prerelease="$PRERELEASE"
+          gh release view "$TAG" --json name,isDraft,isPrerelease,assets \
+            --jq '"\(.name): draft \(.isDraft), pre-release \(.isPrerelease), \(.assets | length) files"'
+
+  # The draft, checked the way a release's users are told to check it
+  # (specs/system-integration.md §9), before anyone can download it. One
+  # Linux package and the two archives of this workflow's own, macOS and
+  # Windows, are downloaded from the draft and verified with the two
+  # documented lines: the package against Trebuchet's workflow, which built
+  # it, the archives against this repository's. A copy of the package with
+  # one byte changed must be refused, and for the right reason: `gh` has to
+  # say that there is no attestation for its checksum.
+  #
+  # The check is .github/scripts/verify-attestations.py, which tells what
+  # `gh` answers apart by what it returns and not by its exit status alone.
+  # A failure that is no answer, such as no connection, a rate limit or a
+  # server error, is tried again a few times and then fails the job as a
+  # check that could not be made: it is never taken for a refusal of the
+  # changed file, and never for a verdict on a real one. The job ends in
+  # one of three ways, each named in its log and its summary: verified;
+  # not verified, which is a file that does not verify or a changed file
+  # that does; could not check.
+  #
+  # Publishing waits for this job: where it fails, the release stays a
+  # draft, nothing is public, and the job's summary says so.
+  verify:
+    needs: release
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    # A draft is visible with write access only.
+    permissions:
+      contents: write
+      attestations: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: attestations
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python3 .github/scripts/verify-attestations.py "$TAG" \
+            --repo "$GITHUB_REPOSITORY" --linux-signer Open-Breach/trebuchet
+      # What a failed check leaves, said where the run is looked at first,
+      # under what the check itself wrote there. The release is asked, not
+      # assumed: a run repeated for a release that was out before stays
+      # out.
+      - name: not published
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          case "$(gh release view "$TAG" --json isDraft --jq .isDraft 2> /dev/null || echo none)" in
+            true) left="The release stays a draft: nothing is public, and the package repositories are not told." ;;
+            false) left="The release of this tag was public before this run, and still is. The package repositories are not told." ;;
+            *) left="No release of this tag was found: nothing is public." ;;
+          esac
+          {
+            echo "### Not published"
+            echo
+            echo "The check of \`$TAG\` did not end in *verified*; what it ended in is above. $left"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "$left"
+
+  # Publishing, the last step of a release, and only after the files of the
+  # draft have verified. A plain tag's draft becomes the published release
+  # here. A tag with a pre-release suffix and a dry run stay drafts: the job
+  # runs for them all the same and says what it left, so that a dry run
+  # goes through the whole order.
+  publish:
+    needs: verify
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PUBLISH: ${{ github.event_name == 'push' && !contains(env.TAG, '-') }}
+        run: |
+          set -euo pipefail
+          if [ "$PUBLISH" = true ]; then
+            gh release edit "$TAG" --draft=false
+            said="Published, after its files verified."
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            said="A dry run: its files verified, and it stays a draft. A plain tag is published at this step."
+          else
+            said="A pre-release: its files verified, and it stays a draft."
+          fi
+          state="$(gh release view "$TAG" --json name,isDraft,isPrerelease,assets \
+            --jq '"\(.name): draft \(.isDraft), pre-release \(.isPrerelease), \(.assets | length) files"')"
+          echo "$said"
+          echo "$state"
+          { echo "### $TAG"; echo; echo "$said"; echo; echo "$state"; } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$PUBLISH" = true ] && [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != false ]; then
+            echo "::error::$TAG is still a draft after publishing"
+            exit 1
+          fi
+
+  # The apt and dnf repositories on get.openbreach.dev: Trebuchet's publisher
+  # is told of the release and takes its deb and rpm files from the release
+  # page (Open-Breach/trebuchet, docs/publisher.md). Only for a published
+  # release, so after the `publish` job: a pre-release and a dry run are
+  # drafts, which the publisher cannot fetch, and the repositories have one
+  # channel. The token may send this one event to that one repository; the
+  # first job of the run has looked for it already.
+  repositories:
+    needs: [licenses, publish]
+    if: github.event_name == 'push' && !contains(github.ref_name, '-')
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: tell the publisher
+        env:
+          GH_TOKEN: ${{ secrets.TREBUCHET_DISPATCH_TOKEN }}
+          VERSION: ${{ needs.licenses.outputs.version }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::the secret TREBUCHET_DISPATCH_TOKEN is not set: the release is published, the repositories are not told"
+            exit 1
+          fi
+          gh api repos/Open-Breach/trebuchet/dispatches \
+            -f event_type=release \
+            -f "client_payload[app]=rick" \
+            -f "client_payload[version]=$VERSION" \
+            -f "client_payload[release_url]=https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"

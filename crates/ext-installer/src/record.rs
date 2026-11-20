@@ -187,13 +187,15 @@ impl Record {
     #[must_use]
     pub fn installed_at_time(&self) -> Option<SystemTime> {
         let text = self.installed_at.to_string();
-        chrono::DateTime::parse_from_rfc3339(&text)
-            .map(SystemTime::from)
+        text.parse::<jiff::Timestamp>()
             .or_else(|_| {
-                chrono::NaiveDateTime::parse_from_str(&text, "%Y-%m-%dT%H:%M:%S")
-                    .map(|naive| SystemTime::from(naive.and_utc()))
+                // A datetime without an offset is read as UTC.
+                jiff::civil::DateTime::strptime("%Y-%m-%dT%H:%M:%S", &text)
+                    .and_then(|naive| naive.to_zoned(jiff::tz::TimeZone::UTC))
+                    .map(|utc| utc.timestamp())
             })
             .ok()
+            .map(SystemTime::from)
     }
 
     /// The names of the command symlinks the record lists.
@@ -210,8 +212,10 @@ impl Record {
 /// A system time as a TOML datetime in UTC, to the second.
 #[must_use]
 pub fn datetime_of(time: SystemTime) -> toml::value::Datetime {
-    let text = chrono::DateTime::<chrono::Utc>::from(time)
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let text = jiff::Timestamp::try_from(time)
+        .ok()
+        .and_then(|at| jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", at).ok())
+        .unwrap_or_default();
     text.parse().unwrap_or_else(|_| {
         // RFC 3339 is TOML's own datetime grammar; the epoch is the
         // fallback a parse failure would need, and it does parse.

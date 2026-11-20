@@ -102,6 +102,8 @@ fn window(start: &Path) -> (Harness<'static, RickUi>, Arc<Fake>, Taken) {
             points: Points::ACTION,
             platforms: Platforms::ALL,
             previews: &[],
+            markers: &[],
+            connections: &[],
             commands: &[],
         },
         Arc::clone(&taken),

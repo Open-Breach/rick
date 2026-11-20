@@ -2,9 +2,10 @@
 
 use std::time::SystemTime;
 
-use chrono::{DateTime, Datelike, Local, Locale, TimeZone};
 use ext::t;
+use jiff::Zoned;
 use model::DateFormat;
+use pure_rust_locales::{Locale, locale_match};
 use types::EntryKind;
 
 /// `1.2 MiB`, `640 B`, or an em dash for an unknown size.
@@ -37,13 +38,29 @@ pub fn size(bytes: Option<u64>) -> String {
 /// empty for an unknown time.
 #[must_use]
 pub fn date(time: Option<SystemTime>, now: SystemTime, format: DateFormat) -> (String, String) {
-    let Some(time) = time else {
+    let (Some(time), Some(now)) = (time.and_then(local), local(now)) else {
         return (String::new(), String::new());
     };
-    let time: DateTime<Local> = time.into();
-    let now: DateTime<Local> = now.into();
-    let exact = time.format("%Y-%m-%d %H:%M:%S").to_string();
+    let exact = write(&time, "%Y-%m-%d %H:%M:%S");
     (written(&time, &now, format, system_locale()), exact)
+}
+
+/// `time` in the system's time zone. `None` for a moment outside the years
+/// the calendar counts, -9999 to 9999: it is written as an unknown time.
+fn local(time: SystemTime) -> Option<Zoned> {
+    Zoned::try_from(time).ok()
+}
+
+/// `time` as `pattern` writes it, a `strftime` pattern with English names.
+fn write(time: &Zoned, pattern: &str) -> String {
+    jiff::fmt::strtime::format(pattern, time).unwrap_or_default()
+}
+
+/// `time` in local time as `pattern` writes it ([`write`]): a time where
+/// the interface has a format of its own. Empty for a moment the calendar
+/// does not count.
+pub(crate) fn local_time(time: SystemTime, pattern: &str) -> String {
+    local(time).map_or_default(|time| write(&time, pattern))
 }
 
 /// How dates are written right now: the setting, and the moment today is
@@ -84,8 +101,7 @@ impl Dates {
 /// setting.
 #[must_use]
 pub fn exact(time: SystemTime) -> String {
-    let time: DateTime<Local> = time.into();
-    time.format("%Y-%m-%d %H:%M:%S").to_string()
+    local_time(time, "%Y-%m-%d %H:%M:%S")
 }
 
 /// A date as the paste-conflict dialogue writes it, which keeps the format
@@ -94,40 +110,36 @@ pub fn exact(time: SystemTime) -> String {
 /// and the ISO date for another year. Empty for an unknown time.
 #[must_use]
 pub fn brief(time: Option<SystemTime>, now: SystemTime) -> String {
-    let Some(time) = time else {
+    let (Some(time), Some(now)) = (time.and_then(local), local(now)) else {
         return String::new();
     };
-    let time: DateTime<Local> = time.into();
-    let now: DateTime<Local> = now.into();
-    let days_ago = now
-        .date_naive()
-        .signed_duration_since(time.date_naive())
-        .num_days();
-    match days_ago {
-        0 => format!("Today {}", time.format("%H:%M")),
-        1 => format!("Yesterday {}", time.format("%H:%M")),
-        2..=6 => time.format("%a %H:%M").to_string(),
-        _ if time.year() == now.year() => time.format("%b %-d").to_string(),
-        _ => time.format("%Y-%m-%d").to_string(),
+    match days_ago(&time, &now) {
+        0 => format!("Today {}", write(&time, "%H:%M")),
+        1 => format!("Yesterday {}", write(&time, "%H:%M")),
+        2..=6 => write(&time, "%a %H:%M"),
+        _ if time.year() == now.year() => write(&time, "%b %-d"),
+        _ => write(&time, "%Y-%m-%d"),
     }
+}
+
+/// The calendar days from the day of `time` to the day of `now`, each in
+/// its own zone; negative for a day after today.
+fn days_ago(time: &Zoned, now: &Zoned) -> i32 {
+    // No two days of the calendar are further apart than a span counts,
+    // so the difference is always there.
+    now.date()
+        .since(time.date())
+        .map_or(i32::MAX, |days| days.get_days())
 }
 
 /// `time` as `format` writes it on the day of `now`, `locale` being the
 /// system's for [`DateFormat::System`]. Days are calendar days in the
 /// times' own zone, and the clock has 24 hours but for the system's.
-fn written<Tz: TimeZone>(
-    time: &DateTime<Tz>,
-    now: &DateTime<Tz>,
-    format: DateFormat,
-    locale: Locale,
-) -> String
-where
-    Tz::Offset: std::fmt::Display,
-{
+fn written(time: &Zoned, now: &Zoned, format: DateFormat, locale: Locale) -> String {
     match format {
-        DateFormat::SmartTime => format!("{} {}", smart_day(time, now), time.format("%H:%M")),
+        DateFormat::SmartTime => format!("{} {}", smart_day(time, now), write(time, "%H:%M")),
         DateFormat::Smart => smart_day(time, now),
-        DateFormat::Iso => time.format("%Y-%m-%d %H:%M").to_string(),
+        DateFormat::Iso => write(time, "%Y-%m-%d %H:%M"),
         DateFormat::System => system_date(time, locale),
     }
 }
@@ -136,46 +148,117 @@ where
 /// the weekday for the two to six days before today, then the month and
 /// the day, with the year when it is not this year. A day after today is
 /// written as a date, never as a weekday.
-fn smart_day<Tz: TimeZone>(time: &DateTime<Tz>, now: &DateTime<Tz>) -> String
-where
-    Tz::Offset: std::fmt::Display,
-{
-    let days_ago = now
-        .date_naive()
-        .signed_duration_since(time.date_naive())
-        .num_days();
-    match days_ago {
+fn smart_day(time: &Zoned, now: &Zoned) -> String {
+    match days_ago(time, now) {
         0 => "Today".to_owned(),
         1 => "Yesterday".to_owned(),
-        2..=6 => time.format("%a").to_string(),
-        _ if time.year() == now.year() => time.format("%b %-d").to_string(),
-        _ => time.format("%b %-d %Y").to_string(),
+        2..=6 => write(time, "%a"),
+        _ if time.year() == now.year() => write(time, "%b %-d"),
+        _ => write(time, "%b %-d %Y"),
     }
 }
 
 /// The short date and time of `locale`: its date as the locale writes it
 /// and the clock without seconds, with 12 or 24 hours as the locale has
 /// them.
-fn system_date<Tz: TimeZone>(time: &DateTime<Tz>, locale: Locale) -> String
-where
-    Tz::Offset: std::fmt::Display,
-{
+fn system_date(time: &Zoned, locale: Locale) -> String {
+    let date = locale_date(time.date(), locale);
+    let (hour, minute) = (time.hour(), time.minute());
     // The locale's own time format carries seconds; whether it counts
-    // twelve hours shows in how it writes one o'clock in the afternoon.
-    let afternoon = chrono::Utc
-        .with_ymd_and_hms(2000, 1, 1, 13, 0, 0)
-        .single()
-        .map_or_default(|one| one.format_localized("%X", locale).to_string());
-    let clock = if afternoon.contains("13") {
-        "%H:%M"
-    } else {
-        "%I:%M %p"
-    };
+    // twelve hours shows in the conversion it writes the hour with.
+    let twenty_four = pieces(locale_match!(locale => LC_TIME::T_FMT))
+        .any(|piece| matches!(piece, Piece::Conversion('H' | 'k' | 'T' | 'R', _)));
+    if twenty_four {
+        return format!("{date} {hour:02}:{minute:02}");
+    }
+    let halves = locale_match!(locale => LC_TIME::AM_PM);
+    let half = halves.get(usize::from(hour >= 12)).copied();
     format!(
-        "{} {}",
-        time.format_localized("%x", locale),
-        time.format_localized(clock, locale)
+        "{date} {:02}:{minute:02} {}",
+        (hour + 11) % 12 + 1,
+        half.unwrap_or_default()
     )
+}
+
+/// One piece of a locale's `strftime` pattern.
+enum Piece {
+    /// A character that is written as it stands.
+    Plain(char),
+    /// A conversion such as `%d` or `%-m`: its letter, and the flag that
+    /// pads its number another way (`-` not at all, `_` with a space, `0`
+    /// with a zero).
+    Conversion(char, Option<char>),
+}
+
+/// The pieces of a locale's `strftime` pattern, in order. The modifiers
+/// `E` and `O` ask for the locale's own era and digits, which Rick does
+/// not write: the conversion is read as it is without them, the year of
+/// the common era in Western digits.
+fn pieces(pattern: &str) -> impl Iterator<Item = Piece> {
+    let mut chars = pattern.chars().peekable();
+    std::iter::from_fn(move || {
+        let c = chars.next()?;
+        if c != '%' {
+            return Some(Piece::Plain(c));
+        }
+        let flag = chars.next_if(|c| matches!(c, '-' | '_' | '0'));
+        while chars.next_if(|c| matches!(c, 'E' | 'O')).is_some() {}
+        // A percent sign the pattern ends in stands for itself.
+        Some(
+            chars
+                .next()
+                .map_or(Piece::Plain('%'), |letter| Piece::Conversion(letter, flag)),
+        )
+    })
+}
+
+/// `date` as `locale` writes a date, its `D_FMT` of the GNU C library's
+/// locale tables: the conversions those patterns are made of, with the
+/// locale's names for the month and the weekday. Any other conversion is
+/// left as the pattern has it.
+fn locale_date(date: jiff::civil::Date, locale: Locale) -> String {
+    // A number of two digits, padded as the flag says or else with `pad`.
+    let two = |value: i16, flag: Option<char>, pad: char| match flag.unwrap_or(pad) {
+        '-' => value.to_string(),
+        '_' => format!("{value:2}"),
+        _ => format!("{value:02}"),
+    };
+    // Four digits, and the sign of a year before the common era.
+    let four = |year: i16| {
+        if year < 0 {
+            format!("{year:+05}")
+        } else {
+            format!("{year:04}")
+        }
+    };
+    // A name of one of the locale's lists, which start at Sunday and at
+    // January.
+    let name = |names: &[&str], index: i8| {
+        let name = usize::try_from(index).ok().and_then(|i| names.get(i));
+        name.copied().unwrap_or_default().to_owned()
+    };
+    let (year, month, day) = (date.year(), date.month(), date.day());
+    let weekday = date.weekday().to_sunday_zero_offset();
+    let mut out = String::new();
+    for piece in pieces(locale_match!(locale => LC_TIME::D_FMT)) {
+        let text = match piece {
+            Piece::Plain(c) => c.to_string(),
+            Piece::Conversion('d', flag) => two(day.into(), flag, '0'),
+            Piece::Conversion('e', flag) => two(day.into(), flag, '_'),
+            Piece::Conversion('m', flag) => two(month.into(), flag, '0'),
+            Piece::Conversion('y', flag) => two(year.rem_euclid(100), flag, '0'),
+            Piece::Conversion('C', flag) => two(year.div_euclid(100), flag, '0'),
+            Piece::Conversion('Y', _) => four(year),
+            Piece::Conversion('F', _) => format!("{}-{month:02}-{day:02}", four(year)),
+            Piece::Conversion('a', _) => name(locale_match!(locale => LC_TIME::ABDAY), weekday),
+            Piece::Conversion('A', _) => name(locale_match!(locale => LC_TIME::DAY), weekday),
+            Piece::Conversion('b', _) => name(locale_match!(locale => LC_TIME::ABMON), month - 1),
+            Piece::Conversion('B', _) => name(locale_match!(locale => LC_TIME::MON), month - 1),
+            Piece::Conversion(other, _) => format!("%{other}"),
+        };
+        out.push_str(&text);
+    }
+    out
 }
 
 /// The locale the *System* date format writes in: the one the session
@@ -223,8 +306,7 @@ fn locale_named(name: &str) -> Locale {
 /// its own, as in the Properties dialogue.
 #[must_use]
 pub fn stamp(time: SystemTime) -> String {
-    let time: DateTime<Local> = time.into();
-    time.format("%Y-%m-%d %H:%M").to_string()
+    local_time(time, "%Y-%m-%d %H:%M")
 }
 
 /// The type of an entry in words, as the head of a dialogue names it:
@@ -362,11 +444,11 @@ mod tests {
     }
 
     /// A moment in UTC, for dates that read the same on every machine.
-    fn at(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> DateTime<chrono::Utc> {
-        chrono::Utc
-            .with_ymd_and_hms(year, month, day, hour, minute, 7)
-            .single()
-            .unwrap_or_else(|| panic!("no such moment"))
+    fn at(year: i16, month: i8, day: i8, hour: i8, minute: i8) -> Zoned {
+        jiff::civil::date(year, month, day)
+            .at(hour, minute, 7, 0)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .unwrap_or_else(|_| panic!("no such moment"))
     }
 
     /// Issue 149: the four date formats, as SPEC.md *Dates* writes them.
@@ -424,6 +506,67 @@ mod tests {
         assert_eq!(write(Locale::en_US), "08/24/2026 02:12 PM");
         assert_eq!(write(Locale::de_DE), "24.08.2026 14:12");
         assert_eq!(write(Locale::en_GB), "24/08/26 14:12");
+    }
+
+    /// The date is the locale's own pattern, read as the C library reads
+    /// it: the locale's names for the month and the weekday, a day or a
+    /// month without its zero or with a space for it, and the locale's
+    /// words for the halves of a day of twelve hours.
+    #[test]
+    fn the_system_date_format_writes_the_names_and_the_padding_of_the_locale() {
+        let now = at(2026, 8, 27, 16, 30);
+        let morning = at(2026, 3, 5, 9, 7);
+        let write = |locale| written(&morning, &now, DateFormat::System, locale);
+        assert_eq!(write(Locale::nb_NO), "05. mars 2026 09:07");
+        assert_eq!(write(Locale::is_IS), "fim  5.mar 2026 09:07");
+        assert_eq!(write(Locale::en_PH), "Thursday, 05 March, 2026 09:07 AM");
+        assert_eq!(write(Locale::cs_CZ), "5.3.2026 09:07");
+        assert_eq!(write(Locale::sq_AL), "5.3.26 09:07 PD");
+        // Midnight and noon are twelve o'clock where twelve hours count.
+        let write = |hour| {
+            written(
+                &at(2026, 3, 5, hour, 7),
+                &now,
+                DateFormat::System,
+                Locale::en_US,
+            )
+        };
+        assert_eq!(write(0), "03/05/2026 12:07 AM");
+        assert_eq!(write(12), "03/05/2026 12:07 PM");
+    }
+
+    /// A locale whose pattern asks for its own digits or era (`%Od`,
+    /// `%Ey`) is written with the common ones. It used to end in a panic.
+    #[test]
+    fn a_locale_with_its_own_digits_or_era_is_written_with_the_common_ones() {
+        let now = at(2026, 8, 27, 16, 30);
+        let time = at(2026, 8, 24, 14, 12);
+        let write = |locale| written(&time, &now, DateFormat::System, locale);
+        assert_eq!(write(Locale::th_TH), "24/08/26 14:12");
+        assert_eq!(write(Locale::fa_IR), "26/08/24 14:12");
+        assert_eq!(write(Locale::or_IN), "24-08-26 02:12 PM");
+    }
+
+    /// A moment after the year 9999 is one the calendar does not count: it
+    /// is written as an unknown time.
+    #[test]
+    fn a_time_beyond_the_calendar_is_written_as_an_unknown_one() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let beyond = SystemTime::UNIX_EPOCH + Duration::from_secs(400_000_000_000);
+        for format in [
+            DateFormat::SmartTime,
+            DateFormat::Smart,
+            DateFormat::Iso,
+            DateFormat::System,
+        ] {
+            assert_eq!(
+                date(Some(beyond), now, format),
+                (String::new(), String::new())
+            );
+        }
+        assert_eq!(brief(Some(beyond), now), "");
+        assert_eq!(exact(beyond), "");
+        assert_eq!(stamp(beyond), "");
     }
 
     #[test]

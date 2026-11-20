@@ -69,6 +69,8 @@
 //!     points: Points::empty(),
 //!     platforms: Platforms::ALL,
 //!     previews: &[],
+//!     markers: &[],
+//!     connections: &[],
 //!     commands: &[CommandSpec { name: "greet", help: "Say hello to someone" }],
 //! });
 //! let mut registry = Registry::new();

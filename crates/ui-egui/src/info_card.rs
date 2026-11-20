@@ -83,6 +83,9 @@ pub struct Action {
     pub glyph: Option<&'static str>,
     /// The label.
     pub label: String,
+    /// The button is drawn disabled and takes no click: what it would
+    /// start is running.
+    pub disabled: bool,
 }
 
 /// What the card shows.
@@ -509,7 +512,14 @@ fn actions(ui: &mut egui::Ui, card: &Card<'_>, state: &mut State, outcome: &mut 
                     } else {
                         ButtonKind::Secondary
                     };
-                    if widgets::card_button(ui, action.glyph, &action.label, kind).clicked() {
+                    let button = widgets::card_button_when(
+                        ui,
+                        action.glyph,
+                        &action.label,
+                        kind,
+                        !action.disabled,
+                    );
+                    if button.clicked() && !action.disabled {
                         outcome.action = Some(index);
                     }
                 }

@@ -16,7 +16,10 @@ that are regenerated with every release (specs/readme.md): it loads every
 extension a release carries into a registry and writes the Features list
 and the Install section from what registered, and the test `readme` holds
 the page against it and against the spec, or writes it when
-`RICK_README_WRITE` is set, which is what `cargo xtask readme` runs. The provider plugins of issue 21 are dependencies too,
+`RICK_README_WRITE` is set, which is what `cargo xtask readme` runs; the
+privacy paragraph of the spec's section 9 is asked of a README that
+describes 0.6.0 or later and refused in an earlier one (`check_privacy`),
+which is how it comes with the release. The provider plugins of issue 21 are dependencies too,
 for the acceptance tests that load them through the host and drive them
 against the containers CI starts (`RICK_S3_ENDPOINT` and friends), and
 `ext-ssh` with its `fake-sshd` feature, the SSH server in the test process
@@ -25,5 +28,8 @@ that their fixture generators are at hand and their library files are
 built beside the test binaries, from where the tests install them into a
 temporary plugins directory and load them through the host; the
 `gstreamer` feature turns the media previewer's playback on for the media
-tests. It is the top of the dependency graph and may depend on every other
+tests. `plugins-registry` is one with its `fixtures` feature: the registry
+tests run against a server on this machine and a key made in the test, and
+none asks the real registry; the `registry` module builds the index such a
+registry publishes from the plugins' manifests. It is the top of the dependency graph and may depend on every other
 crate in the workspace; nothing depends on it.

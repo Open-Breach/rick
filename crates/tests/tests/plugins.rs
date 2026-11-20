@@ -2,13 +2,19 @@
 //!
 //! Fixture plugins with a wrong API version, a wrong toolchain, another
 //! platform and a panicking entry point are refused or caught, listed with
-//! their reason, and the host keeps running; a per-user plugin wins over
+//! their reason, and the host keeps running; a plugin built for another
+//! Rick is refused for that before its library is opened, the manifest
+//! file says what each plugin is for, and the package of a separate plugin
+//! installs from file and loads (issue 250); a per-user plugin wins over
 //! the one beside the binary; disabling a plugin writes `rick.toml` and the
 //! next start lists it disabled; a job spawned inside a plugin shows in the
 //! job table and cancels from it; the Git plugin decorates a work tree and
-//! brings its action group exactly as the compiled-in extension did; and
-//! loading it costs at most 50 ms on Linux.
+//! brings its action group exactly as the compiled-in extension did;
+//! loading it costs at most 50 ms on Linux; and loading every plugin leaves
+//! the process environment as it was (issue 264).
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -66,6 +72,42 @@ fn install(plugins_dir: &Path, stem: &str, edit: impl FnOnce(&mut PluginToml)) -
     dir
 }
 
+/// Lays `plugins_dir` out as the bundler lays out a bundle's: every plugin
+/// library built beside this binary in a folder named after its id, with
+/// the manifest the bundler would write. Returns the ids.
+fn install_every_plugin(plugins_dir: &Path) -> Vec<String> {
+    let (prefix, suffix) = (std::env::consts::DLL_PREFIX, std::env::consts::DLL_SUFFIX);
+    let mut stems: Vec<String> = fs::read_dir(deps_dir())
+        .unwrap_or_else(|e| panic!("{e}"))
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let stem = name.strip_prefix(prefix)?.strip_suffix(suffix)?;
+            // A plugin crate is an `ext-*` one built as a library file;
+            // cargo names the file after the crate, with no hash.
+            stem.starts_with("ext_").then(|| stem.to_owned())
+        })
+        .collect();
+    stems.sort();
+    let mut ids = Vec::new();
+    for stem in stems {
+        let library = library_of(&stem);
+        let mut toml = plugins_native::describe(&library)
+            .unwrap_or_else(|e| panic!("{}: {e}", library.display()));
+        toml.library = Library::for_crate(&stem);
+        let dir = plugins_dir.join(&toml.id);
+        toml.write(&dir.join(MANIFEST_FILE))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let file = toml
+            .library
+            .for_os(std::env::consts::OS)
+            .unwrap_or_else(|| panic!("no library name for this OS"));
+        fs::copy(&library, dir.join(file)).unwrap_or_else(|e| panic!("{e}"));
+        ids.push(toml.id);
+    }
+    ids
+}
+
 fn options(dirs: Vec<(Source, PathBuf)>) -> Options {
     Options {
         dirs,
@@ -97,11 +139,11 @@ fn fixture_plugins_are_refused_or_caught_and_the_host_keeps_running() {
         t.id = "probe-api".into();
         t.api_version = API_VERSION + 1;
     });
-    // Built against the contract before a form field could take its value
-    // from the clipboard (issue 221): API 21.
+    // Built against the contract before a manifest said what the plugin
+    // is for (issue 250): API 22.
     install(&plugins, "plugin_probe", |t| {
-        t.id = "probe-api-21".into();
-        t.api_version = 21;
+        t.id = "probe-api-22".into();
+        t.api_version = 22;
     });
     install(&plugins, "plugin_probe", |t| {
         t.id = "probe-toolchain".into();
@@ -125,8 +167,8 @@ fn fixture_plugins_are_refused_or_caught_and_the_host_keeps_running() {
 
     let host = Host::load(&options(vec![(Source::BesideBinary, plugins)]));
     refused_with(&host, "probe-api", "API version");
-    assert_eq!(API_VERSION, 22, "the contract of the clipboard rule");
-    refused_with(&host, "probe-api-21", "API version");
+    assert_eq!(API_VERSION, 23, "the contract of the triggers");
+    refused_with(&host, "probe-api-22", "API version");
     refused_with(&host, "probe-toolchain", "built with");
     refused_with(&host, "probe-platform", "built for");
     refused_with(&host, "panic", "panicked during registration");
@@ -145,6 +187,261 @@ fn fixture_plugins_are_refused_or_caught_and_the_host_keeps_running() {
     assert_eq!(registry.extensions(), &[types::ExtId("probe")]);
     assert_eq!(registry.previewers().len(), 1);
     assert_eq!(registry.actions().len(), 1);
+}
+
+/// The reason the host refused the plugin `id` with, word for word.
+fn refusal<'a>(host: &'a Host, id: &str) -> &'a str {
+    match status_of(host, id) {
+        PluginStatus::Refused(reason) => reason,
+        other => panic!("{id}: expected a refusal, got {other:?}"),
+    }
+}
+
+/// Issue 250, item 2: `plugin.toml` names the Rick the plugin was built
+/// with, and the host refuses another one's before it opens the library
+/// (specs/plugin-distribution.md §3).
+#[test]
+fn a_plugin_built_for_another_rick_is_refused_and_its_library_never_opened() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let plugins = dir.path().join("plugins");
+    // The bundler's manifest names this build's Rick, and loads.
+    let own = install(&plugins, "plugin_probe", |t| {
+        assert_eq!(t.rick, plugins_native::HOST_RICK);
+        assert_eq!(t.rick, env!("CARGO_PKG_VERSION"), "the workspace's version");
+    });
+    // The release before, with a library that would load.
+    let before = install(&plugins, "plugin_probe", |t| {
+        t.id = "probe-before".into();
+        t.rick = "0.4.1".into();
+    });
+    // The same with a library whose entry point panics, and with a file
+    // that is no library: opening either would give another reason.
+    let panics = install(&plugins, "plugin_panic", |t| {
+        t.id = "panic-before".into();
+        t.rick = "0.4.1".into();
+    });
+    let broken = install(&plugins, "plugin_probe", |t| {
+        t.id = "broken-before".into();
+        t.rick = "0.4.1".into();
+    });
+    let library = Library::for_crate("plugin_probe");
+    let library = library
+        .for_os(std::env::consts::OS)
+        .unwrap_or_else(|| panic!("no library name for this OS"));
+    fs::write(broken.join(library), "not a library").unwrap_or_else(|e| panic!("{e}"));
+    // A manifest from before the field existed.
+    let unknown = install(&plugins, "plugin_probe", |t| t.id = "probe-unknown".into());
+    let manifest = unknown.join(MANIFEST_FILE);
+    let text = fs::read_to_string(&manifest).unwrap_or_else(|e| panic!("{e}"));
+    let without = text.replace(&format!("rick = \"{}\"\n", plugins_native::HOST_RICK), "");
+    assert_ne!(without, text, "the manifest names its Rick: {text}");
+    fs::write(&manifest, without).unwrap_or_else(|e| panic!("{e}"));
+    // A release to come, whose manifest holds a key this host does not
+    // know: still refused for its release, and listed by its name.
+    let later = install(&plugins, "plugin_probe", |t| {
+        t.id = "probe-later".into();
+        t.name = "Later probe".into();
+        t.version = "99.0.0".into();
+        t.rick = "99.0.0".into();
+    });
+    let manifest = later.join(MANIFEST_FILE);
+    let text = fs::read_to_string(&manifest).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(&manifest, format!("holograms = true\n{text}")).unwrap_or_else(|e| panic!("{e}"));
+
+    let host = Host::load(&options(vec![(Source::BesideBinary, plugins)]));
+    assert_eq!(status_of(&host, "probe"), &PluginStatus::Loaded);
+    assert_eq!(refusal(&host, "probe-before"), "Built for Rick 0.4.1");
+    assert_eq!(refusal(&host, "panic-before"), "Built for Rick 0.4.1");
+    assert_eq!(refusal(&host, "broken-before"), "Built for Rick 0.4.1");
+    assert_eq!(refusal(&host, "probe-unknown"), "Built for an unknown Rick");
+    assert_eq!(refusal(&host, "probe-later"), "Built for Rick 99.0.0");
+    let row = host
+        .plugins()
+        .iter()
+        .find(|p| p.id == "probe-later")
+        .unwrap_or_else(|| panic!("{:?}", host.plugins()));
+    assert_eq!(
+        (row.name.as_str(), row.version.as_str()),
+        ("Later probe", "99.0.0")
+    );
+    assert_eq!(host.extensions().len(), 1, "{:?}", host.plugins());
+
+    // The proof that no library of another release was opened: the list
+    // the kernel keeps of the files this process has mapped names the one
+    // plugin that loaded and none of the refused ones. The list is Linux's;
+    // elsewhere the reasons above stand for it, since a library that
+    // panics and a file that is none were refused for their release.
+    if std::env::consts::OS == "linux" {
+        let maps = fs::read_to_string("/proc/self/maps").unwrap_or_else(|e| panic!("{e}"));
+        let mapped = |dir: &Path| {
+            let dir = fs::canonicalize(dir).unwrap_or_else(|e| panic!("{e}"));
+            maps.contains(&format!("{}/", dir.display()))
+        };
+        assert!(mapped(&own), "the loaded plugin's library is mapped");
+        for dir in [&before, &panics, &broken, &unknown, &later] {
+            assert!(!mapped(dir), "{} was opened", dir.display());
+        }
+    }
+    drop(host);
+}
+
+/// Issue 250, item 3: a manifest says what the plugin is for, and
+/// `plugin.toml` carries it (specs/plugin-distribution.md §5). Git and
+/// Subversion name the entry that marks their folders, SSH and the three
+/// object stores the kind of connection they add, titled as its entry of
+/// *Add…* is; a plugin with neither has two empty lists.
+#[test]
+fn plugin_toml_carries_what_each_plugin_is_for() {
+    let triggers = |stem: &str| {
+        let toml = plugins_native::describe(&library_of(stem)).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(toml.api_version, API_VERSION, "{stem}");
+        let connections: Vec<(String, String)> = toml
+            .connections
+            .into_iter()
+            .map(|c| (c.section, c.title))
+            .collect();
+        (toml.markers, connections)
+    };
+    let marker = |name: &str| (vec![name.to_owned()], Vec::new());
+    let connection = |section: &str, title: &str| {
+        (
+            Vec::<String>::new(),
+            vec![(section.to_owned(), title.to_owned())],
+        )
+    };
+    assert_eq!(triggers("ext_git"), marker(".git"));
+    assert_eq!(triggers("ext_svn"), marker(".svn"));
+    assert_eq!(triggers("ext_ssh"), connection("network", "SSH"));
+    assert_eq!(triggers("ext_vfs_s3"), connection("cloud", "S3"));
+    assert_eq!(triggers("ext_vfs_azure"), connection("cloud", "Azure Blob"));
+    assert_eq!(
+        triggers("ext_vfs_gcs"),
+        connection("cloud", "Google Cloud Storage")
+    );
+    for stem in ["ext_vfs_trash", "ext_preview_hex", "plugin_probe"] {
+        assert_eq!(triggers(stem), (Vec::new(), Vec::new()), "{stem}");
+    }
+
+    // The titles are those of the entries of *Add…*: the English of each
+    // dialogue's title.
+    for (english, key, title) in [
+        (
+            include_str!("../../ext-ssh/locales/en.ftl"),
+            "ssh-ssh",
+            "SSH",
+        ),
+        (
+            include_str!("../../ext-vfs-s3/locales/en.ftl"),
+            ext_vfs_s3::schema().title.0,
+            "S3",
+        ),
+        (
+            include_str!("../../ext-vfs-azure/locales/en.ftl"),
+            ext_vfs_azure::schema().title.0,
+            "Azure Blob",
+        ),
+        (
+            include_str!("../../ext-vfs-gcs/locales/en.ftl"),
+            ext_vfs_gcs::schema().title.0,
+            "Google Cloud Storage",
+        ),
+    ] {
+        assert!(
+            english
+                .lines()
+                .any(|line| line == format!("{key} = {title}")),
+            "{key} is not titled {title}"
+        );
+    }
+
+    // The file as the bundler writes it, for Git and for S3.
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let written = |stem: &str| {
+        let folder = install(dir.path(), stem, |_| {});
+        fs::read_to_string(folder.join(MANIFEST_FILE)).unwrap_or_else(|e| panic!("{e}"))
+    };
+    let git = written("ext_git");
+    assert!(git.contains("\nmarkers = [\".git\"]\n"), "{git}");
+    assert!(!git.contains("[[connections]]"), "{git}");
+    let s3 = written("ext_vfs_s3");
+    assert!(s3.contains("\nmarkers = []\n"), "{s3}");
+    assert!(
+        s3.contains("\n[[connections]]\nsection = \"cloud\"\ntitle = \"S3\"\n"),
+        "{s3}"
+    );
+}
+
+/// Issue 250, item 4: the package `cargo xtask package` makes of a
+/// separate plugin (specs/plugin-distribution.md §4) is what *Install from
+/// file…* reads, the plugin unpacked from it loads at the next start, and
+/// the same bundle gives the same bytes. The packaging is the task's own
+/// code, run here on a real plugin library.
+#[test]
+fn a_plugin_s_package_installs_from_file_and_loads_from_the_per_user_folder() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    // A bundle's plugins folder: Git, which is separate, with a file
+    // beside its library, and the trash, which is of the default set.
+    let bundle = dir.path().join("bundle").join("plugins");
+    let git = install(&bundle, "ext_git", |_| {});
+    fs::create_dir(git.join("share")).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(git.join("share").join("notice.txt"), "beside the library")
+        .unwrap_or_else(|e| panic!("{e}"));
+    install(&bundle, "ext_vfs_trash", |_| {});
+    let separate: BTreeSet<String> = ["ext_git".to_owned()].into_iter().collect();
+    let os = std::env::consts::OS;
+    let platform = xtask::package::platform_name(os, std::env::consts::ARCH);
+    let pack = |out: &Path| {
+        xtask::package::write(
+            &bundle,
+            out,
+            &platform,
+            os,
+            plugins_native::HOST_RICK,
+            &separate,
+        )
+        .unwrap_or_else(|e| panic!("{e}"))
+    };
+    let first = dir.path().join("packages");
+    let second = dir.path().join("again");
+    let made = pack(&first);
+    assert_eq!(pack(&second), made);
+    let [package] = made.as_slice() else {
+        panic!("one package, of the one separate plugin: {made:?}");
+    };
+    assert_eq!(
+        package.file,
+        format!("git-{}-{platform}.rkp", env!("CARGO_PKG_VERSION"))
+    );
+    for name in [
+        package.file.clone(),
+        xtask::package::manifest_name(&platform),
+    ] {
+        let one = fs::read(first.join(&name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let two = fs::read(second.join(&name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(one == two, "{name} differs between two runs");
+    }
+
+    // *Install from file…* takes the package into an empty per-user
+    // plugins folder, the folder whole.
+    let per_user = dir.path().join("config").join("plugins");
+    let folder = app::plugins::install(&first.join(&package.file), &per_user)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(folder, per_user.join("git"));
+    assert_eq!(
+        fs::read_to_string(folder.join("share").join("notice.txt")).ok(),
+        Some("beside the library".to_owned())
+    );
+    // The next start loads the plugin from there.
+    let host = Host::load(&options(vec![(Source::PerUser, per_user)]));
+    assert_eq!(
+        status_of(&host, "git"),
+        &PluginStatus::Loaded,
+        "{:?}",
+        host.plugins()
+    );
+    assert_eq!(host.plugins()[0].dir, folder);
+    assert_eq!(host.extensions().len(), 1);
+    drop(host);
 }
 
 #[test]
@@ -280,6 +577,87 @@ fn disabling_a_plugin_writes_rick_toml_and_the_next_start_lists_it_disabled() {
         ..Options::default()
     });
     assert_eq!(status_of(&host, "probe"), &PluginStatus::Loaded);
+}
+
+/// Issue 252, item 1: a plugin that is installed and disabled is suggested
+/// from its own manifest, as the host read it, with no registry at all
+/// (specs/plugin-distribution.md §8). Git by the entry that marks its
+/// folders, the 3D previewer by a file type it claims and S3 by the kind
+/// of connection it adds; none of the three libraries is loaded for it.
+#[test]
+fn a_disabled_plugin_is_suggested_from_the_manifest_the_host_read() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let plugins = dir.path().join("plugins");
+    for stem in ["ext_git", "ext_preview_3d", "ext_vfs_s3", "plugin_probe"] {
+        install(&plugins, stem, |_| {});
+    }
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let config_dir = fake.config_dir();
+    fs::create_dir_all(&config_dir).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        config_dir.join(app::SETTINGS_FILE),
+        "[plugins]\ndisabled = [\"git\", \"preview-3d\", \"vfs-s3\"]\n",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let settings =
+        app::settings::load(&config_dir.join(app::SETTINGS_FILE)).unwrap_or_else(|e| panic!("{e}"));
+    let host = Host::load(&Options {
+        dirs: vec![(Source::BesideBinary, plugins)],
+        disabled: settings.plugins.disabled,
+        ..Options::default()
+    });
+    for id in ["git", "preview-3d", "vfs-s3"] {
+        assert_eq!(status_of(&host, id), &PluginStatus::Disabled, "{id}");
+    }
+    assert_eq!(status_of(&host, "probe"), &PluginStatus::Loaded);
+    assert_eq!(host.extensions().len(), 1, "only the probe is loaded");
+
+    let mut events = Vec::new();
+    let mut app = App::new(Config {
+        platform: fake,
+        ui: Arc::new(EguiHost::new()),
+        extensions: host.extensions(),
+        config_dir: Some(config_dir),
+        start: Some(local(dir.path())),
+    });
+    app.set_plugins(rows(&host));
+    settle(&mut app, &mut events);
+    assert!(!app.plugin_registry().set_up, "no registry in a test");
+
+    let enable = |suggestion: Option<app::Suggestion>| {
+        suggestion.map(|s| {
+            assert_eq!(s.remedy, app::Remedy::Enable, "{}", s.id);
+            // The manifest's own words; the 3D previewer's says nothing.
+            assert!(!s.name.is_empty(), "{s:?}");
+            assert_eq!(s.description.is_empty(), s.id == "preview-3d", "{s:?}");
+            s.id
+        })
+    };
+    assert_eq!(
+        enable(app.suggestion_for_folder(["src", ".git"])).as_deref(),
+        Some("git")
+    );
+    assert_eq!(
+        enable(app.suggestion_for_file("gear.stl")).as_deref(),
+        Some("preview-3d")
+    );
+    let cloud = app.suggested_connections(ext::ConnectionSection::Cloud);
+    assert_eq!(
+        cloud
+            .iter()
+            .map(|kind| (kind.title.as_str(), kind.plugin.id.as_str()))
+            .collect::<Vec<_>>(),
+        [("S3", "vfs-s3")]
+    );
+    assert_eq!(
+        enable(cloud.into_iter().next().map(|kind| kind.plugin)).as_deref(),
+        Some("vfs-s3")
+    );
+    assert_eq!(
+        app.suggested_connections(ext::ConnectionSection::Network),
+        []
+    );
+    drop(host);
 }
 
 #[test]
@@ -456,6 +834,17 @@ fn rows(host: &Host) -> Vec<app::Plugin> {
             version: p.version.clone(),
             points: p.points,
             previews: p.previews.clone(),
+            markers: p.markers.clone(),
+            connections: p
+                .connections
+                .iter()
+                .filter_map(|kind| {
+                    Some(app::ConnectionKind {
+                        section: ext::ConnectionSection::named(&kind.section)?,
+                        title: kind.title.clone(),
+                    })
+                })
+                .collect(),
             status: match &p.status {
                 PluginStatus::Loaded => app::PluginStatus::Loaded,
                 PluginStatus::Disabled => app::PluginStatus::Disabled,
@@ -478,6 +867,11 @@ fn the_extensions_dialogue_lists_the_plugins_and_its_switch_writes_the_setting()
         t.id = "probe-api".into();
         t.name = "Old probe".into();
         t.api_version = API_VERSION + 1;
+    });
+    install(&plugins, "plugin_probe", |t| {
+        t.id = "probe-rick".into();
+        t.name = "Probe of 0.4".into();
+        t.rick = "0.4.1".into();
     });
     let host = Host::load(&options(vec![(Source::BesideBinary, plugins)]));
 
@@ -513,7 +907,7 @@ fn the_extensions_dialogue_lists_the_plugins_and_its_switch_writes_the_setting()
     // Both are listed, under what they mainly contribute, with what the
     // manifest says: the probe's description is the test plugin's.
     harness.get_by_label("PREVIEWERS");
-    harness.get_by_label("2 installed  ·  2 enabled  ·  1 needs attention");
+    harness.get_by_label("3 installed  ·  3 enabled  ·  2 need attention");
     row(&mut harness, "Probe");
     harness.get_by_label("The test plugin of the plugin host.");
     harness.get_by_label("Built-in plugin");
@@ -524,7 +918,13 @@ fn the_extensions_dialogue_lists_the_plugins_and_its_switch_writes_the_setting()
         .get_all_by_label_contains("extension API version")
         .count();
     assert!(refused >= 1, "the host's reason is shown");
-    assert_eq!(harness.get_all_by_label("Needs attention").count(), 2);
+    // The mark of each of the two refused rows, and the chip of the one
+    // whose details are open.
+    assert_eq!(harness.get_all_by_label("Needs attention").count(), 3);
+    // So does the one built for another Rick, in the words of the spec
+    // (issue 250).
+    row(&mut harness, "Probe of 0.4");
+    harness.get_by_label("Rick did not load this plugin: Built for Rick 0.4.1.");
 
     // The switch of the loaded row writes the setting and says that it
     // waits for the next start.
@@ -661,6 +1061,82 @@ fn the_search_and_svn_plugins_load_on_their_platforms() {
     assert!(indexes.contains(&"search-walk"), "{indexes:?}");
     assert_eq!(indexes.len(), loaded - 1, "{indexes:?}");
     drop(app);
+    drop(host);
+}
+
+/// Acceptance (issue 264): after the host has loaded every plugin of a
+/// bundle, the process environment is what it was at start, `PATH` and
+/// every other variable, and a program started from here is handed no
+/// plugin folder on its `PATH`. On every platform; Windows is where the
+/// host changed the `PATH`, for a plugin with a library beside its own.
+/// The bundle is a plugins directory laid out as the bundler lays one
+/// out, with every plugin library built beside this binary, and with a
+/// library beside the archive plugin's, as a bundle carries the 7-Zip
+/// library there. In a process of its own: the environment and where a
+/// process looks for libraries are things it has once.
+#[test]
+fn loading_every_plugin_leaves_the_environment_as_it_was() {
+    if !tests::alone("plugins::loading_every_plugin_leaves_the_environment_as_it_was") {
+        return;
+    }
+    let environment = || std::env::vars_os().collect::<BTreeMap<OsString, OsString>>();
+    let at_start = environment();
+
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let plugins = dir.path().join("plugins");
+    let ids = install_every_plugin(&plugins);
+    assert!(ids.iter().any(|id| id == "vfs-archive"), "{ids:?}");
+    assert!(ids.iter().any(|id| id == "preview-media"), "{ids:?}");
+    fs::write(
+        plugins
+            .join("vfs-archive")
+            .join(platform::sevenzip::LIBRARY_FILE),
+        "not a library; the plugin opens the real one by itself, when asked",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+
+    let host = Host::load(&options(vec![(Source::BesideBinary, plugins.clone())]));
+    // Every plugin of the bundle that is for this platform is loaded.
+    let mut loaded = 0;
+    for id in &ids {
+        match status_of(&host, id) {
+            PluginStatus::Loaded => loaded += 1,
+            PluginStatus::Refused(reason) if reason.starts_with("built for ") => {}
+            other => panic!("{id}: {other:?}"),
+        }
+    }
+    assert_eq!(status_of(&host, "vfs-archive"), &PluginStatus::Loaded);
+    assert!(loaded > 10, "{loaded} of {} plugins loaded", ids.len());
+
+    let after = environment();
+    for (name, value) in &after {
+        assert_eq!(
+            at_start.get(name),
+            Some(value),
+            "{} changed or appeared",
+            name.to_string_lossy()
+        );
+    }
+    assert_eq!(after.len(), at_start.len(), "a variable is gone");
+
+    // What a program started from here is given: the console's shell, a
+    // program opened with Enter.
+    let (shell, args) = if std::env::consts::OS == "windows" {
+        ("cmd", ["/C", "echo %PATH%"])
+    } else {
+        ("sh", ["-c", "echo \"$PATH\""])
+    };
+    let output = std::process::Command::new(shell)
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("{shell}: {e}"));
+    let path = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(output.status.success() && !path.trim().is_empty(), "{path}");
+    let plugins = plugins.display().to_string();
+    assert!(
+        !path.to_lowercase().contains(&plugins.to_lowercase()),
+        "a plugin folder is on the PATH of a program started from here: {path}"
+    );
     drop(host);
 }
 

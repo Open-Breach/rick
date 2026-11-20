@@ -7,8 +7,13 @@
 //! spec's (Decisions table, QUESTIONS.md 5, 24 and 30); the macOS and
 //! Windows targets were set from five measured runs on the CI runners, as
 //! `BENCHMARKS.md` records, last from the 0.2 run of issue 25 (QUESTIONS.md
-//! 188). Setting `RICK_BENCH_RECORD` turns the assertion off, for measuring
-//! before a target exists.
+//! 188). Setting `RICK_BENCH_RECORD` turns the assertion off: the bench
+//! workflow measures that way, and its summary marks every benchmark whose
+//! median is over the target (issue 277).
+//!
+//! A timing test holds what it measured to a figure through [`record`]
+//! alone: an assertion of its own would fail the bench run and cost it the
+//! numbers of every benchmark.
 
 use std::time::Duration;
 
@@ -199,6 +204,12 @@ pub const BENCHMARKS: &[Benchmark] = &[
         macos: ms(300),
         windows: ms(300),
     },
+    Benchmark {
+        key: "settings-reload",
+        linux: ms(50),
+        macos: ms(50),
+        windows: ms(50),
+    },
 ];
 
 /// The benchmark named `key`.
@@ -275,14 +286,36 @@ pub fn median(samples: &[Duration]) -> Duration {
     sorted[sorted.len() / 2]
 }
 
+/// The line [`record`] prints for a measurement of `key` on `os`:
+/// `BENCH <key> <os> <microseconds> <readable> (target <readable>; runs
+/// [..])`, the median of `samples` first in microseconds and then as a
+/// person reads it, then the target and every run's sample.
+///
+/// `.github/scripts/bench-summary.py` reads the key, the operating
+/// system, the microseconds and the target from it, the target as it
+/// stands in the brackets; a unit test here runs the script on lines this
+/// function wrote, so the two cannot drift apart unseen.
+///
+/// # Panics
+///
+/// On no samples.
+#[must_use]
+pub fn line(key: &str, os: &str, target: Duration, samples: &[Duration]) -> String {
+    let measured = median(samples);
+    format!(
+        "BENCH {key} {os} {} {measured:?} (target {target:?}; runs {samples:?})",
+        measured.as_micros()
+    )
+}
+
 /// Prints the measurement of `key`, the median of `samples` (one per run,
 /// see [`runs`]), and asserts it meets the target of this operating system.
 ///
-/// The line is `BENCH <key> <os> <microseconds> <readable>`; the bench
-/// workflow collects the first four fields, and every run's sample follows
-/// in brackets. The targets are release numbers: a debug build prints and
+/// The line is [`line()`]'s; the bench workflow collects it from the output
+/// of every run. The targets are release numbers: a debug build prints and
 /// does not assert, and so does a run with `RICK_BENCH_RECORD` set, which
-/// the bench workflow uses to measure before a target exists.
+/// the bench workflow sets: it measures, and its summary marks a
+/// benchmark whose median is over the target instead of failing the run.
 ///
 /// # Panics
 ///
@@ -292,10 +325,7 @@ pub fn record(key: &str, samples: &[Duration]) {
     let os = std::env::consts::OS;
     let target = target(key);
     let measured = median(samples);
-    println!(
-        "BENCH {key} {os} {} {measured:?} (target {target:?}; runs {samples:?})",
-        measured.as_micros()
-    );
+    println!("{}", line(key, os, target, samples));
     if !cfg!(debug_assertions) && std::env::var_os("RICK_BENCH_RECORD").is_none() {
         assert!(
             measured <= target,
@@ -387,6 +417,92 @@ mod tests {
                     rows.get(os)
                 );
             }
+        }
+    }
+
+    /// `bench-summary.py` on lines [`super::line()`] wrote, three runs of
+    /// four benchmarks: every target is shown as `BENCHMARKS.md` writes it,
+    /// a median over its target is marked and counted in the line above
+    /// the table, and a worst run alone over it is said and not counted
+    /// (issue 277).
+    #[test]
+    fn the_summary_marks_a_median_over_its_target() {
+        let ms = Duration::from_millis;
+        let us = Duration::from_micros;
+        let runs = [
+            [
+                ("fixture", ms(1_900)),
+                ("listing-complete", ms(450)),
+                ("pdf-first", ms(285)),
+                ("details-frame", us(3_100)),
+            ],
+            [
+                ("fixture", ms(2_000)),
+                ("listing-complete", ms(390)),
+                ("pdf-first", ms(11)),
+                ("details-frame", us(3_200)),
+            ],
+            [
+                ("fixture", ms(2_100)),
+                ("listing-complete", ms(460)),
+                ("pdf-first", ms(12)),
+                ("details-frame", us(3_300)),
+            ],
+        ];
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        for (i, run) in runs.iter().enumerate() {
+            let mut log = String::new();
+            for (key, sample) in run {
+                // As the harness prints it for a test with no other output.
+                log.push_str("test some::test ... ");
+                log.push_str(&super::line(
+                    key,
+                    "linux",
+                    super::target_on(key, "linux"),
+                    &[*sample],
+                ));
+                log.push('\n');
+            }
+            std::fs::write(dir.path().join(format!("bench-{}.log", i + 1)), log)
+                .unwrap_or_else(|e| panic!("{e}"));
+        }
+
+        let script = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../.github/scripts/bench-summary.py"
+        );
+        let output = std::process::Command::new("python3")
+            .arg(script)
+            .arg(dir.path().join("bench-*.log"))
+            .output();
+        let output = match output {
+            Ok(output) => output,
+            Err(error) => {
+                eprintln!("python3 is not available ({error}); the check is not run here");
+                return;
+            }
+        };
+        assert!(
+            output.status.success(),
+            "bench-summary failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8_lossy(&output.stdout);
+        let lines: Vec<&str> = text.lines().collect();
+        for expected in [
+            "### linux",
+            "**1 of 4 benchmarks is over its target:** `listing-complete`. Not counted, the \
+             median within the target and the worst run over it: `pdf-first`.",
+            "| Benchmark | Runs | Target | Median | Worst | Against the target | All runs (ms) |",
+            "| details-frame | 3 | 16.6 ms | 3.2 ms | 3.3 ms | within | 3.1, 3.2, 3.3 |",
+            "| fixture | 3 | 30 s | 2000 ms | 2100 ms | within | 1900.0, 2000.0, 2100.0 |",
+            "| listing-complete | 3 | 400 ms | 450 ms | 460 ms | **over** | 450.0, 390.0, 460.0 |",
+            "| pdf-first | 3 | 200 ms | 12.0 ms | 285 ms | within; worst run over | 285.0, 11.0, 12.0 |",
+        ] {
+            assert!(
+                lines.contains(&expected),
+                "no line {expected:?} in:\n{text}"
+            );
         }
     }
 

@@ -51,8 +51,22 @@ card for every file (`info_card.rs`: the icon, name, type and size, rows
 with a copy button each and *Show all n fields*) — hanging under the info
 button while the pointer is on it, pinned above the content per previewer,
 and centred with its buttons where there is nothing to show: no previewer
-(*Open with…*), a missing third-party library (*Download*,
-*Browse…*, *Retry*, *Where Rick looked*) or a failed preview; the Portal
+(*Open with…*, and **Install …** or **Enable …** where a plugin that is
+not there would show the file), a missing third-party library (*Download*,
+*Browse…*, *Retry*, *Where Rick looked*) or a failed preview; the
+suggestion bar of `suggestion.rs` under the toolbar where the hex view
+shows a file a plugin that is not there claims — one line on `bg/subtle`
+with the plugin's name and description, **Install** or **Enable**, **Not
+now** and **Don't suggest again**, taking no focus and no key, its buttons
+going under the text in a pane too narrow for one line, and the same bar
+between an explorer pane's toolbar and its list while the folder holds
+the marker of a plugin that is not there, one to a pane; after **Install**
+or **Enable** the bar that offered the plugin reads *Git is installed.
+Restart Rick to use it.* with **Restart now** until the pane leaves the
+file or the folder, the card has **Restart now** in the button's place,
+and a kind chosen in *Add…* is followed by a notice; on a Rick a package
+manager installed, **Install** opens the Extensions dialogue on the
+plugin; the Portal
 burst while a preview loads and a glyph with *No file selected* when
 there is none), the side panel (rows
 `sidebar/item-height` tall inset from the panel's edges; the editable
@@ -61,6 +75,12 @@ Recent and the Trash view among the places, the Trash row's pill with the
 trash's size tinted by its disk share; the This Machine, Network and Cloud
 sections under small-capitals headers with a folding caret, This Machine
 as drive cards with a usage bar, Eject and Add… rows, nothing indented;
+*Add…* and the menu of a section's header listing, after the kinds of
+connection the loaded plugins add, the kinds of the suggested plugins —
+the title with `DOWNLOAD_SIMPLE` and the size of the plugin's package,
+which choosing it installs, or *Enable* for a plugin that is on the disk
+and disabled — and the Cloud section shown while a cloud plugin is loaded
+or suggested;
 the section overviews drawn as drive tables in the pane) with the
 operations drawer floating over its foot — along the window's foot while
 the panel is hidden — (a `bg/card` card with its summary *2 running ·
@@ -138,7 +158,18 @@ dialogue (`extensions`: the plugins grouped by what they contribute, each
 with its enable switch and an amber dot when it needs attention; the
 chosen plugin's details with the manifest's description, the attention
 card and an info card whose rows copy; *Settings*, *Open folder*, *Remove*
-for a user's plugin and *Install from file…*), and drag and drop of entries: rows are drag
+for a user's plugin and *Install from file…*; the *Installed · Available*
+control over the list, the plugins the registry offers with their sizes,
+the details of one with **Install**, the line that says why there is no
+list with *Check now* where checking can help, *Restart now* while
+anything waits for the next start, and for a plugin with an update the
+card that reads the host's reason with **Update**, the header's count and
+**Update all** in the footer and in the notice of the start that found
+them — a notice can carry one button, and then stays until it is pressed
+or dismissed; *Install from URL…* with its prompt for an `https://`
+address, and in a Rick a package manager installed the command with its
+copy button in place of **Install**; *Not suggested* with **Suggest
+again** in the details of a plugin whose suggestions were silenced), and drag and drop of entries: rows are drag
 sources, folders, pane space, breadcrumb segments and tab headers are drop
 zones with the ghost, the live indicator and spring-loading in between (a
 pane at the Trash view trashes what lands in it); the side panel is never a

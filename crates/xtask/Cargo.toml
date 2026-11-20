@@ -1,7 +1,7 @@
 [package]
 name = "xtask"
 version.workspace = true
-description = "Rick's build tasks: `cargo xtask bundle` lays out the binary, the shared kernel libraries and every plugin in target/<profile>/bundle/."
+description = "Rick's build tasks: `cargo xtask bundle` lays out the binary, the shared kernel libraries and every plugin in target/<profile>/bundle/, and `cargo xtask package` makes the packages of the separate plugins from it."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -11,6 +11,13 @@ publish = false
 # workspace's own `rick-plugin-manifest` helper (QUESTIONS.md 81).
 [dependencies]
 serde_json = { workspace = true }
+# For `package`: the plugins' manifests are read, their folders zipped and
+# the archives hashed. `zip` deflates through flate2, whose backend a
+# direct dependency picks; xtask is built on its own, so it names it too.
+flate2 = { workspace = true }
+sha2 = { workspace = true }
+toml = { workspace = true }
+zip = { workspace = true }
 
 [lints]
 workspace = true

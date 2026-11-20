@@ -5,13 +5,13 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ext::platform::Platform;
+use ext::platform::{Platform, loader};
 use ext::{API_VERSION, Extension, Platforms, Points};
 use tracing::{debug, info, info_span, warn};
 
-use crate::HOST_TOOLCHAIN;
-use crate::load::{Loaded, load_library};
-use crate::manifest::{MANIFEST_FILE, ManifestError, PluginToml};
+use crate::load::{LoadError, Loaded, load_library};
+use crate::manifest::{self, ConnectionToml, Head, MANIFEST_FILE, ManifestError, PluginToml};
+use crate::{HOST_RICK, HOST_TOOLCHAIN};
 
 /// The directory, beside the binary and in the config directory, whose
 /// subdirectories are plugins.
@@ -66,6 +66,12 @@ pub struct Plugin {
     /// The file name extensions its previewers claim, as the manifest
     /// lists them.
     pub previews: Vec<String>,
+    /// The names of an entry that make a folder the plugin's business, as
+    /// the manifest lists them.
+    pub markers: Vec<String>,
+    /// The kinds of connection it adds to *Add…* in the side panel, as the
+    /// manifest lists them.
+    pub connections: Vec<ConnectionToml>,
     /// The plugin's directory.
     pub dir: PathBuf,
     /// Which plugins directory it was found in.
@@ -147,7 +153,8 @@ pub struct Host {
 struct Candidate {
     source: Source,
     dir: PathBuf,
-    toml: Result<PluginToml, ManifestError>,
+    /// What its manifest file holds, or why there is none to read.
+    text: Result<String, ManifestError>,
 }
 
 impl Host {
@@ -157,6 +164,14 @@ impl Host {
     /// with a reason.
     #[must_use]
     pub fn load(options: &Options) -> Self {
+        // Before the first library: on Windows the process looks for
+        // libraries beside the binary, in the folders named to the loader
+        // and in the system's folder from here on, and no longer in the
+        // current directory or on the `PATH`. For every start alike,
+        // whatever the plugins bring; nothing happens on Linux and macOS.
+        if let Err(error) = loader::restrict_search() {
+            warn!(%error, "the search for libraries is not restricted");
+        }
         let mut candidates: Vec<Candidate> = options
             .dirs
             .iter()
@@ -202,8 +217,8 @@ impl Host {
     }
 }
 
-/// The subdirectories of `dir`, each with its manifest or the reason it
-/// has none, in name order. A missing `dir` is nothing found.
+/// The subdirectories of `dir`, each with its manifest's text or the reason
+/// it has none, in name order. A missing `dir` is nothing found.
 fn scan(source: Source, dir: &Path) -> Vec<Candidate> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -221,10 +236,45 @@ fn scan(source: Source, dir: &Path) -> Vec<Candidate> {
     dirs.into_iter()
         .map(|dir| Candidate {
             source,
-            toml: PluginToml::read(&dir.join(MANIFEST_FILE)),
+            text: manifest::text(&dir.join(MANIFEST_FILE)),
             dir,
         })
         .collect()
+}
+
+/// The reason a plugin of another Rick release is refused with, as the
+/// plugins table and the Extensions dialogue show it; `rick` is what its
+/// manifest names, empty when it names none.
+fn built_for(rick: &str) -> String {
+    if rick.is_empty() {
+        "Built for an unknown Rick".to_owned()
+    } else {
+        format!("Built for Rick {rick}")
+    }
+}
+
+/// The row of a plugin whose manifest this host could not read as a whole:
+/// what `head` says of it, the directory's name for its id when the file
+/// names none, and the reason.
+fn unread(candidate: Candidate, head: Head, reason: String) -> Plugin {
+    warn!(dir = %candidate.dir.display(), %reason, "plugin refused");
+    let dir_name = candidate
+        .dir
+        .file_name()
+        .map_or_default(|n| n.to_string_lossy().into_owned());
+    Plugin {
+        id: head.id.unwrap_or(dir_name),
+        name: head.name,
+        description: head.description,
+        version: head.version,
+        points: Points::empty(),
+        previews: Vec::new(),
+        markers: Vec::new(),
+        connections: Vec::new(),
+        dir: candidate.dir,
+        source: candidate.source,
+        status: PluginStatus::Refused(reason),
+    }
 }
 
 /// Checks one candidate and loads it when everything fits.
@@ -233,33 +283,30 @@ fn process(
     options: &Options,
     taken: &mut BTreeMap<String, PathBuf>,
 ) -> (Plugin, Option<Arc<Loaded>>) {
-    let dir_name = candidate
-        .dir
-        .file_name()
-        .map_or_default(|n| n.to_string_lossy().into_owned());
-    let toml = match &candidate.toml {
+    let text = match &candidate.text {
+        Ok(text) => text,
+        Err(error) => {
+            let reason = error.to_string();
+            return (unread(candidate, Head::default(), reason), None);
+        }
+    };
+    let toml = match PluginToml::parse(text) {
         Ok(toml) => toml,
         Err(error) => {
-            warn!(dir = %candidate.dir.display(), %error, "plugin refused");
-            return (
-                Plugin {
-                    id: dir_name,
-                    name: String::new(),
-                    description: String::new(),
-                    version: String::new(),
-                    points: Points::empty(),
-                    previews: Vec::new(),
-                    dir: candidate.dir,
-                    source: candidate.source,
-                    status: PluginStatus::Refused(error.to_string()),
-                },
-                None,
-            );
+            // The file of another release may hold keys this host does not
+            // know. It is refused for its release, which the user can act
+            // on, not for its spelling.
+            let head = Head::parse(text);
+            let reason = match &head {
+                Some(head) if head.rick != HOST_RICK => built_for(&head.rick),
+                _ => error.to_string(),
+            };
+            return (unread(candidate, head.unwrap_or_default(), reason), None);
         }
     };
     let span = info_span!("plugin", id = %toml.id, dir = %candidate.dir.display());
     let _enter = span.enter();
-    let outcome = check_and_load(toml, &candidate.dir, options, taken);
+    let outcome = check_and_load(&toml, &candidate.dir, options, taken);
     let status = match &outcome {
         Ok(Some(_)) => {
             info!("loaded");
@@ -276,18 +323,84 @@ fn process(
     };
     (
         Plugin {
-            id: toml.id.clone(),
-            name: toml.name.clone(),
-            description: toml.description.clone(),
-            version: toml.version.clone(),
             points: toml.points().unwrap_or_default(),
-            previews: toml.previews.clone(),
+            id: toml.id,
+            name: toml.name,
+            description: toml.description,
+            version: toml.version,
+            previews: toml.previews,
+            markers: toml.markers,
+            connections: toml.connections,
             dir: candidate.dir,
             source: candidate.source,
             status,
         },
         outcome.ok().flatten(),
     )
+}
+
+/// Whether the plugin folder `dir` holds a library besides the plugin's
+/// own, `library`: one the plugin's library may link, as the media
+/// previewer links the GStreamer runtime that travels in its folder.
+fn brings_libraries(dir: &Path, library: &str) -> bool {
+    let suffix = std::env::consts::DLL_SUFFIX;
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .any(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            !name.eq_ignore_ascii_case(library)
+                && name.to_ascii_lowercase().ends_with(suffix)
+                && entry.path().is_file()
+        })
+}
+
+/// Loads the plugin's library a second time, with the plugin's folder
+/// `dir` named to the loader, after the load failed with `first`: Windows
+/// only, and only for a folder that brings libraries.
+///
+/// Windows looks for the libraries a library links beside the binary and
+/// in the system's folder, never in the folder of the library that asks. A
+/// plugin whose library links what its folder brings does not load until
+/// the folder is named to the loader, and it stays named for the rest of
+/// the process, since later loads count as well: GStreamer opens its
+/// elements by full path when they are first needed, and what an element
+/// links lies in the plugin's folder too. Rick's environment is not
+/// touched for it; a folder on the `PATH` would reach every program Rick
+/// starts.
+///
+/// A folder is named only after its plugin failed to load without it. A
+/// plugin that opens the library beside it by itself, as the archive
+/// provider opens the 7-Zip library by its full path, loads the first
+/// time and its folder is never named.
+fn load_with_folder_named(
+    dir: &Path,
+    first: LoadError,
+    load: impl FnOnce() -> Result<Loaded, LoadError>,
+) -> Result<Loaded, LoadError> {
+    let named = match loader::name_dir(dir) {
+        Ok(named) => named,
+        Err(error) => {
+            warn!(dir = %dir.display(), %error, "plugin folder not named to the loader");
+            return Err(first);
+        }
+    };
+    debug!(dir = %dir.display(), reason = %first, "plugin folder named to the loader");
+    match load() {
+        // The loader refused the library again: nothing of the plugin is
+        // mapped, and its folder has no business in the search.
+        Err(LoadError::Open(error)) => {
+            if let Err(error) = named.remove() {
+                warn!(dir = %dir.display(), %error, "plugin folder still named to the loader");
+            }
+            Err(LoadError::Open(error))
+        }
+        // Loaded, or mapped and refused for what its entry point did: the
+        // library stays, and the folder with it.
+        outcome => outcome,
+    }
 }
 
 /// The checks, in order, then the load; `Ok(None)` for a disabled plugin.
@@ -297,6 +410,13 @@ fn check_and_load(
     options: &Options,
     taken: &mut BTreeMap<String, PathBuf>,
 ) -> Result<Option<Arc<Loaded>>, String> {
+    // The release first, and from the manifest alone: a plugin shares the
+    // kernel libraries with the Rick it was built with, so the library of
+    // another release is never mapped (specs/plugin-distribution.md §3).
+    // Its id stays free for a plugin of this release.
+    if toml.rick != HOST_RICK {
+        return Err(built_for(&toml.rick));
+    }
     let points = toml.points().map_err(|e| e.to_string())?;
     let platforms = toml.platforms().map_err(|e| e.to_string())?;
     if let Some(winner) = taken.get(&toml.id) {
@@ -339,12 +459,20 @@ fn check_and_load(
     if options.disabled.contains(&toml.id) {
         return Ok(None);
     }
-    let loaded = load_library(
-        &path,
-        options.platform(),
-        options.prompts.clone(),
-        options.settings.clone(),
-    )
+    let load = || {
+        load_library(
+            &path,
+            options.platform(),
+            options.prompts.clone(),
+            options.settings.clone(),
+        )
+    };
+    let loaded = match load() {
+        Err(LoadError::Open(error)) if os == "windows" && brings_libraries(dir, file) => {
+            load_with_folder_named(dir, LoadError::Open(error), load)
+        }
+        outcome => outcome,
+    }
     .map_err(|e| e.to_string())?;
     let manifest = loaded.manifest();
     if manifest.id.0 != toml.id {
@@ -366,4 +494,35 @@ fn check_and_load(
         ));
     }
     Ok(Some(Arc::new(loaded)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A plugin's folder counts as bringing libraries when a library other
+    /// than the plugin's own lies in it: the folders the host names to
+    /// the Windows loader when their plugin does not load without (issues
+    /// 250, item 5, and 264).
+    #[test]
+    fn a_folder_brings_libraries_when_one_lies_beside_the_plugin_s_own() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let suffix = std::env::consts::DLL_SUFFIX;
+        let own = format!("ext_preview_media{suffix}");
+        std::fs::write(dir.path().join(&own), "").unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(dir.path().join(MANIFEST_FILE), "").unwrap_or_else(|e| panic!("{e}"));
+        // Elements in a folder below are GStreamer's to find, not the
+        // loader's.
+        let below = dir.path().join("lib").join("gstreamer-1.0");
+        std::fs::create_dir_all(&below).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(below.join(format!("gstcoreelements{suffix}")), "")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(!brings_libraries(dir.path(), &own));
+        assert!(!brings_libraries(dir.path(), &own.to_uppercase()));
+
+        std::fs::write(dir.path().join(format!("gstreamer-1.0-0{suffix}")), "")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(brings_libraries(dir.path(), &own));
+        assert!(!brings_libraries(&dir.path().join("missing"), &own));
+    }
 }

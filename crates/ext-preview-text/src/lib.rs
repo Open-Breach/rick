@@ -77,6 +77,8 @@ impl TextPreview {
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
                 previews: TEXT_EXTENSIONS,
+                markers: &[],
+                connections: &[],
                 commands: &[],
             },
         }

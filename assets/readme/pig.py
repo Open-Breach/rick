@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Writes sheep.stl, the sample 3D model of the README's screenshot.
+"""Writes pig.stl, the sample 3D model of the README's screenshot.
 
-An original low-poly sheep made for this repository (specs/readme.md,
-"Screenshot"), the animal of release 0.5.0: convex blocks put together, in
+An original low-poly pig made for this repository (specs/readme.md,
+"Screenshot"), the animal of release 0.6.0: convex blocks put together, in
 millimetres, Z up, facing -Y as the 3D previewer's default view expects.
 Run it to regenerate the file beside it; the output is the same bytes
 every time.
 
-    python3 assets/readme/sheep.py
+    python3 assets/readme/pig.py
 """
 
 import itertools
@@ -122,53 +122,39 @@ def lean(points, pivot, degrees):
     return out
 
 
-def sheep():
+def pig():
     parts = [
-        # The body under the wool.
-        box((0, 5, 26), (11.5, 14, 9.5), 4),
-        # The tail, a tuft of its own.
-        ball((0, 29, 29), 3.6),
+        # The barrel of a body, and the rump rounding it off.
+        box((0, 6, 25), (13, 17, 11.5), 5.5),
+        ball((0, 20, 26), 13.5),
+        # The belly hangs a little.
+        box((0, 5, 16.5), (9.5, 12, 4), 2.5),
+        # The tail: a curl of three small knots.
+        ball((0, 33, 31), 2.4),
+        ball((1.8, 35.5, 33.5), 2.0),
+        ball((-0.6, 36.5, 36.5), 1.7),
     ]
-    # The wool: tufts along the back, on the chest and on the rump, and
-    # down each flank.
-    for centre, radius in (
-        ((0, -4, 36), 8.5),
-        ((0, 7, 38), 9.0),
-        ((0, 17, 36), 8.5),
-        ((0, -10, 25), 6.5),
-        ((0, 22, 27), 8.0),
-    ):
-        parts.append(ball(centre, radius))
     for side in (-1, 1):
-        for centre, radius in (
-            ((9.5, -3, 30), 7.5),
-            ((10.5, 9, 31), 8.0),
-            ((9.0, 19, 29), 7.0),
-            ((9.5, 2, 22), 5.5),
-            ((9.5, 14, 22), 5.5),
-        ):
-            parts.append(ball((side * centre[0], centre[1], centre[2]), radius))
-        for y in (-5, 15):
-            # A short leg and its hoof.
-            parts.append(box((side * 6.5, y, 8.5), (2.5, 2.5, 8.5)))
-            parts.append(box((side * 6.5, y - 0.5, 1.8), (3.2, 3.6, 1.8), 0.6))
+        for y in (-5, 17):
+            # A short leg and its trotter.
+            parts.append(frustum((side * 7.5, y, 14), (3.6, 3.6), (side * 7.5, y, 3), (2.7, 2.7)))
+            parts.append(box((side * 7.5, y - 0.4, 1.6), (3.0, 3.3, 1.6), 0.6))
     # The head, built level and nodding forward as one.
-    pivot = (0, -12, 32)
+    pivot = (0, -10, 28)
     level = [
-        # Head and muzzle.
-        box((0, -21, 33), (6.3, 8, 7), 2.2),
-        box((0, -31, 30.5), (4.3, 3.2, 3.9), 1.3),
-        # The wool between the ears.
-        ball((0, -15, 41.5), 5.2),
-        ball((-3.3, -20, 41), 3.4),
-        ball((3.3, -20, 41), 3.4),
+        # Head and cheeks.
+        box((0, -18, 29), (9.5, 8.5, 9), 3.5),
+        # The snout, a flat disc with two nostrils sunk beside its middle.
+        prism((0, -29.5, 26.5), 5.2, 3.2, 10, 1),
+        prism((0, -33.2, 26.5), 4.4, 0.6, 10, 1),
     ]
     for side in (-1, 1):
-        # Ears out to the sides and hanging, and the eyes.
-        level.append(frustum((side * 6.3, -15.5, 37.5), (2.2, 3.0), (side * 15, -15.5, 34), (1.1, 1.6)))
-        level.append(prism((side * 6.2, -24.5, 35.5), 1.8, 0.5, 8, 0))
+        # Ears standing and tipping forward, the eyes, the nostrils.
+        level.append(frustum((side * 6.2, -15, 36.5), (3.4, 2.2), (side * 8.2, -20.5, 44.5), (0.9, 0.7)))
+        level.append(prism((side * 9.4, -22, 32.5), 1.7, 0.5, 8, 0))
+        level.append(prism((side * 1.8, -34.0, 26.8), 0.9, 0.4, 6, 1))
     for part in level:
-        parts.append(lean(part, pivot, -10))
+        parts.append(lean(part, pivot, -8))
     triangles = []
     for part in parts:
         triangles.extend(hull(part))
@@ -176,13 +162,13 @@ def sheep():
 
 
 def main():
-    triangles = sheep()
-    header = b"sheep: an original low-poly model made for Rick (Apache-2.0)"
+    triangles = pig()
+    header = b"pig: an original low-poly model made for Rick (Apache-2.0)"
     data = bytearray(header.ljust(80, b" "))
     data += struct.pack("<I", len(triangles))
     for normal, a, b, c in triangles:
         data += struct.pack("<12fH", *normal, *a, *b, *c, 0)
-    path = pathlib.Path(__file__).with_name("sheep.stl")
+    path = pathlib.Path(__file__).with_name("pig.stl")
     path.write_bytes(data)
     print(f"{path}: {len(triangles)} triangles, {len(data)} bytes")
 

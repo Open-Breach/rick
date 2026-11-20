@@ -35,7 +35,10 @@
 //! speaks to `rick-perms`, the helper that does so as the administrator;
 //! [`sevenzip`] binds the 7-Zip library (`7z.so`, `7z.dll`) at run time
 //! for the disk images the archive plugins browse, the one place its
-//! `unsafe` lives; [`instance`] is the single-instance endpoint
+//! `unsafe` lives; [`loader`] tells the system's loader where to look for
+//! the libraries a plugin's library links, which on Windows is the
+//! plugin's folder named to it and nothing put on the `PATH`;
+//! [`instance`] is the single-instance endpoint
 //! ([`SingleInstance`] names it per user and config directory: a Unix
 //! socket or a named pipe) and the one message a second launch hands the
 //! running Rick over it.
@@ -67,6 +70,7 @@ pub mod file_manager;
 pub mod fs;
 pub mod instance;
 pub mod integration;
+pub mod loader;
 pub mod paths;
 pub mod perms;
 pub mod process;
@@ -159,6 +163,48 @@ pub fn os_description() -> String {
     #[cfg(windows)]
     {
         windows::os_description()
+    }
+}
+
+/// Rick's cache directory: what Rick fetched and can fetch again, kept
+/// apart from the settings so that a backup or a sync of the config
+/// directory does not carry it. `$XDG_CACHE_HOME/rick` on Linux
+/// (`~/.cache/rick` without the variable), `~/Library/Caches/Rick` on
+/// macOS, `%LOCALAPPDATA%\Rick\Cache` on Windows. Not created.
+///
+/// This is the directory of a Rick on the platform's own config directory.
+/// A Rick started on another one keeps its cache inside that directory:
+/// the application decides which of the two it is.
+#[must_use]
+pub fn cache_dir() -> std::path::PathBuf {
+    cache_dir_of(|name| std::env::var_os(name))
+}
+
+/// [`cache_dir`] in an environment of the caller's: `var` answers for a
+/// variable's name.
+fn cache_dir_of(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> std::path::PathBuf {
+    use std::path::PathBuf;
+    let set = |name: &str| var(name).filter(|v| !v.is_empty()).map(PathBuf::from);
+    #[cfg(target_os = "linux")]
+    {
+        set("XDG_CACHE_HOME")
+            .or_else(|| set("HOME").map(|home| home.join(".cache")))
+            .unwrap_or_else(|| PathBuf::from(".cache"))
+            .join("rick")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        set("HOME")
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Library/Caches/Rick")
+    }
+    #[cfg(windows)]
+    {
+        set("LOCALAPPDATA")
+            .or_else(|| set("USERPROFILE").map(|profile| profile.join("AppData").join("Local")))
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Rick")
+            .join("Cache")
     }
 }
 
@@ -301,5 +347,63 @@ impl NativeDialogs for Native {
 
     async fn save_file(&self, title: &str, suggested: &str) -> Option<std::path::PathBuf> {
         dialogs::save_file(title, suggested).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    use super::cache_dir_of;
+
+    /// An environment of the given variables and no others.
+    fn env(vars: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<OsString> {
+        move |name| {
+            vars.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| OsString::from(value))
+        }
+    }
+
+    /// The cache directory is where the platform keeps what can be
+    /// fetched again, and never inside the config directory.
+    #[test]
+    fn the_cache_directory_is_the_platform_s_own() {
+        #[cfg(target_os = "linux")]
+        {
+            let xdg = env(&[("XDG_CACHE_HOME", "/var/cache/me"), ("HOME", "/home/me")]);
+            assert_eq!(cache_dir_of(xdg), PathBuf::from("/var/cache/me/rick"));
+            let home = env(&[("XDG_CACHE_HOME", ""), ("HOME", "/home/me")]);
+            assert_eq!(cache_dir_of(home), PathBuf::from("/home/me/.cache/rick"));
+            assert_eq!(cache_dir_of(env(&[])), PathBuf::from(".cache/rick"));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let home = env(&[("HOME", "/Users/me")]);
+            assert_eq!(
+                cache_dir_of(home),
+                PathBuf::from("/Users/me/Library/Caches/Rick")
+            );
+        }
+        #[cfg(windows)]
+        {
+            let local = env(&[("LOCALAPPDATA", r"C:\Users\me\AppData\Local")]);
+            assert_eq!(
+                cache_dir_of(local),
+                PathBuf::from(r"C:\Users\me\AppData\Local\Rick\Cache")
+            );
+            let profile = env(&[("USERPROFILE", r"C:\Users\me")]);
+            assert_eq!(
+                cache_dir_of(profile),
+                PathBuf::from(r"C:\Users\me\AppData\Local\Rick\Cache")
+            );
+        }
+        // This process's own: under a folder named after Rick.
+        let own = super::cache_dir();
+        assert!(
+            own.to_string_lossy().to_lowercase().contains("rick"),
+            "{own:?}"
+        );
     }
 }

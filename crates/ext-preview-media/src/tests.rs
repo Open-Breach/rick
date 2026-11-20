@@ -671,6 +671,66 @@ mod with_gstreamer {
         assert!(same(pixel(&turned, 10, 219), last_bar));
     }
 
+    /// Players that open side by side all come to their first frame.
+    /// On `playbin3` of GStreamer 1.24 about one in a hundred did not
+    /// ([`crate::gst::PLAYER`]): its pipeline never prerolled, the open
+    /// gave up after ten seconds and the pane showed the video without
+    /// playback — on the arm64 runner in
+    /// `preview_pane::an_upright_video_is_letterboxed_and_the_pane_and_its_transport_stay`.
+    /// The first open that fails ends the test.
+    #[test]
+    fn players_opened_side_by_side_all_come_to_their_first_frame() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        const THREADS: usize = 8;
+        const OPENS: usize = 40;
+        if !gstreamer_or_skip() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let clip = dir.path().join("clip.mp4");
+        if !encoder_or_skip(encode::mp4(&clip, 15, 160, 120), "mp4 fixture") {
+            return;
+        }
+        let failed = AtomicBool::new(false);
+        let problems: Vec<String> = std::thread::scope(|scope| {
+            let threads: Vec<_> = (0..THREADS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        for _ in 0..OPENS {
+                            if failed.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            let at = Instant::now();
+                            let frame = Player::open(&clip, true, &CancelToken::new())
+                                .map(|mut player| player.frame().is_some());
+                            let problem = match frame {
+                                Ok(true) => continue,
+                                Ok(false) => "no first frame".to_owned(),
+                                Err(error) => error.to_string(),
+                            };
+                            failed.store(true, Ordering::Relaxed);
+                            return Some(format!("{problem}, after {:?}", at.elapsed()));
+                        }
+                        None
+                    })
+                })
+                .collect();
+            threads
+                .into_iter()
+                .filter_map(|thread| {
+                    thread
+                        .join()
+                        .unwrap_or_else(|_| Some("panicked".to_owned()))
+                })
+                .collect()
+        });
+        assert!(
+            problems.is_empty(),
+            "of {THREADS} threads with up to {OPENS} opens each: {problems:?}"
+        );
+    }
+
     /// Issue 220, the size named for a turned video: *Dimensions* in File
     /// info and the status bar give the size the video is shown in — the
     /// size of the frames — and so does the Discoverer, which stands in

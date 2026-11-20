@@ -32,6 +32,10 @@ menu-application-menu = Menu
 menu-new-window = New window
 menu-layouts = Layouts
 about-rick = About Rick
+update-entry = Update available
+update-available = Rick { $version } is available
+update-available-packaged = Rick { $version } is available. Update it through your package manager.
+update-download = Download
 continue-where-i-left-off = Continue where I left off
 menu-switch = Switch
 menu-set-as-start-layout = Set as start layout
@@ -134,6 +138,18 @@ preview-file-info = File info
 preview-size = Size
 preview-modified = Modified
 preview-plugin-available = plugin available
+suggest-plugin = { $name } plugin
+suggest-plugin-does = { $name } plugin — { $description }
+suggest-install = Install
+suggest-enable = Enable
+suggest-not-now = Not now
+suggest-never = Don't suggest again
+suggest-install-plugin = Install { $name }
+suggest-enable-plugin = Enable { $name }
+suggest-installed = { $name } is installed. Restart Rick to use it.
+suggest-enabled = { $name } is enabled. Restart Rick to use it.
+preview-plugin-installed = plugin installed, restart Rick to use it
+preview-plugin-enabled = plugin enabled, restart Rick to use it
 preview-no-previewer-for = no previewer for .{ $extension }
 preview-no-previewer-for-type = no previewer for this type
 preview-file-empty = This file is empty
@@ -318,6 +334,10 @@ settings-editor-desc = The command Open in editor starts, with the files added t
 settings-editor-hint = System default text editor
 settings-rename-on-click = Rename on a second click
 settings-rename-on-click-desc = A second click on the selected item edits its name. F2 and the context menu always do
+settings-registry-check = Look for plugins and updates online
+settings-registry-check-desc = Once a day, and when the Available list of the Extensions dialogue is opened, Rick fetches the list of its plugins. It sends its version and nothing else
+settings-suggest-plugins = Suggest plugins
+settings-suggest-plugins-desc = When a plugin that is not installed would show a file, serve a folder or add a kind of connection, Rick says so there. It reads the plugin list it already has and asks nobody
 settings-density = Density
 keyboard-shortcuts = Keyboard shortcuts
 shortcuts-subtitle = Click a shortcut to change it. Changes apply at once.
@@ -387,6 +407,61 @@ extensions-remove = Remove
 extensions-where = Plugins live in the plugins folder beside the binary and in the config directory; a per-user plugin wins on an id clash.
 extensions-install = Install from file…
 extensions-install-title = Install a plugin from a file
+extensions-install-url = Install from URL…
+extensions-url-title = Install from URL
+extensions-url-subtitle = A plugin package is downloaded and unpacked as a file is
+extensions-url-heading = Package address
+extensions-url-invalid = Enter the https:// address of a plugin package.
+extensions-url-note = Nothing is checked, as for a file.
+extensions-packaged = Installed through your package manager
+extensions-command = command
+# An install from the plugin registry that failed (issue 251).
+plugins-download-mismatch = The download did not match the plugin list
+plugins-download-failed = The plugin could not be downloaded: { $reason }
+plugins-address-refused = { $url } was not requested: a plugin package needs an https:// address
+plugins-redirect-refused = The download was sent on to { $url }, which was not requested: a plugin package needs an https:// address
+plugins-redirect-inward = The download was sent on to { $url }, which was not requested: another machine may not send a download on to this one
+# The plugin registry in the Extensions dialogue
+# (specs/plugin-distribution.md §6 and §7, issue 251).
+extensions-tab-installed = Installed
+extensions-tab-available = Available
+extensions-tab-available-count = Available { $count }
+extensions-available = Available
+extensions-install-available = Install
+extensions-installing = Installing…
+extensions-size = Size
+extensions-source = Source
+extensions-folders-with = folders with { $names }
+extensions-restart-now = Restart now
+extensions-not-suggested = Not suggested
+extensions-suggest-again = Suggest again
+extensions-check-now = Check now
+extensions-checking = Looking for plugins…
+extensions-list-of = Plugin list of { $date }
+extensions-not-set-up = The plugin list is not set up in this build
+extensions-pre-release = Rick { $version } is a pre-release. Plugins are published for releases only.
+extensions-too-old = The plugins for Rick { $version } are no longer published. Update Rick to install plugins.
+extensions-offline = The plugin list could not be fetched.
+extensions-check-off = Rick is set not to look for plugins online.
+extensions-unverified = The plugin list could not be verified
+extensions-newer-rick = This list needs a newer Rick
+extensions-unreadable = The plugin list could not be read
+extensions-none-available = No further plugins are available for Rick { $version }
+extensions-registry-address = The plugin list is read from { $address }.
+# Updates (specs/plugin-distribution.md §7, issue 251).
+extensions-updates = { $count ->
+    [one] 1 update
+   *[other] { $count } updates
+}
+extensions-update = Update
+extensions-updating = Updating…
+extensions-update-all = Update all
+extensions-update-available = Update available
+extensions-update-version = Version { $version } is available.
+extensions-updates-toast = { $count ->
+    [one] 1 plugin needs its build for Rick { $version }
+   *[other] { $count } plugins need their build for Rick { $version }
+}
 shell-phosphor-fill = phosphor-fill
 close = Close
 shell-restore = Restore

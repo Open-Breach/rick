@@ -244,11 +244,12 @@ pub fn sign(
     ]
 }
 
-/// The current time as Signature Version 4 writes it.
-fn amz_now() -> String {
-    chrono::DateTime::<chrono::Utc>::from(SystemTime::now())
-        .format("%Y%m%dT%H%M%SZ")
-        .to_string()
+/// `time` as Signature Version 4 writes it.
+pub(crate) fn amz_date(time: SystemTime) -> String {
+    jiff::Timestamp::try_from(time)
+        .ok()
+        .and_then(|time| jiff::fmt::strtime::format("%Y%m%dT%H%M%SZ", time).ok())
+        .unwrap_or_default()
 }
 
 /// A bucket of the account.
@@ -448,7 +449,7 @@ impl S3Client {
             };
             url.set_query(Some(&text));
         }
-        let amz_date = amz_now();
+        let amz_date = amz_date(SystemTime::now());
         let signed = sign(
             &Unsigned {
                 method: method.as_str(),
@@ -571,7 +572,7 @@ impl S3Client {
             .headers()
             .get(reqwest::header::LAST_MODIFIED)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| chrono::DateTime::parse_from_rfc2822(v).ok())
+            .and_then(|v| jiff::fmt::rfc2822::parse(v).ok())
             .map(SystemTime::from);
         Ok(Object {
             key: key.to_owned(),
@@ -776,9 +777,7 @@ impl S3Client {
 }
 
 fn parse_time(text: &str) -> Option<SystemTime> {
-    chrono::DateTime::parse_from_rfc3339(text)
-        .ok()
-        .map(SystemTime::from)
+    text.parse::<jiff::Timestamp>().ok().map(SystemTime::from)
 }
 
 /// The buckets of a `ListAllMyBuckets` answer.

@@ -83,6 +83,12 @@ session bus and hands each call (`ShowItems`, `ShowFolders`,
 another file manager owns the name (Linux, through `zbus`; `Unsupported`
 elsewhere), the `process` module that asks whether a console's shell has handed its
 terminal to a job (`/proc/<pid>/stat`, `proc_pidinfo`; Windows cannot say),
+the `loader` module that tells the system's loader where to look for the
+libraries a library links, for the plugin host: on Windows the search of
+the process is limited to the binary's folder, the folders named to it and
+the system's (`SetDefaultDllDirectories`), and a plugin's folder is named
+(`AddDllDirectory`), so that Rick's `PATH` stays as it was; Linux and
+macOS, where a library says itself where its libraries are, need neither,
 and the `agent` module that opens the SSH
 agent's socket (`SSH_AUTH_SOCK`, or OpenSSH's named pipe on Windows),
 implemented for Linux (XDG trash, `xdg-open`), macOS
@@ -93,7 +99,9 @@ filesystem fast paths other crates program against: the bulk directory reader
 (`FICLONE`/`copy_file_range`, `clonefile`, `CopyFileExW`), allocated sizes and
 extent sharing, the `VPath` ↔ `Path` conversion and `file://` URIs both
 ways (`paths::from_uri` decodes a `file:///…` or `rick:///…` URI to a
-path of this machine). It is the only crate
+path of this machine), and `cache_dir`, where Rick keeps what it fetched
+and can fetch again (`$XDG_CACHE_HOME/rick`, `~/Library/Caches/Rick`,
+`%LOCALAPPDATA%\Rick\Cache`). It is the only crate
 allowed `unsafe` and `cfg(target_os)`. It depends on `types` and `runtime`;
 `vfs`, `vfs-local` and the crates above them may depend on it. It also uses
 `raw-window-handle`, `wayland-client` and `x11rb` on Linux, `objc2-app-kit`

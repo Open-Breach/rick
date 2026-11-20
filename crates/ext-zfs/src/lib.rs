@@ -94,6 +94,8 @@ impl ZfsExtension {
                 points: Points::PROVIDER | Points::DECORATOR | Points::ACTION,
                 platforms: Platforms::LINUX,
                 previews: &[],
+                markers: &[],
+                connections: &[],
                 commands: &[],
             },
             datasets,

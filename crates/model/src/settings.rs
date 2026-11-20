@@ -309,6 +309,9 @@ pub struct Settings {
     pub archives: Archives,
     /// Plugins: which of them not to load.
     pub plugins: Plugins,
+    /// The plugin registry: whether Rick looks for plugins and updates
+    /// online by itself, and another index and key than this build's.
+    pub registry: RegistrySettings,
     /// The network and cloud connections, one `[[connections]]` table
     /// each: the provider, the name and the non-secret fields. The
     /// secrets are in the platform keychain, never here.
@@ -370,12 +373,58 @@ pub enum OnOpen {
 }
 
 /// The `[plugins]` table.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Plugins {
     /// Ids of the plugins not to load on the next start; they stay on disk
     /// and the Extensions screen lists them as disabled.
     pub disabled: Vec<String>,
+    /// *Suggest plugins*: Rick says so when a plugin that is not there
+    /// would serve the file, the folder or the connection the user is
+    /// looking at (specs/plugin-distribution.md §8). Off, it suggests
+    /// nothing.
+    pub suggest: bool,
+    /// Ids of the plugins never to suggest: what *Don't suggest again*
+    /// writes and *Suggest again* takes back.
+    pub no_suggest: Vec<String>,
+}
+
+impl Default for Plugins {
+    fn default() -> Self {
+        Self {
+            disabled: Vec::new(),
+            suggest: true,
+            no_suggest: Vec::new(),
+        }
+    }
+}
+
+/// The `[registry]` table (specs/plugin-distribution.md §6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RegistrySettings {
+    /// *Look for plugins and updates online*: Rick fetches the plugin
+    /// list when the *Available* view is opened and, in the background,
+    /// once a day: a minute after the start when the list is a day old,
+    /// and every 24 hours while it stays open. Off, it fetches nothing by
+    /// itself; *Check now* still does.
+    pub check: bool,
+    /// The address of another index than the registry's own, for
+    /// development and for the tests; `None` for the registry's.
+    pub url: Option<String>,
+    /// The minisign public key another index is signed with, as one
+    /// base64 line; `None` for the key compiled into this build.
+    pub public_key: Option<String>,
+}
+
+impl Default for RegistrySettings {
+    fn default() -> Self {
+        Self {
+            check: true,
+            url: None,
+            public_key: None,
+        }
+    }
 }
 
 /// The `[search]` table.
@@ -767,6 +816,7 @@ impl Default for Settings {
             search: Search::default(),
             archives: Archives::default(),
             plugins: Plugins::default(),
+            registry: RegistrySettings::default(),
             connections: Vec::new(),
             integration: IntegrationSettings::default(),
             language: None,
@@ -867,6 +917,19 @@ pub enum SettingsChange {
         /// `false` adds it to `[plugins] disabled`, `true` removes it.
         enabled: bool,
     },
+    /// *Suggest plugins*: whether Rick suggests a plugin that is not there
+    /// (`[plugins] suggest`).
+    SuggestPlugins(bool),
+    /// Silence a plugin's suggestions for good, or take that back.
+    NoSuggest {
+        /// The plugin id.
+        id: String,
+        /// `true` adds it to `[plugins] no_suggest`, `false` removes it.
+        silenced: bool,
+    },
+    /// *Look for plugins and updates online*: whether Rick fetches the
+    /// plugin list by itself (`[registry] check`).
+    RegistryCheck(bool),
     /// Whether the integration dialog opens when the startup check finds
     /// something; `false` is its *Don't ask again*.
     IntegrationAsk(bool),
@@ -951,6 +1014,14 @@ impl Settings {
                     self.plugins.disabled.push(id);
                 }
             }
+            SettingsChange::SuggestPlugins(v) => self.plugins.suggest = v,
+            SettingsChange::NoSuggest { id, silenced } => {
+                self.plugins.no_suggest.retain(|s| *s != id);
+                if silenced {
+                    self.plugins.no_suggest.push(id);
+                }
+            }
+            SettingsChange::RegistryCheck(v) => self.registry.check = v,
             SettingsChange::IntegrationAsk(v) => self.integration.ask = v,
             SettingsChange::IntegrationCheckAtStartup(v) => self.integration.check_at_startup = v,
             SettingsChange::ShellIntegration(v) => self.integration.shell_integration = v,
@@ -984,6 +1055,101 @@ mod tests {
         assert_eq!(s.archives.on_open, OnOpen::System);
         let text = toml::to_string(&s).unwrap_or_default();
         assert!(text.contains("[archives]\non_open = \"system\""), "{text}");
+    }
+
+    /// The `[registry]` table (specs/plugin-distribution.md §6): the
+    /// check is on unless the file switches it off, and the address and
+    /// the key are this build's unless the file names others.
+    #[test]
+    fn the_registry_is_checked_by_default_and_is_this_build_s() {
+        let s = Settings::default();
+        assert!(s.registry.check);
+        assert_eq!((&s.registry.url, &s.registry.public_key), (&None, &None));
+        // A file written from the defaults names neither.
+        let text = toml::to_string(&s).unwrap_or_default();
+        assert!(text.contains("[registry]\ncheck = true\n"), "{text}");
+        assert!(
+            !text.contains("url") && !text.contains("public_key"),
+            "{text}"
+        );
+
+        let read: Settings = toml::from_str(
+            "[registry]\ncheck = false\nurl = \"http://127.0.0.1:8123/index.json\"\n\
+             public_key = \"RWQ\"\n",
+        )
+        .unwrap_or_default();
+        assert!(!read.registry.check);
+        assert_eq!(
+            read.registry.url.as_deref(),
+            Some("http://127.0.0.1:8123/index.json")
+        );
+        assert_eq!(read.registry.public_key.as_deref(), Some("RWQ"));
+        let again: Settings =
+            toml::from_str(&toml::to_string(&read).unwrap_or_default()).unwrap_or_default();
+        assert_eq!(again.registry, read.registry);
+        // One key of the table leaves the others at their defaults.
+        let partial: Settings = toml::from_str("[registry]\nurl = \"x\"\n").unwrap_or_default();
+        assert!(partial.registry.check);
+        // The switch of the Behaviour page writes the one key.
+        let mut switched = Settings::default();
+        switched.apply(SettingsChange::RegistryCheck(false));
+        assert!(!switched.registry.check);
+        let text = toml::to_string(&switched).unwrap_or_default();
+        assert!(text.contains("[registry]\ncheck = false\n"), "{text}");
+        switched.apply(SettingsChange::RegistryCheck(true));
+        assert_eq!(switched, Settings::default());
+    }
+
+    /// The `[plugins]` keys of the suggestions (specs/plugin-distribution.md
+    /// §8): `suggest` is on unless the file switches it off, and
+    /// `no_suggest` lists the plugins *Don't suggest again* silenced.
+    #[test]
+    fn plugins_are_suggested_by_default_and_a_plugin_is_silenced_by_its_id() {
+        let s = Settings::default();
+        assert!(s.plugins.suggest);
+        assert_eq!(s.plugins.no_suggest, [] as [&str; 0]);
+        let text = toml::to_string(&s).unwrap_or_default();
+        assert!(
+            text.contains("[plugins]\ndisabled = []\nsuggest = true\nno_suggest = []\n"),
+            "{text}"
+        );
+
+        // A file written before the keys existed leaves them at their
+        // defaults, and the plugins it disabled stay disabled.
+        let older: Settings =
+            toml::from_str("[plugins]\ndisabled = [\"git\"]\n").unwrap_or_default();
+        assert_eq!(older.plugins.disabled, ["git"]);
+        assert!(older.plugins.suggest);
+        assert_eq!(older.plugins.no_suggest, [] as [&str; 0]);
+
+        let read: Settings =
+            toml::from_str("[plugins]\nsuggest = false\nno_suggest = [\"git\", \"svn\"]\n")
+                .unwrap_or_default();
+        assert!(!read.plugins.suggest);
+        assert_eq!(read.plugins.no_suggest, ["git", "svn"]);
+
+        // *Don't suggest again* writes the id once, *Suggest again* takes
+        // it back, and the switch writes the one key.
+        let mut changed = Settings::default();
+        for _ in 0..2 {
+            changed.apply(SettingsChange::NoSuggest {
+                id: "git".to_owned(),
+                silenced: true,
+            });
+        }
+        assert_eq!(changed.plugins.no_suggest, ["git"]);
+        changed.apply(SettingsChange::SuggestPlugins(false));
+        let text = toml::to_string(&changed).unwrap_or_default();
+        assert!(
+            text.contains("suggest = false\nno_suggest = [\"git\"]\n"),
+            "{text}"
+        );
+        changed.apply(SettingsChange::NoSuggest {
+            id: "git".to_owned(),
+            silenced: false,
+        });
+        changed.apply(SettingsChange::SuggestPlugins(true));
+        assert_eq!(changed, Settings::default());
     }
 
     #[test]

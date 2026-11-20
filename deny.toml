@@ -28,7 +28,7 @@ multiple-versions = "warn"
 # edge and fails the check. `types` may be used by everyone and needs no
 # entry. Add an entry per crate as crates appear.
 deny = [
-    { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests"] },
+    { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests", "plugins-registry"] },
     { crate = "platform", wrappers = ["ext", "vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "ext", wrappers = ["vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-preview-office", "ext-preview-media", "ext-preview-archive", "ext-preview-markup", "ext-preview-hex", "ext-preview-icons", "ext-preview-3d", "ext-git", "ext-svn", "ext-zfs", "ext-vfs-trash", "ext-vfs-archive", "ext-search-walk", "ext-search-windows", "ext-search-spotlight", "ext-search-tracker", "ext-search-baloo", "ext-ssh", "ext-vfs-s3", "ext-vfs-azure", "ext-vfs-gcs", "ext-action-compress", "ext-action-compare", "ext-action-terminal", "ext-action-rename", "ext-installer", "plugins-native", "plugin-probe", "plugin-panic"] },
     { crate = "vfs", wrappers = ["vfs-local", "vfs-rick", "ops", "app", "ui-egui", "rick", "tests"] },
@@ -42,6 +42,13 @@ deny = [
     # The plugin host sits beside `app`: the binary loads plugins through it
     # and hands them to the app as extensions.
     { crate = "plugins-native", wrappers = ["rick", "tests"] },
+    # The client of the plugin registry (issue 251) sits below `app`, which
+    # asks it and keeps what it answers; it is the one place the kernel's
+    # side reaches the network from. It uses `runtime` only for the
+    # stand-in registry of the tests (its `fixtures` feature).
+    { crate = "plugins-registry", wrappers = ["app", "tests"] },
+    # The build tasks; their library is the packaging the tests run too.
+    { crate = "xtask", wrappers = ["tests"] },
     { crate = "ui-egui", wrappers = ["rick", "tests"] },
     # Extensions see `ext` and `types` only; only the binary and the tests load them.
     { crate = "ext-preview-text", wrappers = ["rick", "tests"] },
@@ -128,4 +135,13 @@ ignore = [
     # own signature on the user's machine and the attacker would have to
     # time it there. Revisit when `rsa` ships constant-time decryption.
     { id = "RUSTSEC-2023-0071", reason = "rsa's timing side channel; transitive via russh for RSA SSH keys, client-side only" },
+    # chrono was declared unmaintained: a notice, not a vulnerability, and
+    # with no release to move to. Rick's own crates write their dates with
+    # jiff; chrono stays in the tree through pdfium-render alone, whose
+    # newest release (0.9.5) depends on it unconditionally, for the dates
+    # it stamps on the annotations and form fields it writes, which the
+    # previewers never do. Remove the entry when pdfium-render drops chrono
+    # or makes it optional: its pull request 287 replaces chrono and offers
+    # an optional feature instead, open and unanswered on 2026-11-19.
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, not vulnerable; transitive via pdfium-render alone, which has no release or feature without it; upstream: https://github.com/ajrcarey/pdfium-render/pull/287" },
 ]

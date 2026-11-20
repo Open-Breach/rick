@@ -14,6 +14,11 @@
 //! second time: its wording is fixed in specs/readme.md, and [`features`]
 //! takes the sentence from there ([`fixed_wording`]).
 //!
+//! One fixed part is held against the spec here too, because it comes
+//! into force with a release: the privacy paragraph (specs/readme.md,
+//! section 9), which a README has from [`PRIVACY_SINCE`] on and not
+//! before ([`check_privacy`]).
+//!
 //! The markers:
 //!
 //! ```text
@@ -53,6 +58,32 @@ pub enum ReadmeError {
     /// The spec's Features list quotes no wording for an item.
     #[error("specs/readme.md quotes no wording for item {0} of its Features list")]
     NoWording(u8),
+    /// The spec does not quote the privacy paragraph as one paragraph
+    /// under its heading.
+    #[error("specs/readme.md does not quote one paragraph under `{PRIVACY_HEADING}`")]
+    NoPrivacyWording,
+    /// The README describes a release that has the privacy paragraph,
+    /// and the paragraph is not there, not in its place, or not the
+    /// spec's word for word.
+    #[error(
+        "README.md describes {version} and has no privacy paragraph where specs/readme.md \
+         (section 9) puts it: the spec's words, as the first line under the rule above the \
+         closing links. The release pull request of {PRIVACY_SINCE} adds it"
+    )]
+    NoPrivacy {
+        /// The version the status line names.
+        version: String,
+    },
+    /// The README describes a release before the privacy paragraph and
+    /// has it all the same.
+    #[error(
+        "README.md describes {version}, which fetches no plugin list, and has the privacy \
+         paragraph of {PRIVACY_SINCE} already: it comes with the release pull request"
+    )]
+    PrivacyEarly {
+        /// The version the status line names.
+        version: String,
+    },
     /// A previewer declares a file type the README has no kind for.
     #[error("{previewer} previews {name}, which has no kind in the README's file types")]
     NoKind {
@@ -572,12 +603,29 @@ pub fn file_types(facts: &Facts) -> String {
     lists.join("\n\n")
 }
 
-/// The platforms the release workflow builds an archive for, as its build
-/// matrix names them (`linux-x64`, `macos-arm64`), each once.
+/// The Linux archives of a release that calls Trebuchet's
+/// `linux-packages.yml`: that workflow makes one per architecture, whatever
+/// distribution releases it packages for (Open-Breach/trebuchet,
+/// docs/linux-packages.md, *The tarball*).
+const TREBUCHET_ARCHIVES: [&str; 2] = ["linux-x64", "linux-arm64"];
+
+/// The platforms the release workflow builds an archive for, each once:
+/// the ones its build matrix names (`macos-arm64`, `windows-x64`), and the
+/// two Linux ones where a job calls Trebuchet's `linux-packages.yml`,
+/// which builds them outside the matrix.
 #[must_use]
 pub fn release_platforms(workflow: &str) -> Vec<String> {
     let mut platforms: Vec<String> = Vec::new();
     for line in workflow.lines() {
+        let key = line.trim_start();
+        if key.starts_with("uses: ") && key.contains("/linux-packages.yml@") {
+            for name in TREBUCHET_ARCHIVES {
+                if !platforms.iter().any(|p| p == name) {
+                    platforms.push(name.to_owned());
+                }
+            }
+            continue;
+        }
         let Some((_, rest)) = line.split_once("platform: ") else {
             continue;
         };
@@ -592,6 +640,17 @@ pub fn release_platforms(workflow: &str) -> Vec<String> {
     platforms
 }
 
+/// How a downloaded file is checked against its build attestation: the
+/// two lines of specs/system-integration.md §9, the first for what
+/// Trebuchet's workflow builds and the second for what Rick's own does,
+/// and the sentence the same section asks the README to state plainly.
+const VERIFY: &str = "Every file of a release has a GitHub build attestation. It proves where a \
+     file comes from, not that it is safe. To check one with the GitHub CLI:\n\n```bash\n\
+     gh attestation verify <file> --owner Open-Breach --signer-repo Open-Breach/trebuchet   \
+     # a Linux file\n\
+     gh attestation verify <file> --repo Open-Breach/rick                                   \
+     # a macOS or Windows file\n```";
+
 /// One platform's block of the Install section: its title, the links to
 /// its archives and the steps.
 fn install_block(title: &str, links: &[String], steps: &str) -> Option<String> {
@@ -601,8 +660,9 @@ fn install_block(title: &str, links: &[String], steps: &str) -> Option<String> {
 /// The body of the Install section (specs/readme.md, *Install*): per
 /// operating system the direct link to each archive of `platforms` for
 /// the release `version`, and the steps to get Rick running from it; then
-/// what the Office and media previews need installed, and the line on the
-/// plugins.
+/// how a file is verified, where the Office and media previews come from
+/// and what they need installed, and the lines on the plugins: the ones in
+/// the archive, the separate downloads and the *Suggest plugins* setting.
 #[must_use]
 pub fn install(version: &str, platforms: &[String]) -> String {
     let base = format!(
@@ -632,8 +692,8 @@ pub fn install(version: &str, platforms: &[String]) -> String {
             "Linux",
             &links("linux", "tar.gz"),
             &format!(
-                "```bash\ntar xzf {linux}.tar.gz && ./{linux}/rick\n```\n\nNeeds glibc 2.39 or \
-                 later (Ubuntu 24.04). The first start offers to set Rick up in your desktop: \
+                "```bash\ntar xzf {linux}.tar.gz && ./{linux}/rick\n```\n\nNeeds glibc 2.36 or \
+                 later (Debian 12, Ubuntu 24.04). The first start offers to set Rick up in your desktop: \
                  the launcher entry, the default file manager, the `rick` command."
             ),
         ),
@@ -650,14 +710,18 @@ pub fn install(version: &str, platforms: &[String]) -> String {
         ),
     ];
     let mut out: Vec<String> = blocks.into_iter().flatten().collect();
+    out.push(VERIFY.to_owned());
     out.push(
-        "Office documents preview through LibreOffice when it is installed; on Linux, audio and \
-         video need the GStreamer plug-ins."
+        "The Office preview is a separate download and needs LibreOffice installed. Audio and \
+         video are in the Linux archive, where they need the GStreamer plug-ins, and a separate \
+         download on macOS and Windows."
             .to_owned(),
     );
     out.push(
         "Plugins ship in the archive's `plugins/` folder; delete a plugin's folder and that \
-         plugin is gone."
+         plugin is gone. The rest are separate downloads under *Extensions → Available*, and \
+         Rick says so when one would serve what you are looking at. *Suggest plugins* in \
+         Settings → Behaviour turns that off."
             .to_owned(),
     );
     out.join("\n\n")
@@ -724,6 +788,93 @@ pub fn version(readme: &str) -> Result<String, ReadmeError> {
                 .collect()
         })
         .ok_or(ReadmeError::NoVersion)
+}
+
+/// The first release whose README has the privacy paragraph: the first
+/// that fetches the plugin list by itself (specs/readme.md, section 9;
+/// specs/plugin-distribution.md §6).
+pub const PRIVACY_SINCE: &str = "0.6.0";
+
+/// The heading of specs/readme.md under which the privacy paragraph is
+/// quoted.
+pub const PRIVACY_HEADING: &str = "### 9. Privacy (fixed)";
+
+/// The privacy paragraph as `spec`, the text of specs/readme.md, fixes
+/// it: the one paragraph of the block quote under [`PRIVACY_HEADING`].
+///
+/// # Errors
+///
+/// [`ReadmeError::NoPrivacyWording`] when the spec has no such heading,
+/// no quote under it before the next heading, or a quote of more than
+/// one paragraph.
+pub fn privacy_wording(spec: &str) -> Result<&str, ReadmeError> {
+    let (_, section) = spec
+        .split_once(PRIVACY_HEADING)
+        .ok_or(ReadmeError::NoPrivacyWording)?;
+    let mut quoted = section
+        .lines()
+        .skip(1)
+        .take_while(|line| !line.starts_with('#'))
+        .skip_while(|line| !line.starts_with('>'))
+        .take_while(|line| line.starts_with('>'))
+        .map(|line| line.trim_start_matches('>').trim());
+    match (quoted.next(), quoted.next()) {
+        (Some(paragraph), None) if !paragraph.is_empty() => Ok(paragraph),
+        _ => Err(ReadmeError::NoPrivacyWording),
+    }
+}
+
+/// The three numbers of a release's version, without what follows them:
+/// `0.6.0-rc1` is `[0, 6, 0]`.
+fn numbers(version: &str) -> Option<[u64; 3]> {
+    let mut numbers = version
+        .split(['-', '+'])
+        .next()?
+        .split('.')
+        .map(|number| number.parse::<u64>().ok());
+    Some([numbers.next()??, numbers.next()??, numbers.next()??])
+}
+
+/// Holds `readme` against the privacy paragraph `spec`, the text of
+/// specs/readme.md, fixes (section 9). This is how the paragraph comes
+/// into force with a release and not before, while the README stays
+/// untouched between releases:
+///
+/// - A README whose status line names [`PRIVACY_SINCE`] or a later
+///   release has the paragraph, word for word, as a line of its own: the
+///   first under the rule (`---`) that sets the closing lines off, above
+///   the line of links.
+/// - A README that names an earlier release does not have it: it
+///   describes a release that makes no request by itself.
+///
+/// The release pull request writes the new version into the status line
+/// (`cargo xtask readme`), and from that commit this fails until the
+/// paragraph is there.
+///
+/// # Errors
+///
+/// [`ReadmeError::NoPrivacy`] and [`ReadmeError::PrivacyEarly`] as
+/// above; [`ReadmeError::NoPrivacyWording`] when the spec quotes none;
+/// [`ReadmeError::NoBlock`] and [`ReadmeError::NoVersion`] when the
+/// status line names no release.
+pub fn check_privacy(readme: &str, spec: &str) -> Result<(), ReadmeError> {
+    let wording = privacy_wording(spec)?;
+    let version = version(readme)?;
+    let since = numbers(PRIVACY_SINCE).ok_or(ReadmeError::NoVersion)?;
+    let described = numbers(&version).ok_or(ReadmeError::NoVersion)?;
+    if described >= since {
+        // Under the rule, a paragraph of its own, then the links.
+        let in_place = format!("\n---\n\n{wording}\n\n[");
+        if readme.matches(wording).count() == 1 && readme.contains(&in_place) {
+            Ok(())
+        } else {
+            Err(ReadmeError::NoPrivacy { version })
+        }
+    } else if readme.contains(wording) {
+        Err(ReadmeError::PrivacyEarly { version })
+    } else {
+        Ok(())
+    }
 }
 
 /// The README brought up to the release `version`: the version in the
@@ -903,6 +1054,22 @@ mod tests {
     }
 
     #[test]
+    fn the_linux_archives_come_with_the_call_to_trebuchet() {
+        let workflow = "# Linux: linux-packages.yml@main builds it\njobs:\n  linux:\n    uses: \
+            Open-Breach/trebuchet/.github/workflows/linux-packages.yml@main\n  build:\n    \
+            strategy:\n      matrix:\n        include:\n          - { os: macos-latest, \
+            platform: macos-arm64 }\n";
+        assert_eq!(
+            release_platforms(workflow),
+            ["linux-x64", "linux-arm64", "macos-arm64"]
+        );
+        // A comment that names the workflow is no call.
+        let workflow =
+            "# Linux: linux-packages.yml@main builds it\n    - { platform: macos-arm64 }\n";
+        assert_eq!(release_platforms(workflow), ["macos-arm64"]);
+    }
+
+    #[test]
     fn the_install_section_links_every_archive_of_the_release() {
         let platforms = ["linux-x64", "linux-arm64", "windows-x64"].map(str::to_owned);
         let text = install("1.2.3", &platforms);
@@ -916,9 +1083,15 @@ mod tests {
         );
         assert!(text.contains("rick-1.2.3-windows-x64.zip"));
         // No archive for a platform, no block for it.
-        assert!(!text.contains("macOS"));
-        assert!(text.contains("\n\nOffice documents preview through LibreOffice when it is"));
-        assert!(text.ends_with("that plugin is gone."));
+        assert!(!text.contains("**macOS**"));
+        // The two lines that verify a file, one for each builder.
+        assert!(text.contains(
+            "gh attestation verify <file> --owner Open-Breach --signer-repo Open-Breach/trebuchet"
+        ));
+        assert!(text.contains("gh attestation verify <file> --repo Open-Breach/rick"));
+        assert!(text.contains("\n\nThe Office preview is a separate download and needs"));
+        assert!(text.contains("\n\nPlugins ship in the archive's `plugins/` folder;"));
+        assert!(text.ends_with("*Suggest plugins* in Settings → Behaviour turns that off."));
     }
 
     #[test]
@@ -947,6 +1120,131 @@ mod tests {
             regenerate(&new, SPEC, "0.5.0", &facts(), &platforms),
             Ok(new)
         );
+    }
+
+    /// A spec that quotes a privacy paragraph, and the paragraph.
+    const PRIVACY_SPEC: &str = "### 8. Portal animation (fixed)\n\nAn animation.\n\n\
+        ### 9. Privacy (fixed)\n\nOne paragraph. Verbatim:\n\n\
+        > Rick asks *one* thing by itself.\n\n- From 0.6.0.\n\n### Closing lines\n\n- Links.\n";
+    const PRIVACY: &str = "Rick asks *one* thing by itself.";
+
+    /// A README that describes `version`, with `foot` as its end.
+    fn readme_of(version: &str, foot: &str) -> String {
+        format!(
+            "# Rick\n\n<!-- generated:status -->\nv{version} · early.\n\n\
+             [Download v{version}](#install) now.\n<!-- /generated:status -->\n\n\
+             ## Join in\n\nCome.\n\n{foot}"
+        )
+    }
+
+    #[test]
+    fn the_privacy_paragraph_is_the_one_the_spec_quotes() {
+        assert_eq!(privacy_wording(PRIVACY_SPEC), Ok(PRIVACY));
+        for spec in [
+            // No such section, no quote in it, and a quote that belongs
+            // to the next section.
+            "### 8. Portal animation (fixed)\n\n> Not this.\n",
+            "### 9. Privacy (fixed)\n\nOne paragraph.\n",
+            "### 9. Privacy (fixed)\n\nOne paragraph.\n\n### Closing lines\n\n> Not this.\n",
+            // Two paragraphs are not one.
+            "### 9. Privacy (fixed)\n\n> One.\n>\n> Two.\n",
+            "### 9. Privacy (fixed)\n\n>\n",
+        ] {
+            assert_eq!(
+                privacy_wording(spec),
+                Err(ReadmeError::NoPrivacyWording),
+                "{spec:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_privacy_paragraph_comes_into_force_with_its_release() {
+        let without = "---\n\n[Building](docs/building.md)\n\nLicensed.\n";
+        let with = format!("---\n\n{PRIVACY}\n\n[Building](docs/building.md)\n\nLicensed.\n");
+        let missing = |version: &str| {
+            Err(ReadmeError::NoPrivacy {
+                version: version.to_owned(),
+            })
+        };
+
+        // Before the release: the README is as the last release left it,
+        // and the paragraph would describe a request that release does
+        // not make.
+        for version in ["0.4.0", "0.5.0", "0.5.9"] {
+            assert_eq!(
+                check_privacy(&readme_of(version, without), PRIVACY_SPEC),
+                Ok(()),
+                "{version}"
+            );
+            assert_eq!(
+                check_privacy(&readme_of(version, &with), PRIVACY_SPEC),
+                Err(ReadmeError::PrivacyEarly {
+                    version: version.to_owned()
+                }),
+                "{version}"
+            );
+        }
+
+        // From the release on: the status line names it, and the
+        // paragraph has to be there.
+        for version in ["0.6.0", "0.6.1", "0.10.0", "1.0.0"] {
+            assert_eq!(
+                check_privacy(&readme_of(version, without), PRIVACY_SPEC),
+                missing(version),
+                "{version}"
+            );
+            assert_eq!(
+                check_privacy(&readme_of(version, &with), PRIVACY_SPEC),
+                Ok(()),
+                "{version}"
+            );
+        }
+
+        // Word for word, and in its place.
+        for (case, foot) in [
+            (
+                "other words",
+                "---\n\nRick asks one thing by itself.\n\n[Building](docs/building.md)\n"
+                    .to_owned(),
+            ),
+            (
+                "above the rule",
+                format!("{PRIVACY}\n\n---\n\n[Building](docs/building.md)\n"),
+            ),
+            (
+                "under the links",
+                format!("---\n\n[Building](docs/building.md)\n\n{PRIVACY}\n"),
+            ),
+            (
+                "inside another paragraph",
+                format!("---\n\nNote: {PRIVACY}\n\n[Building](docs/building.md)\n"),
+            ),
+            (
+                "twice",
+                format!("{PRIVACY}\n\n---\n\n{PRIVACY}\n\n[Building](docs/building.md)\n"),
+            ),
+        ] {
+            assert_eq!(
+                check_privacy(&readme_of("0.6.0", &foot), PRIVACY_SPEC),
+                missing("0.6.0"),
+                "{case}"
+            );
+        }
+
+        // A spec that quotes no paragraph, and a README that names no
+        // release, are said as what they are.
+        assert_eq!(
+            check_privacy(&readme_of("0.6.0", &with), "### 9. Privacy (fixed)\n"),
+            Err(ReadmeError::NoPrivacyWording)
+        );
+        assert_eq!(
+            check_privacy("# Rick\n", PRIVACY_SPEC),
+            Err(ReadmeError::NoBlock(STATUS))
+        );
+        assert_eq!(numbers("0.6.0-rc1+build.5"), Some([0, 6, 0]));
+        assert_eq!(numbers("0.6"), None);
+        assert_eq!(numbers("six"), None);
     }
 
     #[test]

@@ -3533,6 +3533,8 @@ fn screenshots_of_the_small_items() {
                 points: Points::ACTION,
                 platforms: Platforms::ALL,
                 previews: &[],
+                markers: &[],
+                connections: &[],
                 commands: &[],
             })),
         ],
@@ -3787,6 +3789,8 @@ fn screenshots_of_the_extensions_dialogue() {
             version: manifest.version.to_string(),
             points: manifest.points,
             previews: manifest.previews.iter().map(|p| (*p).to_owned()).collect(),
+            markers: Vec::new(),
+            connections: Vec::new(),
             status: PluginStatus::Loaded,
             path: beside.join(manifest.id.0),
             built_in: true,
@@ -3814,6 +3818,8 @@ fn screenshots_of_the_extensions_dialogue() {
         version: "1.2.0".to_owned(),
         points: ext::Points::ACTION,
         previews: Vec::new(),
+        markers: Vec::new(),
+        connections: Vec::new(),
         status: PluginStatus::Loaded,
         path: per_user.join("word-count"),
         built_in: false,
@@ -3908,6 +3914,860 @@ fn screenshots_of_the_extensions_dialogue() {
     for (theme, density, mode) in [modes[0], modes[2]] {
         set(&mut harness, theme, density);
         shoot(&mut harness, &format!("extensions-user-{mode}"));
+    }
+}
+
+/// A window for the suggestions' screenshots (issue 252): a Rick of the
+/// registry tests' version on `folder`, with `extensions` loaded and a
+/// registry of the test's own that offers the plugins a release
+/// publishes separately, as their manifests describe them. The server
+/// lives as long as the window is looked at.
+fn suggestions_window(
+    folder: &Path,
+    extensions: Vec<Arc<dyn ext::Extension>>,
+) -> (Harness<'static, RickUi>, plugins_registry::fixtures::Server) {
+    use ext::Extension;
+    use plugins_registry::fixtures::{Server, Signer};
+    use tests::registry;
+    let separate: Vec<(Box<dyn Extension>, u64)> = vec![
+        (Box::new(ext_git::GitExtension::new()), 4_812_800),
+        (Box::new(ext_svn::SvnExtension::new()), 1_126_400),
+        (Box::new(ext_ssh::SshExtension::new()), 6_348_800),
+        (Box::new(ext_vfs_s3::S3Extension::new()), 3_788_800),
+        (Box::new(ext_vfs_azure::AzureExtension::new()), 3_686_400),
+        (Box::new(ext_vfs_gcs::GcsExtension::new()), 3_891_200),
+        (
+            Box::new(ext_preview_office::OfficePreview::new()),
+            2_252_800,
+        ),
+        (Box::new(ext_preview_3d::Preview3d::new()), 9_420_800),
+    ];
+    let plugins: Vec<serde_json::Value> = separate
+        .iter()
+        .map(|(ext, size)| {
+            registry::plugin(ext.manifest(), &[registry::listed(registry::RICK, *size)])
+        })
+        .collect();
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(&signer, &registry::index(&plugins));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let config = fake.config_dir();
+    fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        config.join(app::SETTINGS_FILE),
+        registry::rick_toml(&server, &signer, true),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions,
+        config_dir: Some(config),
+        start: Some(local(folder)),
+    });
+    app.set_rick_version(registry::RICK);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    registry::background_check(harness.state_mut().app_mut());
+    settle(&mut harness);
+    (harness, server)
+}
+
+/// specs/plugin-distribution.md §8 (issue 252): the suggestion of a
+/// plugin that is not there, against a registry of the test's own, in
+/// Light and Dark. In the preview pane: the bar at the top of the pane
+/// where the hex view shows a 3D model, and **Install** in the action
+/// row of the *No previewer* card where the hex view is not loaded. In
+/// the file list: the bar between the toolbar and the list of a pane
+/// that entered a Git work tree, beside a pane that did not. In the side
+/// panel: *Add…* of Cloud, shown because the registry offers cloud
+/// plugins, and of Network, each listing the kinds with their sizes.
+/// After **Install**: the bar that reads *Git is installed. Restart Rick
+/// to use it.* The Behaviour page with *Suggest plugins*, and the
+/// Extensions dialogue on a plugin that is *Not suggested*.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_plugin_suggestions() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().join("Projects").join("enclosure");
+    fs::create_dir_all(root.join("drawings")).unwrap_or_else(|e| panic!("{e}"));
+    let noise: Vec<u8> = (0..4096u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13).to_le_bytes()[0])
+        .collect();
+    for name in ["lid.stl", "base.stl", "bracket-left.stl"] {
+        fs::write(root.join(name), &noise).unwrap_or_else(|e| panic!("{e}"));
+    }
+    fs::write(root.join("README.md"), "# Enclosure\n\nPrinted in PETG.\n")
+        .unwrap_or_else(|e| panic!("{e}"));
+    fs::write(root.join("front.jpg"), media::photo_jpeg(640, 480))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let modes = [(Theme::Light, "light"), (Theme::Dark, "dark")];
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        // The pointer rests on nothing.
+        harness.event(egui::Event::PointerMoved(egui::pos2(300.0, 780.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let previewers = || -> Vec<Arc<dyn ext::Extension>> {
+        vec![
+            Arc::new(ext_preview_text::TextPreview::new()),
+            Arc::new(ext_preview_image::ImagePreview::new()),
+        ]
+    };
+
+    // Over the hex view: the bar at the top of the pane.
+    let mut extensions = previewers();
+    extensions.push(Arc::new(ext_preview_hex::HexPreview::new()));
+    let (mut harness, _server) = suggestions_window(&root, extensions);
+    harness.state_mut().set_inspector_width(640.0);
+    preview(&mut harness, "lid.stl");
+    settle(&mut harness);
+    assert!(harness.state().preview_rects().suggestion.is_some());
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("suggest-preview-bar-{mode}"));
+    }
+    std::mem::drop(harness);
+    // The same in a pane too narrow for one line: the buttons go under
+    // the text.
+    let mut extensions = previewers();
+    extensions.push(Arc::new(ext_preview_hex::HexPreview::new()));
+    let (mut harness, _server) = suggestions_window(&root, extensions);
+    harness.state_mut().set_inspector_width(300.0);
+    preview(&mut harness, "lid.stl");
+    settle(&mut harness);
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("suggest-preview-bar-narrow-{mode}"));
+    }
+    std::mem::drop(harness);
+
+    // Without the hex view: the card's button.
+    let (mut harness, _server) = suggestions_window(&root, previewers());
+    harness.state_mut().set_inspector_width(640.0);
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::ToggleInspector, pane);
+    settle(&mut harness);
+    let id = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .and_then(|(_, t)| t.listing.rows().find(|e| e.name == "lid.stl").map(|e| e.id))
+        .unwrap_or_else(|| panic!("no entry"));
+    harness.state_mut().app_mut().handle(
+        app::Command::Select {
+            pane,
+            change: SelectionChange::Set(vec![id]),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    for _ in 0..6 {
+        harness.step();
+    }
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("suggest-preview-card-{mode}"));
+    }
+    std::mem::drop(harness);
+
+    // The file list: a work tree in the right pane, its parent in the
+    // left one. One bar, in the pane that is in the work tree.
+    let projects = dir.path().join("Projects");
+    let repo = projects.join("rick");
+    for folder in [".git", "crates", "docs", "specs"] {
+        fs::create_dir_all(repo.join(folder)).unwrap_or_else(|e| panic!("{e}"));
+    }
+    for (name, text) in [
+        ("Cargo.toml", "[workspace]\n"),
+        ("README.md", "# Rick\n"),
+        ("SPEC.md", "# Rick — File Manager Specification\n"),
+        (".gitignore", "target\n"),
+    ] {
+        fs::write(repo.join(name), text).unwrap_or_else(|e| panic!("{e}"));
+    }
+    // One pane, in the work tree.
+    let (mut harness, _server) = suggestions_window(&repo, previewers());
+    let pane = harness.state().app().model().focused;
+    let bar_of = |harness: &Harness<'_, RickUi>, pane: model::PaneId| {
+        let (tab, _) = harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .unwrap_or_else(|| panic!("tab"));
+        harness.state().suggestion_bar(tab)
+    };
+    assert!(bar_of(&harness, pane).is_some());
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("suggest-list-bar-{mode}"));
+    }
+    std::mem::drop(harness);
+
+    // Two panes: the bar in the one that is in the work tree, and in no
+    // other.
+    let (mut harness, _server) = suggestions_window(&projects, previewers());
+    let left = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::Split {
+            pane: left,
+            dir: model::SplitDir::Right,
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let right = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane: right,
+            to: local(&repo),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    assert!(bar_of(&harness, right).is_some());
+    assert!(bar_of(&harness, left).is_none());
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("suggest-list-bar-two-panes-{mode}"));
+    }
+    std::mem::drop(harness);
+
+    // The side panel: no cloud plugin is loaded and the registry offers
+    // three, so the Cloud section is there with *Add…*, which lists them
+    // with their sizes; Network's lists SSH.
+    let (mut harness, _server) = suggestions_window(&projects, previewers());
+    for (section, scene) in [("Cloud", "cloud"), ("Network", "network")] {
+        for (theme, mode) in modes {
+            set(&mut harness, theme);
+            let header = harness.get_by_label(section).rect();
+            let add = harness
+                .query_all_by_label("Add…")
+                .map(|node| node.rect())
+                .filter(|rect| rect.top() >= header.bottom() - 1.0)
+                .min_by(|a, b| a.top().total_cmp(&b.top()))
+                .unwrap_or_else(|| panic!("no Add… under {section}"));
+            harness.event(egui::Event::PointerMoved(add.center()));
+            harness.step();
+            for pressed in [true, false] {
+                harness.event(egui::Event::PointerButton {
+                    pos: add.center(),
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                harness.step();
+            }
+            // The pointer rests on the first entry, as it does after the
+            // click that opened the list.
+            for _ in 0..6 {
+                harness.step();
+            }
+            shoot(&mut harness, &format!("suggest-add-{scene}-{mode}"));
+            harness.key_press(egui::Key::Escape);
+            for _ in 0..4 {
+                harness.step();
+            }
+        }
+    }
+    std::mem::drop(harness);
+
+    // After Install: the bar that offered Git says that it is installed.
+    // The plugin host's row stands in for the install, which a
+    // screenshot does not wait for.
+    let (mut harness, _server) = suggestions_window(&repo, previewers());
+    let pane = harness.state().app().model().focused;
+    assert!(bar_of(&harness, pane).is_some());
+    let git = {
+        use ext::Extension as _;
+        let git = ext_git::GitExtension::new();
+        let manifest = git.manifest();
+        app::Plugin {
+            id: manifest.id.0.to_owned(),
+            name: manifest.name.to_owned(),
+            description: manifest.description.to_owned(),
+            version: tests::registry::RICK.to_owned(),
+            points: manifest.points,
+            previews: Vec::new(),
+            markers: vec![".git".to_owned()],
+            connections: Vec::new(),
+            status: app::PluginStatus::Installed,
+            path: Path::new("/home/serge/.config/rick/plugins/git").to_owned(),
+            built_in: false,
+            removed: false,
+        }
+    };
+    harness.state_mut().app_mut().set_plugins(vec![git]);
+    for _ in 0..4 {
+        harness.step();
+    }
+    assert!(
+        bar_of(&harness, pane).is_some(),
+        "the bar stays and says so"
+    );
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("suggest-list-bar-installed-{mode}"));
+    }
+    std::mem::drop(harness);
+
+    // The settings: *Suggest plugins*, the second row of the Plugins
+    // group on the Behaviour page.
+    let (mut harness, _server) = suggestions_window(&repo, previewers());
+    harness.state_mut().open_settings();
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::RadioButton, "Behaviour")
+        .click();
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Suggest plugins")
+        .scroll_to_me();
+    for _ in 0..6 {
+        harness.step();
+    }
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("suggest-settings-{mode}"));
+    }
+    std::mem::drop(harness);
+
+    // The Extensions dialogue on a plugin whose suggestions were
+    // silenced: *Not suggested* with **Suggest again**.
+    let (mut harness, _server) = suggestions_window(&repo, previewers());
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::SuggestNever("git".to_owned()),
+        &mut Vec::new(),
+    );
+    harness.state_mut().queue(Intent::Extensions, pane);
+    for _ in 0..4 {
+        harness.step();
+    }
+    for name in ["Available 8", "Git"] {
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::RadioButton, name)
+            .click();
+        settle(&mut harness);
+    }
+    harness.get_by_label("Not suggested");
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("suggest-not-suggested-{mode}"));
+    }
+}
+
+/// specs/plugin-distribution.md §7 (issue 251): the *Available* list of
+/// the Extensions dialogue against a registry of the test's own — the
+/// plugins a release publishes separately, under the headings of the
+/// installed ones, each with its size — and the details of one of them
+/// with **Install**, in Light and Dark; and the line the view shows where
+/// there is no list.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_available_plugins() {
+    use app::{Plugin, PluginStatus};
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+    use ext::Extension;
+    use plugins_registry::fixtures::{Server, Signer};
+    use tests::registry;
+    let (_keep, root) = sample_tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    // The default set, as rows beside the binary.
+    let loaded: Vec<Arc<dyn Extension>> = vec![
+        Arc::new(ext_vfs_archive::ArchiveExtension::new()),
+        Arc::new(ext_vfs_trash::TrashExtension::new()),
+        Arc::new(ext_preview_archive::ArchivePreview::new()),
+        Arc::new(ext_preview_hex::HexPreview::new()),
+        Arc::new(ext_preview_icons::IconsPreview::new()),
+        Arc::new(ext_preview_markup::MarkupPreview::new()),
+        Arc::new(ext_search_walk::WalkExtension::new()),
+        Arc::new(ext_action_rename::RenameExtension::new()),
+        Arc::new(ext_action_compress::CompressExtension::new()),
+        Arc::new(ext_action_compare::CompareExtension::new()),
+    ];
+    let beside = Path::new("/opt/rick/plugins");
+    let rows: Vec<Plugin> = loaded
+        .iter()
+        .map(|ext| {
+            let manifest = ext.manifest();
+            Plugin {
+                id: manifest.id.0.to_owned(),
+                name: manifest.name.to_owned(),
+                description: manifest.description.to_owned(),
+                version: registry::RICK.to_owned(),
+                points: manifest.points,
+                previews: manifest.previews.iter().map(|p| (*p).to_owned()).collect(),
+                markers: Vec::new(),
+                connections: Vec::new(),
+                status: PluginStatus::Loaded,
+                path: beside.join(manifest.id.0),
+                built_in: true,
+                removed: false,
+            }
+        })
+        .collect();
+    // The registry: the plugins a release publishes separately, as their
+    // manifests describe them, with the sizes of their packages.
+    let separate: Vec<(Box<dyn Extension>, u64)> = vec![
+        (Box::new(ext_git::GitExtension::new()), 4_812_800),
+        (Box::new(ext_svn::SvnExtension::new()), 1_126_400),
+        (Box::new(ext_ssh::SshExtension::new()), 6_348_800),
+        (Box::new(ext_vfs_s3::S3Extension::new()), 3_788_800),
+        (Box::new(ext_vfs_azure::AzureExtension::new()), 3_686_400),
+        (Box::new(ext_vfs_gcs::GcsExtension::new()), 3_891_200),
+        (
+            Box::new(ext_preview_office::OfficePreview::new()),
+            2_252_800,
+        ),
+        (Box::new(ext_preview_3d::Preview3d::new()), 9_420_800),
+        (
+            Box::new(ext_preview_media::MediaPreview::new()),
+            148_897_792,
+        ),
+    ];
+    let plugins: Vec<serde_json::Value> = separate
+        .iter()
+        .map(|(ext, size)| {
+            registry::plugin(ext.manifest(), &[registry::listed(registry::RICK, *size)])
+        })
+        .collect();
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(&signer, &registry::index(&plugins));
+    let config = fake.config_dir();
+    fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        config.join(app::SETTINGS_FILE),
+        registry::rick_toml(&server, &signer, true),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: loaded,
+        config_dir: Some(config),
+        start: Some(local(&root)),
+    });
+    app.set_rick_version(registry::RICK);
+    app.set_plugins(rows);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 840.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    // A minute after the start, in a test's time: the background check
+    // of the plugin list.
+    registry::background_check(harness.state_mut().app_mut());
+    settle(&mut harness);
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        // The pointer rests outside the dialogue, on no button.
+        harness.event(egui::Event::PointerMoved(egui::pos2(40.0, 820.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let choose = |harness: &mut Harness<'_, RickUi>, name: &str| {
+        harness
+            .get_by_role_and_label(Role::RadioButton, name)
+            .click();
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::Extensions, pane);
+    for _ in 0..4 {
+        harness.step();
+    }
+    let modes = [(Theme::Light, "light"), (Theme::Dark, "dark")];
+
+    // The control over the installed list, counting what is on offer.
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("extensions-installed-{mode}"));
+    }
+    // The *Available* list, on its first plugin.
+    choose(&mut harness, "Available 9");
+    settle(&mut harness);
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("extensions-available-{mode}"));
+    }
+    // The details of a plugin that is for folders, and of one that adds
+    // a kind of connection.
+    for (name, file) in [("Git", "git"), ("S3", "s3")] {
+        choose(&mut harness, name);
+        for (theme, mode) in modes {
+            set(&mut harness, theme);
+            shoot(&mut harness, &format!("extensions-available-{file}-{mode}"));
+        }
+    }
+    // The same plugin in a Rick a package manager installed: the command
+    // in place of Install.
+    harness
+        .state_mut()
+        .app_mut()
+        .set_packaging(Some(app::plugins::Packaging::Deb));
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(
+            &mut harness,
+            &format!("extensions-available-packaged-{mode}"),
+        );
+    }
+    harness.state_mut().app_mut().set_packaging(None);
+    // The prompt of Install from URL…, with an address typed.
+    harness.get_by_label("Install from URL…").click();
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness
+        .get_all_by_role(Role::TextInput)
+        .find(egui_kittest::Node::is_focused)
+        .unwrap_or_else(|| panic!("the address field has the focus"))
+        .type_text("https://example.org/plugins/word-count-1.2.0-linux-x64.rkp");
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("extensions-install-from-url-{mode}"));
+    }
+}
+
+/// specs/plugin-distribution.md §6 and §7: a Rick whose registry has no
+/// list to give — the key is compiled in before the registry is
+/// published, and its address answers 404. The window a minute after the
+/// start, when the background check has failed: nothing in it says so.
+/// And the *Available* view of the Extensions dialogue, with the one
+/// line and **Check now**, in Light and Dark. The registry is the test's
+/// own, which is why the footer names its address; a build's own
+/// registry is not named there.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_a_registry_without_a_list() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+    use plugins_registry::fixtures::{Server, Signer};
+    use tests::registry;
+    let (_keep, root) = sample_tree();
+    // Nothing is published: the list's address answers 404.
+    let (server, signer) = (Server::start(), Signer::new(1));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let config = fake.config_dir();
+    fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        config.join(app::SETTINGS_FILE),
+        registry::rick_toml(&server, &signer, true),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_vfs_archive::ArchiveExtension::new()),
+            Arc::new(ext_vfs_trash::TrashExtension::new()),
+            Arc::new(ext_preview_hex::HexPreview::new()),
+        ],
+        config_dir: Some(config),
+        start: Some(local(&root)),
+    });
+    app.set_rick_version(registry::RICK);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 840.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    // A minute after the start, in a test's time: the background check,
+    // which gets no list.
+    registry::background_check(harness.state_mut().app_mut());
+    settle(&mut harness);
+    assert_eq!(server.requests().len(), 1, "asked once");
+    assert_eq!(harness.state().toasts(), [], "and nothing is said");
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        // The pointer rests outside the dialogue, on no button.
+        harness.event(egui::Event::PointerMoved(egui::pos2(40.0, 820.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let modes = [(Theme::Light, "light"), (Theme::Dark, "dark")];
+
+    // The window as the failed check leaves it.
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("registry-no-list-window-{mode}"));
+    }
+    // The Available view: opening it asks again, and the line stays.
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::Extensions, pane);
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness
+        .get_by_role_and_label(Role::RadioButton, "Available")
+        .click();
+    for _ in 0..4 {
+        harness.step();
+    }
+    settle(&mut harness);
+    assert_eq!(server.requests().len(), 2, "opening the view asks");
+    harness.get_by_label("The plugin list could not be fetched.");
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(
+            &mut harness,
+            &format!("extensions-available-no-list-{mode}"),
+        );
+    }
+}
+
+/// specs/plugin-distribution.md §7, *Updates* (issue 251): after Rick was
+/// updated, a plugin the registry installed is refused as built for the
+/// Rick before, and the list has this Rick's build of it — the start's
+/// notice with **Update all**, and in the Extensions dialogue the header's
+/// count, the card that reads the host's reason with **Update**, and
+/// **Update all** in the footer, in Light and Dark.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_a_plugin_update() {
+    use app::plugins::{Installed, Origin, Record};
+    use app::{Plugin, PluginStatus};
+    use ext::Extension;
+    use plugins_registry::fixtures::{Server, Signer};
+    use tests::registry;
+    let (_keep, root) = sample_tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let loaded: Vec<Arc<dyn Extension>> = vec![
+        Arc::new(ext_vfs_archive::ArchiveExtension::new()),
+        Arc::new(ext_vfs_trash::TrashExtension::new()),
+        Arc::new(ext_preview_archive::ArchivePreview::new()),
+        Arc::new(ext_preview_hex::HexPreview::new()),
+        Arc::new(ext_action_rename::RenameExtension::new()),
+        Arc::new(ext_action_compress::CompressExtension::new()),
+    ];
+    let beside = Path::new("/opt/rick/plugins");
+    let row = |ext: &dyn Extension, version: &str, dir: &Path, status: PluginStatus| {
+        let manifest = ext.manifest();
+        Plugin {
+            id: manifest.id.0.to_owned(),
+            name: manifest.name.to_owned(),
+            description: manifest.description.to_owned(),
+            version: version.to_owned(),
+            points: manifest.points,
+            previews: manifest.previews.iter().map(|p| (*p).to_owned()).collect(),
+            markers: Vec::new(),
+            connections: Vec::new(),
+            status,
+            path: dir.join(manifest.id.0),
+            built_in: dir == beside,
+            removed: false,
+        }
+    };
+    let mut rows: Vec<Plugin> = loaded
+        .iter()
+        .map(|ext| row(&**ext, registry::RICK, beside, PluginStatus::Loaded))
+        .collect();
+    // Two plugins of the per-user folder, installed from the registry by
+    // the Rick before and refused by this one.
+    let per_user = fake.config_dir().join("plugins");
+    let separate: Vec<(Box<dyn Extension>, u64)> = vec![
+        (Box::new(ext_git::GitExtension::new()), 4_812_800),
+        (Box::new(ext_vfs_s3::S3Extension::new()), 3_788_800),
+        (Box::new(ext_ssh::SshExtension::new()), 6_348_800),
+    ];
+    for (ext, _) in &separate[..2] {
+        let refused = PluginStatus::Refused("Built for Rick 0.5.0".to_owned());
+        let user = row(&**ext, "0.5.0", &per_user, refused);
+        fs::create_dir_all(&user.path).unwrap_or_else(|e| panic!("{e}"));
+        let noted = Installed {
+            source: Origin::Registry,
+            version: "0.5.0".to_owned(),
+            sha256: "00".repeat(32),
+            url: None,
+        };
+        Record::note(&per_user, &user.path, noted).unwrap_or_else(|e| panic!("{e}"));
+        rows.push(user);
+    }
+    let plugins: Vec<serde_json::Value> = separate
+        .iter()
+        .map(|(ext, size)| {
+            registry::plugin(ext.manifest(), &[registry::listed(registry::RICK, *size)])
+        })
+        .collect();
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(&signer, &registry::index(&plugins));
+    let config = fake.config_dir();
+    fs::write(
+        config.join(app::SETTINGS_FILE),
+        registry::rick_toml(&server, &signer, true),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: loaded,
+        config_dir: Some(config),
+        start: Some(local(&root)),
+    });
+    app.set_rick_version(registry::RICK);
+    app.set_plugins(rows);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 840.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    // A minute after the start, in a test's time: the background check
+    // of the plugin list.
+    registry::background_check(harness.state_mut().app_mut());
+    settle(&mut harness);
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        harness.event(egui::Event::PointerMoved(egui::pos2(40.0, 820.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let modes = [(Theme::Light, "light"), (Theme::Dark, "dark")];
+    // The notice of the first start that finds the updates.
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("plugin-updates-notice-{mode}"));
+    }
+    // The dialogue, on one of the two.
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::Extensions, pane);
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::RadioButton, "Git")
+        .click();
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("extensions-update-{mode}"));
+    }
+}
+
+/// The update notice for Rick itself (specs/plugin-distribution.md §6,
+/// specs/gui-title-row.md *Menu*, specs/about-dialog.md): the toast with
+/// **Download** and the attention dot on the menu button, the application
+/// menu with *Update available*, and the About dialog with its line, for
+/// a Rick from an archive and for one a package manager installed, in
+/// Light and Dark.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_update_notice() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+    use plugins_registry::fixtures::{Server, Signer};
+    use tests::registry;
+    let (_keep, root) = sample_tree();
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(
+        &signer,
+        &registry::index_with_latest(
+            &[],
+            "0.7.0",
+            "https://github.com/Open-Breach/rick/releases/tag/v0.7.0",
+        ),
+    );
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let modes = [(Theme::Light, "light"), (Theme::Dark, "dark")];
+    for (packaging, kind) in [
+        (None, "archive"),
+        (Some(app::plugins::Packaging::Deb), "packaged"),
+    ] {
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let host = Arc::new(EguiHost::new());
+        let config = fake.config_dir();
+        fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(
+            config.join(app::SETTINGS_FILE),
+            registry::rick_toml(&server, &signer, true),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let mut app = app::App::new(app::Config {
+            platform: fake.clone(),
+            ui: host.clone(),
+            extensions: Vec::new(),
+            config_dir: Some(config),
+            start: Some(local(&root)),
+        });
+        app.set_rick_version(registry::RICK);
+        app.set_packaging(packaging);
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1280.0, 840.0))
+            .with_pixels_per_point(2.0)
+            .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+        settle(&mut harness);
+        registry::background_check(harness.state_mut().app_mut());
+        settle(&mut harness);
+        // The toast, and the dot on the menu button.
+        for (theme, mode) in modes {
+            set(&mut harness, theme);
+            shoot(&mut harness, &format!("update-notice-{kind}-{mode}"));
+        }
+        // The application menu, with the entry above About Rick.
+        harness.get_by_role_and_label(Role::Button, "Menu").click();
+        for _ in 0..4 {
+            harness.step();
+        }
+        for (theme, mode) in modes {
+            set(&mut harness, theme);
+            shoot(&mut harness, &format!("update-notice-menu-{kind}-{mode}"));
+        }
+        harness.key_press(egui::Key::Escape);
+        for _ in 0..4 {
+            harness.step();
+        }
+        // The About dialog, with the line under the build line.
+        harness.state_mut().open_about();
+        for _ in 0..4 {
+            harness.step();
+        }
+        for (theme, mode) in modes {
+            set(&mut harness, theme);
+            shoot(&mut harness, &format!("update-notice-about-{kind}-{mode}"));
+        }
     }
 }
 

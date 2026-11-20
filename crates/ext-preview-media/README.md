@@ -4,7 +4,7 @@
 one code path on every platform: the system GStreamer on Linux, the runtime
 the release archives bundle on macOS and Windows (QUESTIONS.md 106). It
 reads the headers and tags itself (ID3, RIFF `INFO`, MP4 `ilst`), asks the
-Discoverer for the streams, opens a `playbin3` whose video sink hands the
+Discoverer for the streams, opens a `playbin` whose video sink hands the
 frames to the document as RGBA — upright, turned by `videoflip` as the
 container's orientation says, or as stored where that element is missing —
 and whose transport the pane drives (play, pause, seek, volume, speed,

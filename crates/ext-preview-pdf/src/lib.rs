@@ -84,6 +84,8 @@ impl PdfPreview {
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
                 previews: &["pdf"],
+                markers: &[],
+                connections: &[],
                 commands: &[],
             },
         }

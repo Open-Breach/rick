@@ -83,6 +83,8 @@ fn plugins() -> Vec<app::Plugin> {
             version: "0.3.0-dev".to_owned(),
             points: ext::Points::empty(),
             previews: Vec::new(),
+            markers: Vec::new(),
+            connections: Vec::new(),
             status: app::PluginStatus::Loaded,
             path: PathBuf::from("/opt/rick/plugins/git"),
             description: String::new(),
@@ -95,6 +97,8 @@ fn plugins() -> Vec<app::Plugin> {
             version: "1.0.0".to_owned(),
             points: ext::Points::empty(),
             previews: Vec::new(),
+            markers: Vec::new(),
+            connections: Vec::new(),
             status: app::PluginStatus::Disabled,
             path: PathBuf::from("/home/me/.config/rick/plugins/probe"),
             description: String::new(),
@@ -281,10 +285,10 @@ fn the_licence_card_counts_and_loaded_plugins_opens_the_extensions_screen() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let (mut harness, _fake) = harness(dir.path());
     open(&mut harness);
-    // One crate and the eight bundled runtimes; two plugins, one from
+    // One crate and the nine bundled runtimes; two plugins, one from
     // outside the release's plugins folder.
-    assert_eq!(harness.state().about().component_count(), Some(9));
-    harness.get_by_label_contains("9 components");
+    assert_eq!(harness.state().about().component_count(), Some(10));
+    harness.get_by_label_contains("10 components");
     harness.get_by_label_contains("2 plugins · 1 third-party");
     assert!(!harness.state().extensions_open());
     click_button(&mut harness, "Loaded plugins");
@@ -330,8 +334,8 @@ fn licences_search<'h>(harness: &'h Harness<'_, RickUi>) -> egui_kittest::Node<'
 /// Opens the dialog and its Third-party licences page.
 fn open_licences(harness: &mut Harness<'_, RickUi>) {
     open(harness);
-    // Two crates, eight bundled runtimes and the plugin's one entry.
-    assert_eq!(harness.state().about().component_count(), Some(11));
+    // Two crates, nine bundled runtimes and the plugin's one entry.
+    assert_eq!(harness.state().about().component_count(), Some(12));
     click_button(harness, "Third-party licences");
     assert!(harness.state().about().licences_page().is_some());
 }
@@ -354,7 +358,7 @@ fn the_third_party_page_lists_the_sections_and_opens_one_row_at_a_time() {
     ] {
         harness.get_by_role_and_label(Role::Button, row);
     }
-    harness.get_by_label_contains("11 components, 7 licence types");
+    harness.get_by_label_contains("12 components, 8 licence types");
 
     // A row opens in place with its copyright line and text; another row
     // replaces it (one at the top, so the open text does not scroll the
@@ -467,5 +471,71 @@ fn the_third_party_page_filters_by_name_and_exports_the_whole_list() {
             .any(|(_, t)| t.starts_with("Exported to ")),
         "{:?}",
         harness.state().toasts()
+    );
+}
+
+/// The components shipped outside Cargo are in the licence file a release
+/// carries, not only in the dialog: `bundled-licenses.py`, which the
+/// release appends to the generated `THIRD-PARTY-LICENSES.md`, prints
+/// every entry of `about/bundled.toml` — pdfium, the standard library, the
+/// fonts and the icon font among them — with its licence text, says where
+/// the texts of the libraries inside pdfium and the standard library are,
+/// and ends with the note on the project's own artwork.
+#[test]
+fn the_licence_file_names_the_bundled_components_with_their_texts() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let output = std::process::Command::new("python3")
+        .arg(root.join(".github/scripts/bundled-licenses.py"))
+        .arg(root.join("about/bundled.toml"))
+        .output();
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!("python3 is not available ({error}); the check is not run here");
+            return;
+        }
+    };
+    assert!(
+        output.status.success(),
+        "bundled-licenses failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // Python ends the lines of what it prints as the platform does, with
+    // `\r\n` on Windows; what is checked is the text.
+    let text = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+    assert!(text.contains("\n## Bundled components\n"), "no section");
+
+    let bundled = about::bundled();
+    for name in [
+        "pdfium",
+        "Rust standard library",
+        "Ubuntu Light",
+        "Phosphor Icons",
+    ] {
+        assert!(bundled.iter().any(|c| c.name == name), "{name} is bundled");
+    }
+    for component in &bundled {
+        let heading = format!(
+            "\n### {} {} ({})\n",
+            component.name, component.version, component.license
+        );
+        assert!(text.contains(&heading), "no heading for {}", component.name);
+        // The licence text itself, whole: what the dialog shows is what
+        // the file has.
+        assert!(
+            text.contains(component.text.trim_matches('\n')),
+            "the text of {} is not in the file",
+            component.name
+        );
+    }
+    for place in ["licenses/pdfium/", "licenses/rust/COPYRIGHT-library.html"] {
+        assert!(text.contains(place), "{place} is not named");
+    }
+    assert!(
+        text.contains("original artwork of the Rick project"),
+        "no note on the artwork"
     );
 }

@@ -48,9 +48,9 @@ pub use session::{
 };
 pub use settings::{
     AfterDrag, Archives, ConnectionEntry, DateFormat, Density, Drag, LAST_SESSION, OnOpen,
-    PanelSide, Plugins, Preview, Rgb, Search, Section, SessionSettings, Settings, SettingsChange,
-    SidePanel, SidePanelChange, TextPreview, Theme, TitlebarColour, WindowFrame, WindowSettings,
-    parse_location,
+    PanelSide, Plugins, Preview, RegistrySettings, Rgb, Search, Section, SessionSettings, Settings,
+    SettingsChange, SidePanel, SidePanelChange, TextPreview, Theme, TitlebarColour, WindowFrame,
+    WindowSettings, parse_location,
 };
 pub use timeline::{PaneTimeline, TimelineState};
 pub use tree::{Tree, TreeRow};

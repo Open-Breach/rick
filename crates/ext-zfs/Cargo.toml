@@ -6,6 +6,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# A separate plugin: a release publishes it as a package of its own and its
+# archives do not carry it (specs/plugin-distribution.md §4).
+[package.metadata.rick]
+separate = true
+
 # A plugin: a `cdylib` the host loads from `plugins/zfs/`, and an `rlib`
 # for the binary's opt-in `zfs` feature and the tests.
 [lib]
@@ -14,7 +19,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 types = { workspace = true }
 ext = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true, features = ["fs", "sync"] }
 thiserror = { workspace = true }

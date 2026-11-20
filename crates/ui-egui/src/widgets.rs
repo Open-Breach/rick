@@ -317,6 +317,25 @@ pub fn segmented_with(
     clicked
 }
 
+/// The diameter of the [`attention_dot`].
+pub const ATTENTION_DOT: f32 = 8.0;
+
+/// The attention dot: 8 px in `status/warning`, centred on `center`. It
+/// marks what wants the user's attention — a plugin in the Extensions
+/// dialogue, the menu button while a newer Rick is available — and says
+/// `label` to the pointer that rests on it and to a screen reader. It
+/// takes no room of its own: the caller places it.
+pub fn attention_dot(ui: &mut egui::Ui, center: egui::Pos2, id: egui::Id, label: &str) {
+    let scheme = theme::scheme(ui);
+    ui.painter()
+        .circle_filled(center, ATTENTION_DOT / 2.0, scheme.status_warning);
+    let dot = Rect::from_center_size(center, vec2(ATTENTION_DOT, ATTENTION_DOT));
+    let spoken = label.to_owned();
+    ui.interact(dot, id, Sense::hover())
+        .on_hover_text(label)
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken.clone()));
+}
+
 /// A small pill: `text` in 11 px on a rounded `bg` tint. Returns the
 /// rectangle it took.
 pub fn pill(ui: &mut egui::Ui, text: &str, bg: egui::Color32, fg: egui::Color32) -> Rect {
@@ -397,7 +416,19 @@ pub fn card_button(
     label: &str,
     kind: ButtonKind,
 ) -> egui::Response {
-    button_sized(ui, glyph, label, kind, true, 32.0)
+    card_button_when(ui, glyph, label, kind, true)
+}
+
+/// [`card_button`], disabled unless `enabled`: for an action that is
+/// running already.
+pub fn card_button_when(
+    ui: &mut egui::Ui,
+    glyph: Option<&str>,
+    label: &str,
+    kind: ButtonKind,
+    enabled: bool,
+) -> egui::Response {
+    button_sized(ui, glyph, label, kind, enabled, 32.0)
 }
 
 /// A button `height` tall; a 36 px one has 16 px of padding at its sides,

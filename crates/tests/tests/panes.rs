@@ -220,6 +220,10 @@ fn the_view_options_menu_switches_views_flips_switches_and_filters_types() {
     assert_eq!(names(&harness), ["c.png"]);
     harness.key_press(egui::Key::Escape);
     harness.step();
+    // The hidden file of the last part is there before the folder is
+    // listed, so the listing has it from its read of the folder and not
+    // from the watcher's report, which `settle` does not wait for.
+    fs::write(dir.path().join("sub/.hidden"), "x").unwrap_or_else(|e| panic!("{e}"));
     let pane = harness.state().app().model().focused;
     harness.state_mut().app_mut().handle(
         app::Command::Navigate {
@@ -232,8 +236,6 @@ fn the_view_options_menu_switches_views_flips_switches_and_filters_types() {
     assert!(tab(&harness).types.is_none(), "cleared on navigation");
 
     // Show hidden files is the pane's toggle.
-    fs::write(dir.path().join("sub/.hidden"), "x").unwrap_or_else(|e| panic!("{e}"));
-    settle(&mut harness);
     assert!(!names(&harness).contains(&".hidden".to_owned()));
     click(&mut harness, "View options");
     harness

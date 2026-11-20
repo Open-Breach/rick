@@ -10,9 +10,9 @@
 //!
 //! At start [`Host::load`] scans `<binary dir>/plugins/` and
 //! `<config dir>/plugins/` (per-user wins on an id clash), reads every
-//! [`plugin.toml`](PluginToml), refuses a plugin whose `api_version`,
-//! `toolchain` or `platforms` do not fit this host, skips the ids
-//! `rick.toml` disables, and loads the rest with [`load_library`]: the
+//! [`plugin.toml`](PluginToml), refuses a plugin whose `rick`,
+//! `api_version`, `toolchain` or `platforms` do not fit this host, skips
+//! the ids `rick.toml` disables, and loads the rest with [`load_library`]: the
 //! library's entry point, named after its file
 //! ([`ext::plugin::entry_point`]), is called with a registry of its own
 //! and the result wrapped as a [`Loaded`] extension that the application
@@ -38,17 +38,24 @@ use std::path::Path;
 
 pub use host::{Host, Options, PLUGINS_DIR, Plugin, PluginStatus, Source};
 pub use load::{LoadError, Loaded, crate_stem, load_library};
-pub use manifest::{CommandToml, Library, MANIFEST_FILE, ManifestError, PluginToml};
+pub use manifest::{
+    CommandToml, ConnectionToml, Library, MANIFEST_FILE, ManifestError, PluginToml,
+};
 
 /// The toolchain this host was built with, as `rustc -V` prints it. A
 /// plugin's manifest must name the same one.
 pub const HOST_TOOLCHAIN: &str = env!("RICK_TOOLCHAIN");
 
+/// The version of Rick this host is part of: the workspace's version,
+/// which the binary and every plugin crate carry too. A plugin's manifest
+/// must name the same one as its `rick` (specs/plugin-distribution.md §3).
+pub const HOST_RICK: &str = env!("CARGO_PKG_VERSION");
+
 /// Loads the library at `path` once, with the platform the binary runs on,
 /// reads the manifest its entry point registers and returns the
-/// `plugin.toml` for it, with this build's toolchain and the library names
-/// cargo gives the crate; the library stays mapped. For the bundler, not
-/// the running application.
+/// `plugin.toml` for it, with this build's version of Rick, its toolchain
+/// and the library names cargo gives the crate; the library stays mapped.
+/// For the bundler, not the running application.
 ///
 /// # Errors
 ///
@@ -64,6 +71,7 @@ pub fn describe(path: &Path) -> Result<PluginToml, LoadError> {
     Ok(PluginToml::describe(
         loaded.manifest(),
         &stem,
+        HOST_RICK,
         HOST_TOOLCHAIN,
     ))
 }

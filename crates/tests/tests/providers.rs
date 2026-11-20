@@ -686,6 +686,75 @@ fn both_plugins_load_through_the_host() {
     drop(host);
 }
 
+/// Issue 264: the archive plugin as it is installed, in its folder of the
+/// per-user plugins directory with the 7-Zip library beside its own, is
+/// loaded by the host and opens a 7z archive, an ISO image and, through
+/// the 7-Zip library, a VHDX. The plugin opens that library by its full
+/// path, so on Windows its folder is neither on the `PATH` nor named to
+/// the loader, and the library's own needs are the system's. In a process
+/// of its own: the host limits where a Windows process looks for
+/// libraries, for good, and this test is about what holds after that.
+#[test]
+fn the_archive_plugin_the_host_loaded_opens_a_7z_an_iso_and_a_disk_image() {
+    use ext_vfs_archive::fixtures as disks;
+    if !tests::alone(
+        "providers::the_archive_plugin_the_host_loaded_opens_a_7z_an_iso_and_a_disk_image",
+    ) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let plugins = fake.config_dir().join(plugins_native::PLUGINS_DIR);
+    install(&plugins, "ext_vfs_archive");
+    let library = sevenzip_library();
+    if let Some(library) = &library {
+        fs::copy(
+            library,
+            plugins
+                .join("vfs-archive")
+                .join(platform::sevenzip::LIBRARY_FILE),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    }
+    let host = Host::load(&Options {
+        dirs: vec![(Source::PerUser, plugins)],
+        platform: Some(fake.clone()),
+        ..Options::default()
+    });
+    let row = host
+        .plugins()
+        .iter()
+        .find(|p| p.id == "vfs-archive")
+        .unwrap_or_else(|| panic!("no vfs-archive in {:?}", host.plugins()));
+    assert_eq!(row.status, PluginStatus::Loaded);
+
+    sevenz_with_folder(&dir.path().join("data.7z"));
+    iso(&dir.path().join("disc.iso"));
+    let mut images: Vec<(&str, &[&str])> =
+        vec![("data.7z", &["data"]), ("disc.iso", &["README", "docs"])];
+    if library.is_some() {
+        fs::write(
+            dir.path().join("disk.vhdx"),
+            disks::vhdx(&disks::fat12_image()),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        images.push(("disk.vhdx", &["DOCS", "HELLO.TXT"]));
+    }
+    let mut d = Driver::with_fake(fake, dir.path(), host.extensions());
+    for (name, root) in images {
+        let id = d.id_of(name);
+        d.step(Command::Open { pane: d.pane, id });
+        assert_eq!(d.tab().location.provider, ProviderId::ARCHIVE, "{name}");
+        assert_eq!(d.names(), root, "{name}");
+        d.step(Command::Navigate {
+            pane: d.pane,
+            to: local(dir.path()),
+        });
+    }
+    drop(d);
+    drop(host);
+}
+
 /// The 7-Zip library for the disk-image tests: the one CI put in
 /// `RICK_SEVENZIP_DIR` (test infrastructure; the plugins read no
 /// environment variable), else the platform's usual locations; `None` with
@@ -878,6 +947,8 @@ fn a_vhdx_without_the_library_shows_the_instructions_and_browsing_to_it_lists() 
             points: ext::Points::PREVIEWER,
             platforms: ext::Platforms::ALL,
             previews: &["vhdx"],
+            markers: &[],
+            connections: &[],
             commands: &[],
         },
         vec![nowhere.join(platform::sevenzip::LIBRARY_FILE)],

@@ -161,6 +161,8 @@ impl MarkupPreview {
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
                 previews: EXTENSIONS,
+                markers: &[],
+                connections: &[],
                 commands: &[],
             },
         }
