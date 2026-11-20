@@ -660,8 +660,9 @@ fn install_block(title: &str, links: &[String], steps: &str) -> Option<String> {
 /// The body of the Install section (specs/readme.md, *Install*): per
 /// operating system the direct link to each archive of `platforms` for
 /// the release `version`, and the steps to get Rick running from it; then
-/// how a file is verified, what the Office and media previews need
-/// installed, and the line on the plugins.
+/// how a file is verified, where the Office and media previews come from
+/// and what they need installed, and the lines on the plugins: the ones in
+/// the archive, the separate downloads and the *Suggest plugins* setting.
 #[must_use]
 pub fn install(version: &str, platforms: &[String]) -> String {
     let base = format!(
@@ -711,13 +712,16 @@ pub fn install(version: &str, platforms: &[String]) -> String {
     let mut out: Vec<String> = blocks.into_iter().flatten().collect();
     out.push(VERIFY.to_owned());
     out.push(
-        "Office documents preview through LibreOffice when it is installed; on Linux, audio and \
-         video need the GStreamer plug-ins."
+        "The Office preview is a separate download and needs LibreOffice installed. Audio and \
+         video are in the Linux archive, where they need the GStreamer plug-ins, and a separate \
+         download on macOS and Windows."
             .to_owned(),
     );
     out.push(
         "Plugins ship in the archive's `plugins/` folder; delete a plugin's folder and that \
-         plugin is gone."
+         plugin is gone. The rest are separate downloads under *Extensions → Available*, and \
+         Rick says so when one would serve what you are looking at. *Suggest plugins* in \
+         Settings → Behaviour turns that off."
             .to_owned(),
     );
     out.join("\n\n")
@@ -1085,8 +1089,9 @@ mod tests {
             "gh attestation verify <file> --owner Open-Breach --signer-repo Open-Breach/trebuchet"
         ));
         assert!(text.contains("gh attestation verify <file> --repo Open-Breach/rick"));
-        assert!(text.contains("\n\nOffice documents preview through LibreOffice when it is"));
-        assert!(text.ends_with("that plugin is gone."));
+        assert!(text.contains("\n\nThe Office preview is a separate download and needs"));
+        assert!(text.contains("\n\nPlugins ship in the archive's `plugins/` folder;"));
+        assert!(text.ends_with("*Suggest plugins* in Settings → Behaviour turns that off."));
     }
 
     #[test]

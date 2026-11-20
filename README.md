@@ -66,7 +66,9 @@ ZIP, JAR, WAR, EAR, APK, XPI, 7z, RAR, ISO, TAR, TAR.GZ, TAR.ZST, TAR.XZ, TAR.BZ
 
 Coming:
 
-- Distribution images: an installer or a package for each platform, signed.
+- A signed and notarised DMG for macOS and an installer for Windows.
+- Tab navigation, finished.
+- Faster on big folders.
 - Further bug fixes.
 
 <picture>
@@ -100,9 +102,9 @@ gh attestation verify <file> --owner Open-Breach --signer-repo Open-Breach/trebu
 gh attestation verify <file> --repo Open-Breach/rick                                   # a macOS or Windows file
 ```
 
-Office documents preview through LibreOffice when it is installed; on Linux, audio and video need the GStreamer plug-ins.
+The Office preview is a separate download and needs LibreOffice installed. Audio and video are in the Linux archive, where they need the GStreamer plug-ins, and a separate download on macOS and Windows.
 
-Plugins ship in the archive's `plugins/` folder; delete a plugin's folder and that plugin is gone.
+Plugins ship in the archive's `plugins/` folder; delete a plugin's folder and that plugin is gone. The rest are separate downloads under *Extensions → Available*, and Rick says so when one would serve what you are looking at. *Suggest plugins* in Settings → Behaviour turns that off.
 <!-- /generated:install -->
 
 > **Use with caution.** Rick is written largely by an AI coding agent working from [SPEC.md](SPEC.md), with human review, a strict test gate and CI on all three platforms. That makes it fast to build and easy to audit, but it is still young software whose entire purpose is to move, rename and delete your files. Until 1.0, run it on data you have backed up, prefer *Move to trash* over *Delete permanently*, and treat every release as a preview. If it does something surprising, that's a bug: please report it.
