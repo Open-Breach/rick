@@ -142,7 +142,10 @@ holds an entry that is a plugin's marker, hidden or not. The names of a
 listing are held against the markers as its batches arrive, as a refresh
 swaps it in and as the watch reports changes, and again when a plugin
 list or the plugin host's rows arrive after the folder was listed; a
-pane that left the folder is suggested nothing. A plugin of the
+pane that left the folder is suggested nothing. A plugin that was
+installed or switched on in this run is suggested no longer:
+`App::plugin_pending` says that it waits for the next start, and the
+place that suggested it says *… is installed. Restart Rick to use it.* A plugin of the
 list that fits this Rick and is in neither plugins folder is suggested
 with *Install*, one that is on the disk and disabled from its own
 manifest with *Enable*, and the one on the disk first. Nothing is

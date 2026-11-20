@@ -1170,6 +1170,10 @@ pub struct Around<'a> {
     /// suggested (specs/plugin-distribution.md §8): the *No previewer*
     /// card says *plugin available* and has its button.
     pub suggestion: Option<&'a app::Suggestion>,
+    /// The plugin the card offered, by its id, once it was installed or
+    /// switched on and waits for the next start: the card says so and
+    /// has **Restart now**.
+    pub installed: Option<(&'a str, app::Pending)>,
 }
 
 /// `read` of `total` in the unit `total` is written in, `7.7 of 18.4 MiB`;
@@ -1307,7 +1311,8 @@ fn file_rows(entry: &Entry, home: &std::path::Path, dates: format::Dates) -> Vec
 /// (specs/plugin-distribution.md §8), the head reads *plugin available*
 /// in that place and the action row gains **Install 3D Models** after
 /// *Open with…* — **Enable 3D Models** for a plugin that is on the disk
-/// and disabled.
+/// and disabled. After either, the head reads *plugin installed, restart
+/// Rick to use it* and the button is **Restart now**.
 ///
 /// An empty file has the same card (SPEC.md *An empty file*), whatever
 /// previewers are loaded: its head reads *This file is empty*, and its
@@ -1326,11 +1331,14 @@ fn no_previewer_card(
         .map(|(_, ext)| ext.to_lowercase());
     // An empty file is given to no previewer, and so to no plugin's.
     let suggestion = around.suggestion.filter(|_| !placeholder.empty);
-    let why = match (suggestion, extension) {
+    let installed = around.installed.filter(|_| !placeholder.empty);
+    let why = match (suggestion, installed, extension) {
         _ if placeholder.empty => t!("preview-file-empty"),
-        (Some(_), _) => t!("preview-plugin-available"),
-        (None, Some(ext)) => t!("preview-no-previewer-for", extension = ext),
-        (None, None) => t!("preview-no-previewer-for-type"),
+        (Some(_), _, _) => t!("preview-plugin-available"),
+        (None, Some((_, app::Pending::Installed)), _) => t!("preview-plugin-installed"),
+        (None, Some((_, app::Pending::Enabled)), _) => t!("preview-plugin-enabled"),
+        (None, None, Some(ext)) => t!("preview-no-previewer-for", extension = ext),
+        (None, None, None) => t!("preview-no-previewer-for-type"),
     };
     // An empty file is not called binary for having no text in it.
     let line = format!("{}  ·  {why}", type_and_size(entry, !placeholder.empty));
@@ -1369,6 +1377,16 @@ fn no_previewer_card(
             disabled: !enabled,
         });
         acts.push(PreviewAct::Suggestion(answer, suggestion.id.clone()));
+    } else if let Some((id, _)) = installed {
+        actions.push(Action {
+            glyph: None,
+            label: t!("extensions-restart-now"),
+            disabled: false,
+        });
+        acts.push(PreviewAct::Suggestion(
+            crate::suggestion::Answer::Restart,
+            id.to_owned(),
+        ));
     }
     let card = Card {
         glyph: icons::for_entry(entry),
@@ -1505,7 +1523,8 @@ pub enum PreviewAct {
     /// Run *Move to trash* on the file: the empty file's one button.
     Trash,
     /// **Install** or **Enable** on the card of a file a plugin that is
-    /// not there would show: what was asked, and the plugin's id.
+    /// not there would show, or **Restart now** after either: what was
+    /// asked, and the plugin's id.
     Suggestion(crate::suggestion::Answer, String),
     /// Open this address, a library's download page, in the browser.
     Download(String),

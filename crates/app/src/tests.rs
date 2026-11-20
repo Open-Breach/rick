@@ -6845,7 +6845,8 @@ mod suggest {
 
     use super::*;
     use crate::{
-        ConnectionKind, PluginStatus, RegistryCommand, Remedy, SuggestedConnection, Suggestion,
+        ConnectionKind, Pending, PluginStatus, RegistryCommand, Remedy, SuggestedConnection,
+        Suggestion,
     };
 
     /// The Rick the tests ask as.
@@ -7641,6 +7642,58 @@ mod suggest {
         );
         h.send(Command::SuggestNotNow("svn".to_owned()));
         assert_eq!(h.suggested(pane).as_deref(), Some("git"), "the next one");
+    }
+
+    /// A plugin that was installed or switched on in this run waits for
+    /// the next start: it is suggested no longer, and the place that
+    /// suggested it says that Rick is to be restarted.
+    #[test]
+    fn a_plugin_installed_or_switched_on_in_this_run_waits_for_the_next_start() {
+        let mut disabled = row("svn", "Subversion", PluginStatus::Disabled);
+        disabled.markers = vec![".svn".to_owned()];
+        let rows = vec![
+            row("git", "Git", PluginStatus::Installed),
+            disabled,
+            row("ssh", "SSH", PluginStatus::Loaded),
+            row(
+                "zfs",
+                "ZFS",
+                PluginStatus::Refused("Built for Rick 0.5.0".to_owned()),
+            ),
+        ];
+        let mut h = rick(&fake(), "[plugins]\ndisabled = [\"svn\"]\n", rows);
+
+        assert_eq!(h.app.plugin_pending("git"), Some(Pending::Installed));
+        // Still switched off: suggested, and waiting for nothing.
+        assert_eq!(h.app.plugin_pending("svn"), None);
+        assert_eq!(
+            said(h.app.suggestion_for_folder([".svn"])),
+            Some(("svn".to_owned(), Remedy::Enable))
+        );
+        // Loaded, refused, and not there at all.
+        for id in ["ssh", "zfs", "vfs-s3"] {
+            assert_eq!(h.app.plugin_pending(id), None, "{id}");
+        }
+
+        // Switched on: it waits for the next start and is not suggested.
+        h.send(Command::Settings(SettingsChange::Plugin {
+            id: "svn".to_owned(),
+            enabled: true,
+        }));
+        assert_eq!(h.app.plugin_pending("svn"), Some(Pending::Enabled));
+        assert_eq!(h.app.suggestion_for_folder([".svn"]), None);
+        // And off again: as it was.
+        h.send(Command::Settings(SettingsChange::Plugin {
+            id: "svn".to_owned(),
+            enabled: false,
+        }));
+        assert_eq!(h.app.plugin_pending("svn"), None);
+
+        // Removed in this run: nothing waits.
+        let mut removed = row("git", "Git", PluginStatus::Installed);
+        removed.removed = true;
+        h.app.set_plugins(vec![removed]);
+        assert_eq!(h.app.plugin_pending("git"), None);
     }
 
     /// Decision 6 of specs/plugin-distribution.md: suggestions come from

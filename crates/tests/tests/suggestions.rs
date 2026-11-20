@@ -25,11 +25,20 @@
 //! follow the ones that are there, each with the size of its plugin, and
 //! choosing one installs the plugin. The Cloud section shows, with
 //! *Add…*, while the registry offers a cloud plugin.
+//!
+//! **After Install, and the settings.** The bar that offered a plugin
+//! reads *… is installed. Restart Rick to use it.* with **Restart now**
+//! once the plugin is on the disk, until the pane leaves the folder; the
+//! card has the button, and a kind chosen in *Add…* is followed by a
+//! notice. *Suggest plugins* is the second row of the Plugins group on
+//! the Behaviour page. The Extensions dialogue says *Not suggested* of a
+//! silenced plugin and offers **Suggest again**. On a Rick a package
+//! manager installed, **Install** opens the dialogue on the plugin.
 
 use std::fs;
 use std::io::Write as _;
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
@@ -149,10 +158,26 @@ struct Start<'a> {
     preview: f32,
 }
 
+/// The binaries *Restart now* asked to continue in.
+type Restarts = Arc<Mutex<Vec<PathBuf>>>;
+
+/// How many times *Restart now* was pressed.
+fn restarted(restarts: &Restarts) -> usize {
+    restarts
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .len()
+}
+
 /// A window of Rick [`RICK`] a minute after its start, when the
 /// background check of the plugin list has been, with the Preview tab
 /// open.
 fn window(start: Start<'_>) -> Harness<'static, RickUi> {
+    window_with_restarts(start).0
+}
+
+/// [`window`], and the list of the binaries a restart was asked for.
+fn window_with_restarts(start: Start<'_>) -> (Harness<'static, RickUi>, Restarts) {
     let config = start.fake.config_dir();
     fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
     fs::write(config.join(app::SETTINGS_FILE), &start.settings).unwrap_or_else(|e| panic!("{e}"));
@@ -167,11 +192,21 @@ fn window(start: Start<'_>) -> Harness<'static, RickUi> {
     app.set_rick_version(RICK);
     app.set_plugins(start.rows);
     let width = start.preview;
+    let restarts = Restarts::default();
+    let hook: ui_egui::Relaunch = {
+        let restarts = Arc::clone(&restarts);
+        Arc::new(move |binary: &Path| {
+            restarts
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(binary.to_owned());
+        })
+    };
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1300.0, 700.0))
         .with_pixels_per_point(1.0)
         .build_eframe(move |cc| {
-            let mut ui = RickUi::new(app, host, &cc.egui_ctx);
+            let mut ui = RickUi::new(app, host, &cc.egui_ctx).with_relaunch(hook);
             ui.set_inspector_width(width);
             ui
         });
@@ -186,7 +221,7 @@ fn window(start: Start<'_>) -> Harness<'static, RickUi> {
     }
     steps(&mut harness);
     assert_eq!(harness.state().inspector_open(), wanted);
-    harness
+    (harness, restarts)
 }
 
 fn fake() -> Arc<Fake> {
@@ -440,6 +475,7 @@ fn not_now_ends_with_the_run_and_dont_suggest_again_holds_after_a_restart() {
 /// **Install** downloads the package the list names from the test
 /// registry and unpacks it.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn without_the_hex_view_the_card_has_install_after_open_with() {
     let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
     let package = models_package();
@@ -456,7 +492,7 @@ fn without_the_hex_view_the_card_has_install_after_open_with() {
     );
     server.publish(&signer, &registry::index(&[entry]));
     let dir = models_folder();
-    let mut harness = window(Start {
+    let (mut harness, restarts) = window_with_restarts(Start {
         fake: &fake,
         settings: registry::rick_toml(&server, &signer, true),
         folder: dir.path(),
@@ -540,6 +576,28 @@ fn without_the_hex_view_the_card_has_install_after_open_with() {
     assert_eq!(fetched, [PACKAGE], "the package, once");
     assert_eq!(harness.state().app().preview_suggestion(pane), None);
     assert!(harness.query_by_label(&install).is_none());
+
+    // After Install the card says so and has **Restart now**, until the
+    // selection moves on.
+    assert!(
+        harness
+            .query_all_by_label_contains("plugin installed, restart Rick to use it")
+            .next()
+            .is_some()
+    );
+    assert_eq!(restarted(&restarts), 0);
+    click(&mut harness, "Restart now");
+    assert_eq!(restarted(&restarts), 1);
+    select(&mut harness, "blob.bin");
+    select(&mut harness, "gear.stl");
+    assert!(harness.query_by_label("Restart now").is_none());
+    assert!(
+        harness
+            .query_all_by_label_contains("no previewer for .stl")
+            .next()
+            .is_some(),
+        "the plugin is on the disk, and nothing is suggested for it"
+    );
 }
 
 /// Acceptance: a disabled plugin that claims the file gets **Enable**,
@@ -592,13 +650,25 @@ fn a_disabled_plugin_that_claims_the_file_gets_enable_with_no_registry() {
     );
 
     // **Enable** takes the plugin off `[plugins] disabled`: it is loaded
-    // at the next start.
+    // at the next start, and the bar says so until the selection moves
+    // on.
     click(&mut harness, "Enable");
     assert_eq!(
         harness.state().app().model().settings.plugins.disabled,
         [] as [&str; 0]
     );
-    assert_eq!(bar(&harness), None);
+    let bar_rect = bar(&harness).unwrap_or_else(|| panic!("no bar after Enable"));
+    assert!(inside(
+        &harness,
+        "3D Models is enabled. Restart Rick to use it.",
+        bar_rect
+    ));
+    assert!(inside(&harness, "Restart now", bar_rect));
+    for gone in ["Enable", "Not now", "Don't suggest again"] {
+        assert!(harness.query_by_label(gone).is_none(), "{gone}");
+    }
+    select(&mut harness, "bracket.STL");
+    assert_eq!(bar(&harness), None, "the next file has no bar");
 }
 
 /// Acceptance: *Suggest plugins* off shows neither the bar nor the
@@ -1043,13 +1113,20 @@ fn a_disabled_plugin_gets_enable_on_the_bar_of_a_folder() {
     switch(&mut harness, true);
     assert!(list_bar(&harness, pane).is_some());
 
-    // **Enable** takes Git off `[plugins] disabled`.
+    // **Enable** takes Git off `[plugins] disabled`, and the bar says
+    // that Rick is to be restarted.
     click(&mut harness, "Enable");
     assert_eq!(
         harness.state().app().model().settings.plugins.disabled,
         [] as [&str; 0]
     );
-    assert_eq!(list_bar(&harness, pane), None);
+    let bar_rect = list_bar(&harness, pane).unwrap_or_else(|| panic!("no bar after Enable"));
+    assert!(inside(
+        &harness,
+        "Git is enabled. Restart Rick to use it.",
+        bar_rect
+    ));
+    assert!(inside(&harness, "Restart now", bar_rect));
 }
 
 /// One bar per pane: a model selected in a work tree has the folder's
@@ -1443,6 +1520,17 @@ fn the_cloud_section_shows_add_which_lists_the_registry_s_cloud_plugin_with_its_
         .map(|request| request.path.clone())
         .collect();
     assert_eq!(fetched, [S3_PACKAGE], "the package, once");
+    // The list closed with the choice: a notice says what came of it.
+    assert!(
+        harness
+            .state()
+            .toasts()
+            .iter()
+            .any(|(_, text)| text == "S3 is installed. Restart Rick to use it."),
+        "{:?}",
+        harness.state().toasts()
+    );
+    harness.get_by_label("Restart now");
     assert!(
         harness
             .state()
@@ -1609,4 +1697,278 @@ fn the_suggested_kinds_follow_the_ones_that_are_there() {
         harness.state().app().model().settings.plugins.disabled,
         [] as [&str; 0]
     );
+    assert!(
+        harness
+            .state()
+            .toasts()
+            .iter()
+            .any(|(_, text)| text == "Azure Blob is enabled. Restart Rick to use it."),
+        "{:?}",
+        harness.state().toasts()
+    );
+}
+
+/// Where the test registry serves Git's package.
+const GIT_PACKAGE: &str = "plugins/rick/0.6.0/git.rkp";
+
+/// The index entry of Git for [`RICK`] with a package the test registry
+/// serves, and that package's bytes on `server`.
+fn served_git(server: &Server) -> serde_json::Value {
+    let bytes = package(
+        "git",
+        "name = \"Git\"\nversion = \"0.6.0\"\npoints = [\"decorator\", \"action\"]\n\
+         markers = [\".git\"]\n",
+    );
+    server.put(GIT_PACKAGE, bytes.clone());
+    registry::plugin(
+        ext_git::GitExtension::new().manifest(),
+        &[registry::build(
+            RICK,
+            RICK,
+            &server.url(GIT_PACKAGE),
+            bytes.len() as u64,
+            &sha256(&bytes),
+        )],
+    )
+}
+
+/// After **Install** the bar reads *Git is installed. Restart Rick to
+/// use it.* with **Restart now**; leaving the folder takes it away, and
+/// a plugin that is on the disk is suggested nowhere.
+#[test]
+fn after_install_the_bar_reads_installed_with_restart_now() {
+    let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+    server.publish(&signer, &registry::index(&[served_git(&server)]));
+    let dir = projects();
+    let repo = dir.path().join("rick");
+    let (mut harness, restarts) = window_with_restarts(Start {
+        fake: &fake,
+        settings: registry::rick_toml(&server, &signer, true),
+        folder: &repo,
+        rows: Vec::new(),
+        extensions: with_hex(),
+        preview: 0.0,
+    });
+    let pane = harness.state().app().model().focused;
+    assert!(list_bar(&harness, pane).is_some());
+    let asked = server.requests().len();
+
+    click(&mut harness, "Install");
+    let started = Instant::now();
+    while harness.state().app().plugin_pending("git") != Some(app::Pending::Installed) {
+        settle(&mut harness);
+        assert!(started.elapsed() < Duration::from_secs(20), "not installed");
+    }
+    steps(&mut harness);
+    let fetched: Vec<String> = server.requests()[asked..]
+        .iter()
+        .map(|request| request.path.clone())
+        .collect();
+    assert_eq!(fetched, [GIT_PACKAGE], "the package, once");
+
+    // The same bar, with the sentence and the one button.
+    let bar_rect = list_bar(&harness, pane).unwrap_or_else(|| panic!("no bar after Install"));
+    assert!(inside(
+        &harness,
+        "Git is installed. Restart Rick to use it.",
+        bar_rect
+    ));
+    assert!(inside(&harness, "Restart now", bar_rect));
+    for gone in ["Install", "Not now", "Don't suggest again"] {
+        assert!(harness.query_by_label(gone).is_none(), "{gone}");
+    }
+    assert!(
+        (bar_rect.height() - ui_egui::footer_height(model::Density::Comfortable)).abs() < 0.5,
+        "one line: {bar_rect:?}"
+    );
+    // Nothing was said in a notice: the bar says it.
+    assert_eq!(harness.state().toasts(), []);
+
+    // **Restart now** starts Rick again.
+    assert_eq!(restarted(&restarts), 0);
+    click(&mut harness, "Restart now");
+    assert_eq!(restarted(&restarts), 1);
+
+    // Leaving the folder takes the bar away, and the next work tree has
+    // none: Git is on the disk.
+    enter(&mut harness, pane, &dir.path().join("trebuchet"));
+    assert_eq!(list_bar(&harness, pane), None);
+    enter(&mut harness, pane, &repo);
+    assert_eq!(list_bar(&harness, pane), None);
+}
+
+/// *Suggest plugins* is the second row of the Plugins group on the
+/// Behaviour page, under *Look for plugins and updates online*, on by
+/// default; it writes `[plugins] suggest`, and off, nothing is
+/// suggested.
+#[test]
+fn the_behaviour_page_has_suggest_plugins_under_look_for_plugins() {
+    use egui::accesskit::{Role, Toggled};
+    use egui_kittest::kittest::NodeT as _;
+    let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+    server.publish(&signer, &registry::index(&[git()]));
+    let dir = projects();
+    let repo = dir.path().join("rick");
+    let mut harness = window(Start {
+        fake: &fake,
+        settings: registry::rick_toml(&server, &signer, true),
+        folder: &repo,
+        rows: Vec::new(),
+        extensions: with_hex(),
+        preview: 0.0,
+    });
+    let pane = harness.state().app().model().focused;
+    assert!(list_bar(&harness, pane).is_some());
+
+    harness.state_mut().open_settings();
+    steps(&mut harness);
+    harness
+        .get_by_role_and_label(Role::RadioButton, "Behaviour")
+        .click();
+    steps(&mut harness);
+    let look = harness
+        .get_by_role_and_label(Role::CheckBox, "Look for plugins and updates online")
+        .rect();
+    let switch = harness.get_by_role_and_label(Role::CheckBox, "Suggest plugins");
+    assert_eq!(
+        switch.accesskit_node().toggled(),
+        Some(Toggled::True),
+        "on by default"
+    );
+    let suggest = switch.rect();
+    assert!(
+        suggest.top() > look.bottom() && (suggest.center().x - look.center().x).abs() < 1.0,
+        "the row under it: {look:?}, {suggest:?}"
+    );
+    harness.get_by_label_contains("It reads the plugin list it already has and asks nobody");
+
+    switch.click();
+    steps(&mut harness);
+    assert!(!harness.state().app().model().settings.plugins.suggest);
+    let path = fake.config_dir().join(app::SETTINGS_FILE);
+    let written = tests::read_until(&path, |text| text.contains("suggest = false"));
+    assert!(written.contains("suggest = false"), "{written}");
+    assert_eq!(list_bar(&harness, pane), None, "off: no bar");
+
+    harness
+        .get_by_role_and_label(Role::CheckBox, "Suggest plugins")
+        .click();
+    steps(&mut harness);
+    assert!(harness.state().app().model().settings.plugins.suggest);
+    assert!(
+        list_bar(&harness, pane).is_some(),
+        "on again: the bar is back"
+    );
+}
+
+/// In the Extensions dialogue the details of a silenced plugin read *Not
+/// suggested* with **Suggest again**, which takes the silencing back.
+#[test]
+fn a_silenced_plugin_reads_not_suggested_with_suggest_again() {
+    use egui::accesskit::Role;
+    let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+    server.publish(&signer, &registry::index(&[git(), models()]));
+    let dir = projects();
+    let repo = dir.path().join("rick");
+    let mut harness = window(Start {
+        fake: &fake,
+        settings: registry::rick_toml(&server, &signer, true),
+        folder: &repo,
+        rows: Vec::new(),
+        extensions: with_hex(),
+        preview: 0.0,
+    });
+    let pane = harness.state().app().model().focused;
+    click(&mut harness, "Don't suggest again");
+    assert_eq!(list_bar(&harness, pane), None);
+
+    harness.state_mut().queue(Intent::Extensions, pane);
+    steps(&mut harness);
+    assert!(harness.state().extensions_open());
+    harness
+        .get_by_role_and_label(Role::RadioButton, "Available 2")
+        .click();
+    steps(&mut harness);
+    settle(&mut harness);
+    let choose = |harness: &mut Harness<'_, RickUi>, name: &str| {
+        harness
+            .get_by_role_and_label(Role::RadioButton, name)
+            .click();
+        steps(harness);
+    };
+
+    // A plugin that is suggested as any other says nothing of it.
+    choose(&mut harness, models_name());
+    assert!(harness.query_by_label("Not suggested").is_none());
+    assert!(harness.query_by_label("Suggest again").is_none());
+
+    choose(&mut harness, "Git");
+    harness.get_by_label("Not suggested");
+    click(&mut harness, "Suggest again");
+    assert_eq!(
+        harness.state().app().model().settings.plugins.no_suggest,
+        [] as [&str; 0]
+    );
+    assert!(harness.query_by_label("Not suggested").is_none());
+    assert!(list_bar(&harness, pane).is_some(), "the bar is back");
+
+    // *Not now* reads the same until Rick is started again, and is taken
+    // back the same way.
+    harness.state_mut().app_mut().handle(
+        app::Command::SuggestNotNow("git".to_owned()),
+        &mut Vec::new(),
+    );
+    steps(&mut harness);
+    harness.get_by_label("Not suggested");
+    click(&mut harness, "Suggest again");
+    assert!(!harness.state().app().suggestion_silenced("git"));
+}
+
+/// A packaged Rick: **Install** opens the Extensions dialogue on the
+/// plugin, where the command of the package manager stands; nothing is
+/// downloaded.
+#[test]
+fn install_on_a_packaged_rick_opens_the_extensions_dialogue_on_the_plugin() {
+    let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+    server.publish(&signer, &registry::index(&[models(), served_git(&server)]));
+    let dir = projects();
+    let repo = dir.path().join("rick");
+    let mut harness = window(Start {
+        fake: &fake,
+        settings: registry::rick_toml(&server, &signer, true),
+        folder: &repo,
+        rows: Vec::new(),
+        extensions: with_hex(),
+        preview: 0.0,
+    });
+    harness
+        .state_mut()
+        .app_mut()
+        .set_packaging(Some(app::plugins::Packaging::Deb));
+    steps(&mut harness);
+    let pane = harness.state().app().model().focused;
+    assert!(list_bar(&harness, pane).is_some());
+    assert!(!harness.state().extensions_open());
+    let asked = server.requests().len();
+
+    click(&mut harness, "Install");
+    assert!(harness.state().extensions_open());
+    // On Git, the second of the list, with its command.
+    harness.get_by_label("Installed through your package manager");
+    harness.get_by_label("sudo apt install rick-plugin-git");
+    assert!(
+        harness
+            .query_by_label("sudo apt install rick-plugin-preview-3d")
+            .is_none()
+    );
+    // Nothing was downloaded, and no job ran.
+    assert!(
+        server.requests()[asked..]
+            .iter()
+            .all(|request| request.path != GIT_PACKAGE),
+        "{:?}",
+        &server.requests()[asked..]
+    );
+    assert_eq!(harness.state().app().plugin_pending("git"), None);
+    assert!(list_bar(&harness, pane).is_some(), "the bar stays");
 }

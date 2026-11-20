@@ -3986,6 +3986,9 @@ fn suggestions_window(
 /// that entered a Git work tree, beside a pane that did not. In the side
 /// panel: *Add…* of Cloud, shown because the registry offers cloud
 /// plugins, and of Network, each listing the kinds with their sizes.
+/// After **Install**: the bar that reads *Git is installed. Restart Rick
+/// to use it.* The Behaviour page with *Suggest plugins*, and the
+/// Extensions dialogue on a plugin that is *Not suggested*.
 #[test]
 #[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
 #[allow(clippy::too_many_lines)]
@@ -4178,6 +4181,95 @@ fn screenshots_of_the_plugin_suggestions() {
                 harness.step();
             }
         }
+    }
+    std::mem::drop(harness);
+
+    // After Install: the bar that offered Git says that it is installed.
+    // The plugin host's row stands in for the install, which a
+    // screenshot does not wait for.
+    let (mut harness, _server) = suggestions_window(&repo, previewers());
+    let pane = harness.state().app().model().focused;
+    assert!(bar_of(&harness, pane).is_some());
+    let git = {
+        use ext::Extension as _;
+        let git = ext_git::GitExtension::new();
+        let manifest = git.manifest();
+        app::Plugin {
+            id: manifest.id.0.to_owned(),
+            name: manifest.name.to_owned(),
+            description: manifest.description.to_owned(),
+            version: tests::registry::RICK.to_owned(),
+            points: manifest.points,
+            previews: Vec::new(),
+            markers: vec![".git".to_owned()],
+            connections: Vec::new(),
+            status: app::PluginStatus::Installed,
+            path: Path::new("/home/serge/.config/rick/plugins/git").to_owned(),
+            built_in: false,
+            removed: false,
+        }
+    };
+    harness.state_mut().app_mut().set_plugins(vec![git]);
+    for _ in 0..4 {
+        harness.step();
+    }
+    assert!(
+        bar_of(&harness, pane).is_some(),
+        "the bar stays and says so"
+    );
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("suggest-list-bar-installed-{mode}"));
+    }
+    std::mem::drop(harness);
+
+    // The settings: *Suggest plugins*, the second row of the Plugins
+    // group on the Behaviour page.
+    let (mut harness, _server) = suggestions_window(&repo, previewers());
+    harness.state_mut().open_settings();
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::RadioButton, "Behaviour")
+        .click();
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Suggest plugins")
+        .scroll_to_me();
+    for _ in 0..6 {
+        harness.step();
+    }
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("suggest-settings-{mode}"));
+    }
+    std::mem::drop(harness);
+
+    // The Extensions dialogue on a plugin whose suggestions were
+    // silenced: *Not suggested* with **Suggest again**.
+    let (mut harness, _server) = suggestions_window(&repo, previewers());
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::SuggestNever("git".to_owned()),
+        &mut Vec::new(),
+    );
+    harness.state_mut().queue(Intent::Extensions, pane);
+    for _ in 0..4 {
+        harness.step();
+    }
+    for name in ["Available 8", "Git"] {
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::RadioButton, name)
+            .click();
+        settle(&mut harness);
+    }
+    harness.get_by_label("Not suggested");
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("suggest-not-suggested-{mode}"));
     }
 }
 

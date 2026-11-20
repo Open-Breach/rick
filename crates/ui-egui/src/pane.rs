@@ -82,22 +82,45 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
 /// between the toolbar and the list of a pane whose folder holds an entry
 /// that is a plugin's marker, while that plugin is not there. One bar a
 /// pane; it goes when the pane leaves the folder.
+///
+/// After **Install** or **Enable** the plugin is no longer suggested, and
+/// the bar that offered it reads *Git is installed. Restart Rick to use
+/// it.* with **Restart now**, until the pane leaves the folder.
 fn suggestion_bar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    use crate::suggestion::{self, Place, Shown};
     cx.tab_ui.suggestion = None;
-    let Some(suggestion) = cx.app.folder_suggestion(cx.pane) else {
-        return;
+    let offer = cx.app.folder_suggestion(cx.pane);
+    // What the bar offered in this folder, and what it says of it now.
+    let before = cx
+        .tab_ui
+        .suggested
+        .take()
+        .filter(|(location, _)| *location == cx.tab.location)
+        .map(|(_, shown)| shown);
+    let (shown, after) = match (&offer, before) {
+        (Some(offer), _) => (Shown::of(offer), None),
+        (None, Some(shown)) => match shown.after(cx.app) {
+            Some(text) => (shown, Some(text)),
+            None => return,
+        },
+        (None, None) => return,
     };
     egui::Panel::top(egui::Id::new(("suggestion", cx.tab_id)))
         .show_separator_line(false)
         .frame(egui::Frame::NONE)
         .show(ui, |ui| {
             let id = egui::Id::new(("suggestion-bar", cx.tab_id));
-            let (rect, answer) = crate::suggestion::bar(ui, id, &suggestion);
+            let (rect, answer) = match (&offer, &after) {
+                (Some(offer), _) => suggestion::bar(ui, id, offer),
+                (None, Some(text)) => suggestion::note(ui, id, text),
+                (None, None) => return,
+            };
             cx.tab_ui.suggestion = Some(rect);
             if let Some(answer) = answer {
-                cx.requests.push(answer.request(&suggestion.id));
+                cx.requests.push(answer.request(&shown.id, Place::Pane));
             }
         });
+    cx.tab_ui.suggested = Some((cx.tab.location.clone(), shown));
 }
 
 /// The banner over a list that could not be read: why, and *Retry*, which

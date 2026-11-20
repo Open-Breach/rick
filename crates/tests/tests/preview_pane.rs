@@ -1550,13 +1550,15 @@ fn a_file_no_previewer_claims_shows_the_centred_card_with_open_with_alone() {
         [] as [&str; 0]
     );
     assert!(harness.query_by_label("Enable ABC preview").is_none());
+    // The card says that the plugin waits for the next start, and has
+    // **Restart now** where **Enable** stood.
     assert!(
         harness
-            .query_all_by_label_contains("no previewer for .abc")
+            .query_all_by_label_contains("plugin enabled, restart Rick to use it")
             .next()
-            .is_some(),
-        "the head says what is true again"
+            .is_some()
     );
+    harness.get_by_label("Restart now");
 }
 
 /// Issue 149, item 7: with the hex view loaded, a file nothing else
