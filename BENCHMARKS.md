@@ -483,19 +483,21 @@ in 8–24 ms).
 No spec number: the spec says the app watches its settings files and
 reloads on change (Engineering guidelines → Configuration). Issue 3's
 acceptance asked for 500 ms, which an ordinary test asserted until issue
-277; it is the Linux target. From the end of the write to the edit in the
+277. That 500 ms stays what the user is promised; it is not the target
+here. The target is 50 ms on all three runners, set by decision on pull
+request 290 from the run below and not by the rule above, which would
+have left it at 500 ms. From the end of the write to the edit in the
 model: the platform's watcher reporting the write (inotify, FSEvents,
 `ReadDirectoryChangesW`), then the file loaded again. Headless. Test:
 `the_reload_of_settings_edited_on_disk` in `app.rs`; that an edit arrives
 at all is the ordinary test `settings_edited_on_disk_reach_the_model`,
-which waits ten seconds for it. macOS: 12.3 ms × 1.5 = 19 ms, and
-Windows: 0.3 ms × 1.5 = 0.5 ms, both under the Linux 500 ms, which is
-their target. On an idle runner the three watchers report within
-milliseconds; the 500 ms is what a loaded one was seen to take from them
-(issue 263: 195 to 673 ms on a macOS runner under load).
+which waits ten seconds for it. On an idle runner the three watchers
+report within milliseconds, the slowest of them, macOS, in a quarter of
+the target; a loaded runner was seen to take 195 to 673 ms (issue 263, a
+macOS runner under load), which the summary would mark.
 
 | OS | Target | Median | Worst |
 | --- | --- | --- | --- |
-| Linux | 500 ms | 0.3 ms | 0.4 ms |
-| macOS | 500 ms | 12.3 ms | 12.7 ms |
-| Windows | 500 ms | 0.3 ms | 0.3 ms |
+| Linux | 50 ms | 0.3 ms | 0.4 ms |
+| macOS | 50 ms | 12.3 ms | 12.7 ms |
+| Windows | 50 ms | 0.3 ms | 0.3 ms |
