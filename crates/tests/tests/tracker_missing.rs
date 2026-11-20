@@ -125,6 +125,8 @@ fn window(dir: &Path) -> Harness<'static, RickUi> {
         version: "0.4.0-dev".to_owned(),
         points: Points::SEARCH_INDEX,
         previews: Vec::new(),
+        markers: Vec::new(),
+        connections: Vec::new(),
         status: PluginStatus::Loaded,
         path: dir.join("search-tracker"),
         built_in: true,

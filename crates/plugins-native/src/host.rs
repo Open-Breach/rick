@@ -10,7 +10,7 @@ use ext::{API_VERSION, Extension, Platforms, Points};
 use tracing::{debug, info, info_span, warn};
 
 use crate::load::{LoadError, Loaded, load_library};
-use crate::manifest::{self, Head, MANIFEST_FILE, ManifestError, PluginToml};
+use crate::manifest::{self, ConnectionToml, Head, MANIFEST_FILE, ManifestError, PluginToml};
 use crate::{HOST_RICK, HOST_TOOLCHAIN};
 
 /// The directory, beside the binary and in the config directory, whose
@@ -66,6 +66,12 @@ pub struct Plugin {
     /// The file name extensions its previewers claim, as the manifest
     /// lists them.
     pub previews: Vec<String>,
+    /// The names of an entry that make a folder the plugin's business, as
+    /// the manifest lists them.
+    pub markers: Vec<String>,
+    /// The kinds of connection it adds to *Add…* in the side panel, as the
+    /// manifest lists them.
+    pub connections: Vec<ConnectionToml>,
     /// The plugin's directory.
     pub dir: PathBuf,
     /// Which plugins directory it was found in.
@@ -263,6 +269,8 @@ fn unread(candidate: Candidate, head: Head, reason: String) -> Plugin {
         version: head.version,
         points: Points::empty(),
         previews: Vec::new(),
+        markers: Vec::new(),
+        connections: Vec::new(),
         dir: candidate.dir,
         source: candidate.source,
         status: PluginStatus::Refused(reason),
@@ -321,6 +329,8 @@ fn process(
             description: toml.description,
             version: toml.version,
             previews: toml.previews,
+            markers: toml.markers,
+            connections: toml.connections,
             dir: candidate.dir,
             source: candidate.source,
             status,

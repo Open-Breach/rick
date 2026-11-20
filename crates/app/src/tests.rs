@@ -6410,6 +6410,8 @@ mod install {
             version: version.to_owned(),
             points: Points::ACTION,
             previews: Vec::new(),
+            markers: Vec::new(),
+            connections: Vec::new(),
             status,
             path: folder.to_owned(),
             built_in: false,
@@ -6829,5 +6831,580 @@ mod install {
                 .all(|request| request.path != PACKAGE),
             "nothing was downloaded"
         );
+    }
+}
+
+/// Suggestions (specs/plugin-distribution.md §8): which plugin is
+/// suggested for a file, a folder and a section of the side panel, from
+/// the cached plugin list and the manifests in the plugins folders,
+/// against a registry of the test's own.
+mod suggest {
+    use ext::ConnectionSection;
+    use plugins_registry::fixtures::{Server, Signer};
+    use serde_json::json;
+
+    use super::*;
+    use crate::{
+        ConnectionKind, PluginStatus, RegistryCommand, Remedy, SuggestedConnection, Suggestion,
+    };
+
+    /// The Rick the tests ask as.
+    const RICK: &str = "0.6.0";
+
+    /// One plugin of an index with a build of `size` bytes for `rick` on
+    /// this platform, and its triggers.
+    fn plugin(
+        id: &str,
+        name: &str,
+        triggers: &serde_json::Value,
+        rick: &str,
+        size: u64,
+    ) -> serde_json::Value {
+        json!({
+            "id": id,
+            "name": name,
+            "description": format!("What {name} does."),
+            "publisher": "Open-Breach",
+            "meta": { "points": ["action"], "triggers": triggers },
+            "builds": [{
+                "version": "0.6.0",
+                "app_version": rick,
+                "api_version": API_VERSION,
+                "platform": plugins_registry::platform(),
+                "url": "https://example.invalid/package.rkp",
+                "size": size,
+                "sha256": "aa".repeat(32),
+            }],
+        })
+    }
+
+    /// The registry of the tests: Git by its marker, 3D Models by its
+    /// file types, Amazon S3 and SSH by their kinds of connection, and
+    /// Subversion with a build for another Rick only.
+    fn index() -> serde_json::Value {
+        json!({
+            "schema": 1,
+            "generated": "2026-11-19T02:00:00Z",
+            "apps": { "rick": { "plugins": [
+                plugin("git", "Git", &json!({ "markers": [".git"] }), RICK, 1024),
+                plugin(
+                    "preview-3d",
+                    "3D Models",
+                    &json!({ "previews": ["stl", "obj", "tar.3d"] }),
+                    RICK,
+                    2048,
+                ),
+                plugin(
+                    "vfs-s3",
+                    "Amazon S3",
+                    &json!({ "connections": [
+                        { "section": "cloud", "title": "Amazon S3" },
+                        { "section": "cloud", "title": "S3-compatible" },
+                        { "section": "usb", "title": "Nowhere" },
+                    ] }),
+                    RICK,
+                    4096,
+                ),
+                plugin(
+                    "ssh",
+                    "SSH",
+                    &json!({ "connections": [{ "section": "network", "title": "SSH" }] }),
+                    RICK,
+                    8192,
+                ),
+                plugin("svn", "Subversion", &json!({ "markers": [".svn"] }), "0.5.0", 512),
+            ] } },
+        })
+    }
+
+    /// A row of the plugin host: the plugin `id` in a plugins folder, as
+    /// `status` has it, with nothing it is for.
+    fn row(id: &str, name: &str, status: PluginStatus) -> crate::Plugin {
+        crate::Plugin {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            description: format!("The {name} on the disk."),
+            version: "0.6.0".to_owned(),
+            points: Points::ACTION,
+            previews: Vec::new(),
+            markers: Vec::new(),
+            connections: Vec::new(),
+            status,
+            path: std::path::PathBuf::from("/plugins").join(id),
+            built_in: false,
+            removed: false,
+        }
+    }
+
+    /// A Rick of version [`RICK`] on `fake`'s config directory whose
+    /// `rick.toml` holds `settings`, with `rows` from its plugin host and
+    /// no word to the registry yet.
+    fn rick(fake: &Arc<Fake>, settings: &str, rows: Vec<crate::Plugin>) -> Harness {
+        let config = fake.config_dir();
+        fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(config.join(SETTINGS_FILE), settings).unwrap_or_else(|e| panic!("{e}"));
+        let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let ui = Arc::new(Scripted::default());
+        let mut app = App::new(Config {
+            platform: fake.clone(),
+            ui: ui.clone(),
+            extensions: Vec::new(),
+            config_dir: Some(config),
+            start: Some(local(root.path())),
+        });
+        app.set_rick_version(RICK);
+        app.set_plugins(rows);
+        let mut harness = Harness {
+            root,
+            fake: fake.clone(),
+            ui,
+            app,
+            events: Vec::new(),
+        };
+        harness.settle();
+        harness
+    }
+
+    /// The `[registry]` table that names `server` and `signer`.
+    fn registry(server: &Server, signer: &Signer) -> String {
+        format!(
+            "[registry]\nurl = \"{}\"\npublic_key = \"{}\"\n",
+            server.index_url(),
+            signer.public_key()
+        )
+    }
+
+    /// [`rick`] reading `server`'s list, after its start fetched it; with
+    /// `plugins`, the `[plugins]` table of its `rick.toml`.
+    fn started(
+        fake: &Arc<Fake>,
+        server: &Server,
+        signer: &Signer,
+        plugins: &str,
+        rows: Vec<crate::Plugin>,
+    ) -> Harness {
+        let settings = format!("{plugins}{}", registry(server, signer));
+        let mut h = rick(fake, &settings, rows);
+        h.send(Command::Registry(RegistryCommand::Start));
+        h.settle();
+        h.send(Command::Registry(RegistryCommand::Daily));
+        h.settle();
+        assert!(h.app.plugin_registry().index.is_some(), "the list arrived");
+        h
+    }
+
+    fn fake() -> Arc<Fake> {
+        Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")))
+    }
+
+    /// The id and the remedy of a suggestion.
+    fn said(suggestion: Option<Suggestion>) -> Option<(String, Remedy)> {
+        suggestion.map(|s| (s.id, s.remedy))
+    }
+
+    /// What [`said`] gives for **Install** on the plugin `id`, a package
+    /// of `size` bytes.
+    fn install(id: &str, size: u64) -> (String, Remedy) {
+        (id.to_owned(), Remedy::Install { size })
+    }
+
+    /// The titles of the kinds suggested for `section`, each with its
+    /// plugin's id.
+    fn kinds(app: &App, section: ConnectionSection) -> Vec<(String, String)> {
+        app.suggested_connections(section)
+            .into_iter()
+            .map(|kind| (kind.title, kind.plugin.id))
+            .collect()
+    }
+
+    #[test]
+    fn a_plugin_of_the_list_is_suggested_for_a_file_by_its_extension() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        server.publish(&signer, &index());
+        let h = started(&fake(), &server, &signer, "", Vec::new());
+
+        let suggestion = h.app.suggestion_for_file("gear.stl");
+        assert_eq!(
+            suggestion,
+            Some(Suggestion {
+                id: "preview-3d".to_owned(),
+                name: "3D Models".to_owned(),
+                description: "What 3D Models does.".to_owned(),
+                remedy: Remedy::Install { size: 2048 },
+            })
+        );
+        // Whatever the case, and by any suffix after a dot.
+        assert_eq!(
+            said(h.app.suggestion_for_file("GEAR.STL")),
+            Some(install("preview-3d", 2048))
+        );
+        assert_eq!(
+            said(h.app.suggestion_for_file("scan.2026.obj")),
+            Some(install("preview-3d", 2048))
+        );
+        assert_eq!(
+            said(h.app.suggestion_for_file("scene.tar.3d")),
+            Some(install("preview-3d", 2048))
+        );
+        // A name that only ends like one, a name without an extension and
+        // a type no plugin claims.
+        for name in ["stl", "gear.stl.txt", "gearstl", "notes.txt", ".git", ""] {
+            assert_eq!(h.app.suggestion_for_file(name), None, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn a_plugin_of_the_list_is_suggested_for_a_folder_by_a_marker_in_its_listing() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        server.publish(&signer, &index());
+        let h = started(&fake(), &server, &signer, "", Vec::new());
+
+        let suggestion = h.app.suggestion_for_folder(["src", ".git", "README.md"]);
+        assert_eq!(
+            suggestion,
+            Some(Suggestion {
+                id: "git".to_owned(),
+                name: "Git".to_owned(),
+                description: "What Git does.".to_owned(),
+                remedy: Remedy::Install { size: 1024 },
+            })
+        );
+        // Whole names, case as written.
+        for names in [
+            vec![".GIT"],
+            vec![".github", ".gitignore", "git", "a.git"],
+            vec!["src", "README.md"],
+            Vec::new(),
+        ] {
+            assert_eq!(
+                h.app.suggestion_for_folder(names.clone()),
+                None,
+                "{names:?}"
+            );
+        }
+        // Subversion has no build for this Rick: its marker says nothing.
+        assert_eq!(h.app.suggestion_for_folder([".svn"]), None);
+    }
+
+    #[test]
+    fn the_kinds_of_connection_of_suggested_plugins_are_listed_by_section() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        server.publish(&signer, &index());
+        let h = started(&fake(), &server, &signer, "", Vec::new());
+
+        let cloud = h.app.suggested_connections(ConnectionSection::Cloud);
+        assert_eq!(
+            cloud.first(),
+            Some(&SuggestedConnection {
+                title: "Amazon S3".to_owned(),
+                plugin: Suggestion {
+                    id: "vfs-s3".to_owned(),
+                    name: "Amazon S3".to_owned(),
+                    description: "What Amazon S3 does.".to_owned(),
+                    remedy: Remedy::Install { size: 4096 },
+                },
+            })
+        );
+        // A plugin's kinds in its own order; a section nobody knows is
+        // nobody's.
+        let owned = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(title, id)| ((*title).to_owned(), (*id).to_owned()))
+                .collect()
+        };
+        assert_eq!(
+            kinds(&h.app, ConnectionSection::Cloud),
+            owned(&[("Amazon S3", "vfs-s3"), ("S3-compatible", "vfs-s3")])
+        );
+        assert_eq!(
+            kinds(&h.app, ConnectionSection::Network),
+            owned(&[("SSH", "ssh")])
+        );
+    }
+
+    #[test]
+    fn a_plugin_in_a_plugins_folder_is_not_suggested_from_the_list() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        server.publish(&signer, &index());
+        // Loaded, refused or unpacked in this session: it is there.
+        for status in [
+            PluginStatus::Loaded,
+            PluginStatus::Refused("Built for Rick 0.5.0".to_owned()),
+            PluginStatus::Installed,
+        ] {
+            let rows = vec![
+                row("git", "Git", status.clone()),
+                row("vfs-s3", "Amazon S3", status.clone()),
+            ];
+            let h = started(&fake(), &server, &signer, "", rows);
+            assert_eq!(h.app.suggestion_for_folder([".git"]), None, "{status:?}");
+            assert_eq!(kinds(&h.app, ConnectionSection::Cloud), [], "{status:?}");
+            // The others of the list are suggested as before.
+            assert_eq!(
+                said(h.app.suggestion_for_file("gear.stl")),
+                Some(install("preview-3d", 2048))
+            );
+        }
+
+        // One that was removed in this session is on offer again.
+        let mut removed = row("git", "Git", PluginStatus::Loaded);
+        removed.removed = true;
+        let h = started(&fake(), &server, &signer, "", vec![removed]);
+        assert_eq!(
+            said(h.app.suggestion_for_folder([".git"])),
+            Some(install("git", 1024))
+        );
+    }
+
+    #[test]
+    fn a_disabled_plugin_is_suggested_from_its_own_manifest_with_no_registry_at_all() {
+        let mut git = row("git", "Git", PluginStatus::Disabled);
+        git.markers = vec![".git".to_owned()];
+        let mut models = row("preview-3d", "3D Models", PluginStatus::Disabled);
+        models.previews = vec!["stl".to_owned()];
+        let mut s3 = row("vfs-s3", "Amazon S3", PluginStatus::Disabled);
+        s3.connections = vec![ConnectionKind {
+            section: ConnectionSection::Cloud,
+            title: "Amazon S3".to_owned(),
+        }];
+        // Loaded: its manifest claims the same and suggests nothing.
+        let mut svn = row("svn", "Subversion", PluginStatus::Loaded);
+        svn.markers = vec![".svn".to_owned()];
+        let rows = vec![git, models, s3, svn];
+        let disabled = "[plugins]\ndisabled = [\"git\", \"preview-3d\", \"vfs-s3\"]\n";
+
+        // No `[registry]` table: this Rick has no key and no list.
+        let mut h = rick(&fake(), disabled, rows.clone());
+        h.send(Command::Registry(RegistryCommand::Start));
+        h.settle();
+        assert!(!h.app.plugin_registry().set_up);
+        assert_eq!(
+            h.app.suggestion_for_folder([".git", ".svn"]),
+            Some(Suggestion {
+                id: "git".to_owned(),
+                name: "Git".to_owned(),
+                description: "The Git on the disk.".to_owned(),
+                remedy: Remedy::Enable,
+            })
+        );
+        assert_eq!(
+            said(h.app.suggestion_for_file("gear.stl")),
+            Some(("preview-3d".to_owned(), Remedy::Enable))
+        );
+        let cloud = h.app.suggested_connections(ConnectionSection::Cloud);
+        assert_eq!(
+            cloud
+                .iter()
+                .map(|kind| (kind.title.as_str(), kind.plugin.remedy))
+                .collect::<Vec<_>>(),
+            [("Amazon S3", Remedy::Enable)]
+        );
+        assert_eq!(h.app.suggestion_for_folder([".svn"]), None);
+
+        // Switched on again in the Extensions dialogue: it waits for the
+        // next start and is not suggested any more.
+        h.send(Command::Settings(SettingsChange::Plugin {
+            id: "git".to_owned(),
+            enabled: true,
+        }));
+        assert_eq!(h.app.suggestion_for_folder([".git"]), None);
+
+        // With a list that offers the same plugins: the one on the disk
+        // is enabled, not installed a second time.
+        let (server, signer) = (Server::start(), Signer::new(1));
+        server.publish(&signer, &index());
+        let h = started(&fake(), &server, &signer, disabled, rows);
+        assert_eq!(
+            said(h.app.suggestion_for_folder([".git"])),
+            Some(("git".to_owned(), Remedy::Enable))
+        );
+        assert_eq!(
+            said(h.app.suggestion_for_file("gear.stl")),
+            Some(("preview-3d".to_owned(), Remedy::Enable))
+        );
+    }
+
+    #[test]
+    fn suggest_plugins_off_suggests_nothing() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        server.publish(&signer, &index());
+        let mut git = row("git", "Git", PluginStatus::Disabled);
+        git.markers = vec![".git".to_owned()];
+        let plugins = "[plugins]\ndisabled = [\"git\"]\nsuggest = false\n";
+        let mut h = started(&fake(), &server, &signer, plugins, vec![git]);
+
+        let nothing = |app: &App| {
+            assert_eq!(app.suggestion_for_file("gear.stl"), None);
+            assert_eq!(app.suggestion_for_folder([".git"]), None);
+            assert_eq!(app.suggested_connections(ConnectionSection::Cloud), []);
+            assert_eq!(app.suggested_connections(ConnectionSection::Network), []);
+        };
+        nothing(&h.app);
+
+        // The switch of the Behaviour page, on and off again.
+        h.send(Command::Settings(SettingsChange::SuggestPlugins(true)));
+        assert_eq!(
+            said(h.app.suggestion_for_folder([".git"])),
+            Some(("git".to_owned(), Remedy::Enable))
+        );
+        assert_eq!(
+            said(h.app.suggestion_for_file("gear.stl")),
+            Some(install("preview-3d", 2048))
+        );
+        assert_eq!(kinds(&h.app, ConnectionSection::Cloud).len(), 2);
+        h.send(Command::Settings(SettingsChange::SuggestPlugins(false)));
+        nothing(&h.app);
+    }
+
+    #[test]
+    fn dont_suggest_again_writes_the_id_and_holds_after_a_restart() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(&signer, &index());
+        let mut h = started(&fake, &server, &signer, "", Vec::new());
+        let settings = fake.config_dir().join(SETTINGS_FILE);
+        assert!(!h.app.suggestion_silenced("git"));
+
+        h.send(Command::SuggestNever("git".to_owned()));
+        assert_eq!(h.app.suggestion_for_folder([".git"]), None);
+        assert!(h.app.suggestion_silenced("git"));
+        // The others are suggested as before.
+        assert_eq!(
+            said(h.app.suggestion_for_file("gear.stl")),
+            Some(install("preview-3d", 2048))
+        );
+        let text = read_until(&settings, |text| text.contains("no_suggest = [\"git\"]"));
+        assert!(text.contains("no_suggest = [\"git\"]"), "{text}");
+        assert_eq!(h.app.model().settings.plugins.no_suggest, ["git"]);
+        drop(h);
+
+        // The next start reads the id and does not suggest the plugin.
+        let text = fs::read_to_string(&settings).unwrap_or_default();
+        let mut h = rick(&fake, &text, Vec::new());
+        h.send(Command::Registry(RegistryCommand::Start));
+        h.settle();
+        assert!(h.app.plugin_registry().index.is_some(), "the cached list");
+        assert_eq!(h.app.suggestion_for_folder([".git"]), None);
+        assert_eq!(
+            said(h.app.suggestion_for_file("gear.stl")),
+            Some(install("preview-3d", 2048))
+        );
+
+        // *Suggest again* takes the id back.
+        h.send(Command::SuggestAgain("git".to_owned()));
+        assert!(!h.app.suggestion_silenced("git"));
+        assert_eq!(
+            said(h.app.suggestion_for_folder([".git"])),
+            Some(install("git", 1024))
+        );
+        let text = read_until(&settings, |text| text.contains("no_suggest = []"));
+        assert!(text.contains("no_suggest = []"), "{text}");
+    }
+
+    #[test]
+    fn not_now_silences_a_plugin_until_rick_is_started_again() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(&signer, &index());
+        let mut h = started(&fake, &server, &signer, "", Vec::new());
+        let settings = fake.config_dir().join(SETTINGS_FILE);
+        let before = fs::read_to_string(&settings).unwrap_or_default();
+
+        h.send(Command::SuggestNotNow("vfs-s3".to_owned()));
+        assert!(h.app.suggestion_silenced("vfs-s3"));
+        assert_eq!(kinds(&h.app, ConnectionSection::Cloud), []);
+        assert_eq!(kinds(&h.app, ConnectionSection::Network).len(), 1);
+        assert_eq!(
+            said(h.app.suggestion_for_folder([".git"])),
+            Some(install("git", 1024))
+        );
+        // Nothing of it is written.
+        h.settle();
+        assert_eq!(h.app.model().settings.plugins.no_suggest, [] as [&str; 0]);
+        assert_eq!(fs::read_to_string(&settings).unwrap_or_default(), before);
+
+        // *Suggest again* takes it back in the same run.
+        h.send(Command::SuggestAgain("vfs-s3".to_owned()));
+        assert!(!h.app.suggestion_silenced("vfs-s3"));
+        assert_eq!(kinds(&h.app, ConnectionSection::Cloud).len(), 2);
+        h.send(Command::SuggestNotNow("vfs-s3".to_owned()));
+        assert_eq!(kinds(&h.app, ConnectionSection::Cloud), []);
+        drop(h);
+
+        // Started again: suggested again.
+        let mut h = rick(&fake, &before, Vec::new());
+        h.send(Command::Registry(RegistryCommand::Start));
+        h.settle();
+        assert!(!h.app.suggestion_silenced("vfs-s3"));
+        assert_eq!(kinds(&h.app, ConnectionSection::Cloud).len(), 2);
+    }
+
+    #[test]
+    fn a_rick_nothing_of_the_list_fits_is_suggested_nothing_from_it() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        server.publish(&signer, &index());
+        let mut h = started(&fake(), &server, &signer, "", Vec::new());
+        assert_eq!(
+            said(h.app.suggestion_for_folder([".git"])),
+            Some(install("git", 1024))
+        );
+        // The Rick before: Subversion's build is its own, Git's is not.
+        h.app.set_rick_version("0.5.0");
+        assert_eq!(h.app.suggestion_for_folder([".git"]), None);
+        assert_eq!(
+            said(h.app.suggestion_for_folder([".svn"])),
+            Some(install("svn", 512))
+        );
+        // A pre-release and a Rick older than the oldest release.
+        for version in ["0.6.0-dev", "0.4.0"] {
+            h.app.set_rick_version(version);
+            assert_eq!(h.app.suggestion_for_folder([".git", ".svn"]), None);
+            assert_eq!(h.app.suggestion_for_file("gear.stl"), None);
+            assert_eq!(h.app.suggested_connections(ConnectionSection::Cloud), []);
+        }
+    }
+
+    /// Decision 6 of specs/plugin-distribution.md: suggestions come from
+    /// the cached index, and Rick never goes online because a file was
+    /// selected. The test registry counts what it is asked.
+    #[test]
+    fn a_suggestion_never_makes_a_request() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(&signer, &index());
+        // A first run fetches the list and caches it.
+        let h = started(&fake, &server, &signer, "", Vec::new());
+        let settings = fs::read_to_string(fake.config_dir().join(SETTINGS_FILE));
+        drop(h);
+        let asked = server.requests().len();
+        assert_eq!(asked, 2, "the index and its signature, once");
+
+        // The next run reads the cache at its start and asks nobody,
+        let mut h = rick(&fake, &settings.unwrap_or_default(), Vec::new());
+        h.send(Command::Registry(RegistryCommand::Start));
+        h.settle();
+        assert!(h.app.plugin_registry().index.is_some(), "the cached list");
+        // whatever is selected, entered or listed: ten thousand files one
+        // after another, folders, and the side panel's sections.
+        let mut suggested = 0;
+        for n in 0..10_000 {
+            let name = match n % 4 {
+                0 => format!("part-{n}.stl"),
+                1 => format!("notes-{n}.txt"),
+                2 => format!("scan-{n}.OBJ"),
+                _ => format!("file-{n}"),
+            };
+            suggested += usize::from(h.app.suggestion_for_file(&name).is_some());
+            if n % 100 == 0 {
+                let listing = [name.as_str(), ".git", "src"];
+                assert!(h.app.suggestion_for_folder(listing).is_some());
+                assert_eq!(kinds(&h.app, ConnectionSection::Cloud).len(), 2);
+                assert_eq!(kinds(&h.app, ConnectionSection::Network).len(), 1);
+            }
+        }
+        assert_eq!(suggested, 5_000);
+        h.send(Command::SuggestNotNow("git".to_owned()));
+        h.send(Command::SuggestNever("ssh".to_owned()));
+        h.send(Command::SuggestAgain("ssh".to_owned()));
+        h.settle();
+        assert_eq!(server.requests().len(), asked, "nobody was asked");
     }
 }

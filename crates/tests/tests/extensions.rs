@@ -36,6 +36,8 @@ fn plugin(id: &str, name: &str, points: Points, dir: &Path) -> Plugin {
         version: "0.4.0-dev".to_owned(),
         points,
         previews: Vec::new(),
+        markers: Vec::new(),
+        connections: Vec::new(),
         status: PluginStatus::Loaded,
         path: dir.join(id),
         built_in: true,
@@ -62,11 +64,15 @@ fn plugins(beside: &Path, per_user: &Path) -> Vec<Plugin> {
         plugin("ssh", "SSH", Points::PROVIDER | Points::ACTION, beside),
         Plugin {
             previews: vec!["pdf".to_owned()],
+            markers: Vec::new(),
+            connections: Vec::new(),
             ..plugin("preview-pdf", "PDF preview", Points::PREVIEWER, beside)
         },
         Plugin {
             status: PluginStatus::Disabled,
             previews: vec!["docx".to_owned(), "odt".to_owned()],
+            markers: Vec::new(),
+            connections: Vec::new(),
             ..plugin(
                 "preview-office",
                 "Office preview",
@@ -491,6 +497,8 @@ fn a_plugin_whose_library_was_reported_missing_needs_attention() {
     });
     app.set_plugins(vec![Plugin {
         previews: vec!["pdf".to_owned()],
+        markers: Vec::new(),
+        connections: Vec::new(),
         ..plugin("preview-pdf", "PDF preview", Points::PREVIEWER, dir.path())
     }]);
     let mut harness = Harness::builder()
