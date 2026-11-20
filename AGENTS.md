@@ -39,6 +39,11 @@ is changed. Do not change SPEC.md yourself.
   them there by hand; when a batch is ready he opens one pull request from
   `dev` to `main`, which must pass the full matrix (CI tier 2) before it
   merges; after the merge `dev` is brought back level with `main`.
+- Before a release: tier 3 (`bench.yml`) is started by hand on the release
+  commit, the one the `v*` tag will name, and runs in full on Linux, macOS
+  and Windows. Its summary is read before the tag is pushed: the line
+  above each table names every benchmark over its target. Nothing
+  enforces this step; the release workflow does not look for the run.
 
 ## Decisions
 
