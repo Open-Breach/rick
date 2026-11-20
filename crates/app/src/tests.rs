@@ -6125,6 +6125,46 @@ mod registry {
         assert!(!h.app.plugin_registry().checking);
     }
 
+    /// What the binary does: the key compiled into the build is the
+    /// registry's, and with it a Rick has a registry without a word in
+    /// `rick.toml`. The address is the test's own all the same, so that
+    /// nothing here asks the real one.
+    #[test]
+    fn the_binary_turns_on_the_registry_of_the_build_with_the_key_compiled_in() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(&signer, &index(1, "0.6.0"));
+        // An address and no key: the key is the build's.
+        let addressed = format!("[registry]\nurl = \"{}\"\n", server.index_url());
+        let mut h = start(&fake, &addressed);
+        assert!(!h.app.plugin_registry().set_up, "not before the call");
+        h.app.use_build_registry();
+        let view = h.app.plugin_registry();
+        assert!(view.set_up, "the build has a key");
+        assert_eq!(view.custom.as_deref(), Some(server.index_url().as_str()));
+        assert_ne!(h.app.offering(), Offering::NotSetUp);
+
+        // The list is asked for, both files, and it is signed with the
+        // test's key, which is not the registry's: it is not taken.
+        h.begin();
+        assert_eq!(server.requests().len(), 2);
+        assert_eq!(h.git(), None);
+        assert_eq!(
+            h.app.plugin_registry().problem,
+            Some(RegistryProblem::Unverified)
+        );
+        assert_eq!(said(&h.take_events()), [] as [String; 0]);
+
+        // Without an address either, the registry is the real one, and
+        // the dialogue's footer has nothing to name. Nothing is asked of
+        // it here: the application is not started.
+        let mut real = start(&self::fake(), "");
+        real.app.use_build_registry();
+        let view = real.app.plugin_registry();
+        assert!(view.set_up);
+        assert_eq!(view.host, "get.openbreach.dev");
+        assert_eq!(view.custom, None);
+    }
+
     #[test]
     fn without_a_key_and_as_a_pre_release_nothing_is_asked() {
         let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
@@ -6158,16 +6198,14 @@ mod registry {
         }
         assert!(!harness().app.plugin_registry().set_up);
 
-        // The binary turns it on. While the committed key file is empty,
-        // the registry is off all the same, however the address is set.
-        let built_with_a_key = plugins_registry::Source::new(None, None).key.is_some();
-        if !built_with_a_key {
-            let mut h = start(&self::fake(), &addressed);
-            h.app.use_build_registry();
-            assert!(!h.app.plugin_registry().set_up);
-            for occasion in occasions {
-                h.registry(occasion);
-            }
+        // The binary turns the build's registry on, and a key that is
+        // none still turns it off: the key compiled in never stands in
+        // for one that was asked for.
+        let mut h = start(&self::fake(), &unkeyed);
+        h.app.use_build_registry();
+        assert!(!h.app.plugin_registry().set_up);
+        for occasion in occasions {
+            h.registry(occasion);
         }
 
         // A pre-release fits nothing the registry has, and does not ask.
