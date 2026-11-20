@@ -159,6 +159,36 @@ fn the_facts_are_read_from_the_registries() {
     assert_eq!(facts.tools, ["Git", "SVN"]);
 }
 
+/// Install (specs/readme.md, *Install*): the Linux block leads with the
+/// package install, and what stands before the archive names no distro
+/// release, only where they are listed; the plugins line ends on the
+/// plugin packages.
+#[test]
+fn linux_leads_with_the_package_install() {
+    let text = read("README.md");
+    let install = readme::block(&text, INSTALL).unwrap_or_else(|e| panic!("{e}"));
+    let (packages, archive) = install
+        .split_once("\n\nOr run it from the archive, with nothing installed: ")
+        .unwrap_or_else(|| panic!("the Linux block has no archive after the package install"));
+    assert!(packages.trim_start().starts_with(
+        "**Linux** · Debian, Ubuntu, Fedora and the distros based on them\n\n```bash\n\
+         curl -fsSL https://get.openbreach.dev/install.sh | sh -s rick\n```\n"
+    ));
+    assert!(
+        packages.ends_with("(https://github.com/Open-Breach/trebuchet/blob/main/docs/install.md)."),
+        "the package install does not end on the link to Trebuchet's docs/install.md"
+    );
+    assert!(
+        !packages.contains(|c: char| c.is_ascii_digit()),
+        "the package install names a release: {packages}"
+    );
+    assert!(archive.contains("\n**macOS** · "));
+    assert!(install.trim_end().ends_with(
+        "A Rick installed from a package gets the rest as packages: `rick-plugin-git`, or \
+         `rick-plugins` for all of them."
+    ));
+}
+
 /// The parts of specs/readme.md, *Structure*, in their order, the fixed
 /// text as the spec quotes it, and everything the page points at in the
 /// repository.
