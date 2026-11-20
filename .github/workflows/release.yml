@@ -60,7 +60,9 @@ name: release
 # `repositories` job tells Trebuchet's publisher, which takes the deb and
 # rpm files from the release page into the apt and dnf repositories on
 # get.openbreach.dev. A pre-release and a dry run stay drafts and are not
-# announced.
+# announced. Telling the publisher takes a token, the secret
+# TREBUCHET_DISPATCH_TOKEN: a real release run looks for it first, before
+# anything is built, and stops there if it is not set.
 #
 # Runners: the labels come from the repository variables RUNNER_LINUX_X64,
 # RUNNER_LINUX_ARM64, RUNNER_MACOS and RUNNER_WINDOWS; where one is not
@@ -91,6 +93,26 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
+      # A release ends by telling Trebuchet's publisher, with a token that
+      # is a secret of this repository. Without it the release would be
+      # built, verified and published, and the package repositories never
+      # told. So a real release run looks for the token here, in the first
+      # step of the job every other job waits for, and stops before
+      # anything is built. A pre-release and a dry run tell nobody and need
+      # none. That the token is set is all this can tell: whether it still
+      # works shows when it is used.
+      - name: the publisher's token
+        if: github.event_name == 'push' && !contains(github.ref_name, '-')
+        env:
+          TREBUCHET_DISPATCH_TOKEN: ${{ secrets.TREBUCHET_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$TREBUCHET_DISPATCH_TOKEN" ]; then
+            message="The secret TREBUCHET_DISPATCH_TOKEN is not set. A release ends by telling Trebuchet's publisher with it (Open-Breach/trebuchet, docs/publisher.md). Nothing was built and nothing is published. Set the secret in this repository and run this workflow again."
+            echo "::error::$message"
+            { echo "### Stopped before the build"; echo; echo "$message"; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "TREBUCHET_DISPATCH_TOKEN is set"
       - uses: actions/checkout@v4
       # The version the Linux packages are made with: the tag's, whose
       # release part must be the workspace's, as the build job checks for
@@ -1047,7 +1069,8 @@ jobs:
   # page (Open-Breach/trebuchet, docs/publisher.md). Only for a published
   # release, so after the `publish` job: a pre-release and a dry run are
   # drafts, which the publisher cannot fetch, and the repositories have one
-  # channel. The token may send this one event to that one repository.
+  # channel. The token may send this one event to that one repository; the
+  # first job of the run has looked for it already.
   repositories:
     needs: [licenses, publish]
     if: github.event_name == 'push' && !contains(github.ref_name, '-')
