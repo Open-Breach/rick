@@ -246,8 +246,15 @@ fn with_the_plugin_disabled_an_ico_shows_the_card_that_says_plugin_available() {
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let mut harness = window(&fake, dir.path());
     // The plugin's real manifest, as the binary reports a disabled plugin
-    // found in the plugins directory.
+    // found in the plugins directory: `[plugins] disabled` names it.
     let toml = manifest();
+    harness.state_mut().app_mut().handle(
+        app::Command::Settings(model::SettingsChange::Plugin {
+            id: toml.id.clone(),
+            enabled: false,
+        }),
+        &mut Vec::new(),
+    );
     harness.state_mut().app_mut().set_plugins(vec![app::Plugin {
         id: toml.id.clone(),
         name: toml.name.clone(),
@@ -270,20 +277,28 @@ fn with_the_plugin_disabled_an_ico_shows_the_card_that_says_plugin_available() {
         .previews()
         .get(pane)
         .unwrap_or_else(|| panic!("slot"));
+    assert!(slot.placeholder().is_some(), "the centred card");
+    assert!(!slot.has_frame(), "no frame at all");
     assert_eq!(
-        slot.placeholder().map(|p| p.plugin.clone()),
-        Some(Some(ID.to_owned())),
+        harness
+            .state()
+            .app()
+            .preview_suggestion(pane)
+            .map(|s| (s.id, s.remedy)),
+        Some((ID.to_owned(), app::Remedy::Enable)),
         "the disabled plugin claims .ico"
     );
-    assert!(!slot.has_frame(), "no frame at all");
     // The card's head says so, after the type and the size.
     let line = |harness: &Harness<'_, RickUi>, text: &str| {
         harness.query_all_by_label_contains(text).next().is_some()
     };
     assert!(line(&harness, "plugin available"));
     assert!(!line(&harness, "no previewer for"));
+    // And the action row has the button that switches the plugin on.
+    harness.get_by_label(&format!("Enable {}", toml.name));
 
     select_unclaimed(&mut harness, "blob.xyz");
     assert!(line(&harness, "no previewer for .xyz"));
     assert!(!line(&harness, "plugin available"));
+    assert!(harness.query_by_label_contains("Enable ").is_none());
 }

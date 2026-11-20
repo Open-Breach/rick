@@ -51,8 +51,14 @@ card for every file (`info_card.rs`: the icon, name, type and size, rows
 with a copy button each and *Show all n fields*) — hanging under the info
 button while the pointer is on it, pinned above the content per previewer,
 and centred with its buttons where there is nothing to show: no previewer
-(*Open with…*), a missing third-party library (*Download*,
-*Browse…*, *Retry*, *Where Rick looked*) or a failed preview; the Portal
+(*Open with…*, and **Install …** or **Enable …** where a plugin that is
+not there would show the file), a missing third-party library (*Download*,
+*Browse…*, *Retry*, *Where Rick looked*) or a failed preview; the
+suggestion bar of `suggestion.rs` under the toolbar where the hex view
+shows a file a plugin that is not there claims — one line on `bg/subtle`
+with the plugin's name and description, **Install** or **Enable**, **Not
+now** and **Don't suggest again**, taking no focus and no key, its buttons
+going under the text in a pane too narrow for one line; the Portal
 burst while a preview loads and a glyph with *No file selected* when
 there is none), the side panel (rows
 `sidebar/item-height` tall inset from the panel's edges; the editable

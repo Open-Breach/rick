@@ -260,6 +260,9 @@ enum Msg {
         result: Result<Box<dyn PreviewDoc>, Error>,
         /// The previewer that was asked.
         previewer: ExtId,
+        /// The previewer is the one of last resort: no other claims the
+        /// file.
+        last_resort: bool,
         /// The bytes served and the file's size, when the previewer got a
         /// prefix of a remote file.
         prefix: Option<(u64, Option<u64>)>,
@@ -654,6 +657,10 @@ struct PreviewJob {
     full: Entry,
     generation: u64,
     cancel: CancelToken,
+    /// No loaded previewer claims the file but the one of last resort,
+    /// or none at all: a plugin that is not there may be suggested for
+    /// it ([`App::preview_suggestion`]).
+    unclaimed: bool,
 }
 
 /// What a pane's listing was started for; a different key means relist.
@@ -1404,22 +1411,6 @@ impl App {
     #[must_use]
     pub fn missing_library(&self, id: &str) -> Option<&str> {
         self.missing_libraries.get(id).map(String::as_str)
-    }
-
-    /// The id of a disabled plugin in the plugins directory whose manifest
-    /// says its previewers claim files named like `name` (by any suffix
-    /// after a dot, so `a.tar.gz` finds a plugin that claims `tar.gz` or
-    /// `gz`): the answer to *Plugin available* in the preview pane's
-    /// placeholder, from the manifests alone (SPEC.md, Preview, *No
-    /// previewer*).
-    #[must_use]
-    pub fn disabled_plugin_for(&self, name: &str) -> Option<String> {
-        let suffixes = suggest::suffixes(name);
-        self.plugins
-            .iter()
-            .filter(|plugin| plugin.status == PluginStatus::Disabled)
-            .find(|plugin| suggest::claims(&plugin.previews, &suffixes))
-            .map(|plugin| plugin.id.clone())
     }
 
     /// The values of the settings extensions declared
@@ -4651,16 +4642,18 @@ impl App {
                 generation,
                 result,
                 previewer,
+                last_resort,
                 prefix,
             } => {
-                if self
+                let Some(job) = self
                     .preview
-                    .get(&pane)
-                    .is_none_or(|job| job.generation != generation)
-                {
+                    .get_mut(&pane)
+                    .filter(|job| job.generation == generation)
+                else {
                     return;
-                }
+                };
                 let opened = result.is_ok();
+                job.unclaimed = last_resort && opened;
                 if let Ok(doc) = &result {
                     // What the Extensions dialogue calls needing attention.
                     match doc.content() {
@@ -4716,15 +4709,11 @@ impl App {
             } => {
                 if let Some(job) = self
                     .preview
-                    .get(&pane)
+                    .get_mut(&pane)
                     .filter(|job| job.generation == generation)
                 {
-                    let plugin = self.disabled_plugin_for(&job.full.name);
-                    events.push(Event::PreviewNone {
-                        pane,
-                        plugin,
-                        permissions,
-                    });
+                    job.unclaimed = true;
+                    events.push(Event::PreviewNone { pane, permissions });
                 }
             }
             Msg::PreviewEmpty {
@@ -5263,6 +5252,7 @@ impl App {
                 full: entry,
                 generation,
                 cancel: CancelToken::new(),
+                unclaimed: false,
             },
         );
     }
@@ -5334,6 +5324,7 @@ impl App {
                 full: job_entry,
                 generation,
                 cancel: handle.cancel,
+                unclaimed: false,
             },
         );
     }
@@ -6212,6 +6203,10 @@ impl PreviewRun {
             });
             return Ok(());
         };
+        // The hex view takes what no other previewer recognises: a plugin
+        // that is not there may then be suggested for the file. A
+        // previewer that was asked for by name was chosen, not left over.
+        let last_resort = with.is_none() && previewer.score(&entry, &sniff) <= ext::FALLBACK_SCORE;
         let mut prefix = None;
         let result = if remote && previewer.reads() == Reads::Prefix {
             let limit = REMOTE_PREFIX_CHUNK * (u64::from(more) + 1);
@@ -6252,6 +6247,7 @@ impl PreviewRun {
             generation,
             result,
             previewer: previewer.id(),
+            last_resort,
             prefix,
         });
         Ok(())

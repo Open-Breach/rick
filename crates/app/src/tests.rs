@@ -6519,7 +6519,13 @@ mod suggest {
     /// What [`said`] gives for **Install** on the plugin `id`, a package
     /// of `size` bytes.
     fn install(id: &str, size: u64) -> (String, Remedy) {
-        (id.to_owned(), Remedy::Install { size })
+        (
+            id.to_owned(),
+            Remedy::Install {
+                size,
+                installing: false,
+            },
+        )
     }
 
     /// The titles of the kinds suggested for `section`, each with its
@@ -6544,7 +6550,10 @@ mod suggest {
                 id: "preview-3d".to_owned(),
                 name: "3D Models".to_owned(),
                 description: "What 3D Models does.".to_owned(),
-                remedy: Remedy::Install { size: 2048 },
+                remedy: Remedy::Install {
+                    size: 2048,
+                    installing: false,
+                },
             })
         );
         // Whatever the case, and by any suffix after a dot.
@@ -6580,7 +6589,10 @@ mod suggest {
                 id: "git".to_owned(),
                 name: "Git".to_owned(),
                 description: "What Git does.".to_owned(),
-                remedy: Remedy::Install { size: 1024 },
+                remedy: Remedy::Install {
+                    size: 1024,
+                    installing: false,
+                },
             })
         );
         // Whole names, case as written.
@@ -6615,7 +6627,10 @@ mod suggest {
                     id: "vfs-s3".to_owned(),
                     name: "Amazon S3".to_owned(),
                     description: "What Amazon S3 does.".to_owned(),
-                    remedy: Remedy::Install { size: 4096 },
+                    remedy: Remedy::Install {
+                        size: 4096,
+                        installing: false,
+                    },
                 },
             })
         );

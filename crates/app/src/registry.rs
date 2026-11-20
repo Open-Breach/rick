@@ -816,6 +816,12 @@ impl App {
             .insert(id.to_owned(), handle.id);
     }
 
+    /// Whether the install of the plugin `id` from the registry is
+    /// running.
+    pub(crate) fn plugin_installing(&self, id: &str) -> bool {
+        self.plugin_registry.installing.contains_key(id)
+    }
+
     /// A job ended: when it was an install from the registry or from an
     /// address, that install is no longer running, and `true` says it
     /// was one.

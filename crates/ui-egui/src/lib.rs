@@ -65,6 +65,7 @@ pub mod settings_ui;
 pub mod shell;
 pub mod shortcuts;
 pub mod side_panel;
+pub mod suggestion;
 pub mod surface;
 pub mod tab_row;
 pub mod table;

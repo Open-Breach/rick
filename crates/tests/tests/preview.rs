@@ -391,8 +391,13 @@ fn the_app_opens_a_preview_for_the_selection() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, Event::PreviewNone { pane: p, plugin: None, .. } if *p == pane)),
-        "no previewer claims it, and no disabled plugin would: {events:?}"
+            .any(|e| matches!(e, Event::PreviewNone { pane: p, .. } if *p == pane)),
+        "no previewer claims it: {events:?}"
+    );
+    assert_eq!(
+        app.preview_suggestion(pane),
+        None,
+        "and no plugin that is not there would"
     );
     assert!(
         app.model().jobs.is_empty(),

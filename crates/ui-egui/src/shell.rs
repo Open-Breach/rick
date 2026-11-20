@@ -1942,13 +1942,9 @@ impl RickUi {
                     let entry = self.preview_entry(pane);
                     self.previews.failed(pane, &error, entry);
                 }
-                Event::PreviewNone {
-                    pane,
-                    plugin,
-                    permissions,
-                } => {
+                Event::PreviewNone { pane, permissions } => {
                     let entry = self.preview_entry(pane);
-                    self.previews.none(pane, plugin, permissions, entry);
+                    self.previews.none(pane, permissions, entry);
                 }
                 Event::PreviewEmpty { pane, permissions } => {
                     let entry = self.preview_entry(pane);
