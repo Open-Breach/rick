@@ -4,10 +4,11 @@ name: release
 # workflow linux-packages.yml (Open-Breach/trebuchet), which the `linux` job
 # calls: for every distribution release of its target list and for x86-64
 # and arm64 it runs .github/scripts/linux-package.sh inside that release's
-# container and makes a deb or an rpm of the result, and one build per
-# architecture is also the archive, rick-<version>-linux-<arch>.tar.gz,
-# with the plugin packages that fit it. What follows describes an archive,
-# with
+# container and makes a deb or an rpm of the result, with one more for each
+# separate plugin, rick-plugin-<id>, and rick-plugins for all of them; and
+# one build per architecture is also the archive,
+# rick-<version>-linux-<arch>.tar.gz, with the plugin packages that fit it.
+# What follows describes an archive, with
 # the bundle `cargo xtask bundle --release` lays out — the binary, the kernel
 # dylibs and libstd it shares with the plugins, the pdfium library beside it
 # (SPEC.md: pdfium ships beside the binary), the Visual C++ runtime on
@@ -212,6 +213,34 @@ jobs:
       bundle-dir: target/release/bundle
       desktop-file: packaging/linux/rick.desktop
       icon: assets/icons/linux/hicolor
+      # The separate plugins as packages of their own, `rick-plugin-<id>`
+      # (specs/plugin-distribution.md §2, decision 5, and §4): the nine of
+      # Linux, each from the folder linux-package.sh takes out of the
+      # bundle, installed beside the binary's other plugins and pinned to
+      # the `rick` package of exactly this version. `rick-plugins` is all
+      # of them. The summary is what `apt show` and `dnf info` print.
+      plugins-dir: /usr/lib/rick/plugins
+      plugins: |
+        [
+          { "id": "git", "summary": "Git for the Rick file manager: status badges, the branch and the Git actions",
+            "files": "target/release/plugin-packages/git" },
+          { "id": "svn", "summary": "Subversion for the Rick file manager: status badges and the SVN actions",
+            "files": "target/release/plugin-packages/svn" },
+          { "id": "zfs", "summary": "ZFS for the Rick file manager: snapshots, file versions and restore",
+            "files": "target/release/plugin-packages/zfs" },
+          { "id": "ssh", "summary": "SSH for the Rick file manager: remote hosts as locations",
+            "files": "target/release/plugin-packages/ssh" },
+          { "id": "vfs-s3", "summary": "S3 for the Rick file manager: Amazon S3 and compatible stores as locations",
+            "files": "target/release/plugin-packages/vfs-s3" },
+          { "id": "vfs-azure", "summary": "Azure Blob for the Rick file manager: storage accounts as locations",
+            "files": "target/release/plugin-packages/vfs-azure" },
+          { "id": "vfs-gcs", "summary": "Google Cloud Storage for the Rick file manager: projects as locations",
+            "files": "target/release/plugin-packages/vfs-gcs" },
+          { "id": "preview-office", "summary": "Office documents in the preview of the Rick file manager",
+            "files": "target/release/plugin-packages/preview-office" },
+          { "id": "preview-3d", "summary": "3D models in the preview of the Rick file manager",
+            "files": "target/release/plugin-packages/preview-3d" }
+        ]
       build-deps: |
         {
           "debian": [
@@ -914,7 +943,7 @@ jobs:
             echo
             echo "Plugins that are separate downloads: Git, SVN, ZFS (Linux), SSH, S3, Azure Blob, Google Cloud Storage, Office documents, 3D models and, on macOS and Windows, audio and video with its GStreamer runtime. Each is one \`<id>-<version>-<platform>.rkp\` below. Download the ones for your platform and install them with *Install from file…* in the Extensions dialogue; they are loaded at the next start. A package fits the Rick of this release only. \`plugins-<platform>.json\` lists a platform's packages for the plugin registry."
             echo
-            echo "Linux packages: a \`.deb\` for each supported Debian and Ubuntu release and an \`.rpm\` for each supported Fedora release, for x86-64 and arm64, with the same plugins as the archives. They are also in the apt and dnf repositories on get.openbreach.dev. A package brings what a video in H.264 needs to play. On Fedora the H.264 library itself comes from Cisco's OpenH264 repository, which Fedora enables by default; with that repository switched off Rick still installs, and says the decoder is missing when it is asked to play such a video."
+            echo "Linux packages: a \`.deb\` for each supported Debian and Ubuntu release and an \`.rpm\` for each supported Fedora release, for x86-64 and arm64, with the same plugins as the archives. The separate plugins are packages of their own there, \`rick-plugin-<id>\`, and \`rick-plugins\` is all of them; each fits the \`rick\` package of this release only, and the package manager keeps them together. They are also in the apt and dnf repositories on get.openbreach.dev. A package brings what a video in H.264 needs to play. On Fedora the H.264 library itself comes from Cisco's OpenH264 repository, which Fedora enables by default; with that repository switched off Rick still installs, and says the decoder is missing when it is asked to play such a video."
             echo
             echo "\`SHA256SUMS.txt\` has the checksums of the archives, the packages and the lists. Not signed or notarised (see docs/building.md)."
             echo

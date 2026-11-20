@@ -155,6 +155,15 @@ a plugin built for 0.5.0 is refused until it is rebuilt.
   its plugins load, pdfium opens a PDF and a video plays. A package
   brings GStreamer's decoder for H.264 with it, so an MP4 plays without
   installing anything more (#282).
+- **Plugin packages for the deb and the rpm.** The separate plugins of
+  Linux are packages of their own beside `rick`: `rick-plugin-git`,
+  `-svn`, `-zfs`, `-ssh`, `-vfs-s3`, `-vfs-azure`, `-vfs-gcs`,
+  `-preview-office` and `-preview-3d`, and `rick-plugins` for all of
+  them. Each installs its plugin to `/usr/lib/rick/plugins/` and fits the
+  `rick` package of its own version only: the package manager installs
+  the two together, moves them together in an upgrade and refuses a
+  plugin of another version. They are what the command in the Extensions
+  dialogue of a packaged Rick installs (#302).
 - **Build attestations.** Every file of a release has a GitHub build
   attestation, which says which workflow built it and from which commit:
   `gh attestation verify <file> --owner Open-Breach --signer-repo

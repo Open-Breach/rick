@@ -40,6 +40,15 @@
 #               plugin and plugins-linux-<arch>.json. They fit the archive
 #               of this very build and no other, so the job that makes the
 #               archive hands them out with it.
+#   plugin-packages/
+#               The folder of every separate plugin, `<id>/` as the bundle
+#               has it, taken out of the bundle. The workflow makes a deb
+#               or an rpm of each, `rick-plugin-<id>`, which installs it to
+#               /usr/lib/rick/plugins/<id>/ and depends on the `rick`
+#               package of exactly this version; the release workflow's
+#               call names them (specs/plugin-distribution.md §2,
+#               decision 5). Every target makes its own: a plugin fits the
+#               build it was made with.
 #   smoke/      What .github/scripts/linux-smoke.sh needs from this build
 #               to test the package where it is installed: the test
 #               programs pdfium_check and preview_check, which only run
@@ -100,15 +109,23 @@ packages=target/release/packages
 manifest="$packages/plugins-$platform.json"
 
 # The archive and the `rick` package carry the default set: the separate
-# plugins, the ones the manifest lists a package for, leave the tree. The
-# ZFS plugin's helper rick-zfs stays beside the binary.
+# plugins, the ones the manifest lists a package for, leave the tree. Each
+# folder goes where the workflow makes the plugin's own deb or rpm from
+# it, with the modes the `rick` package gives what sits beside the binary:
+# a plugin's folder holds libraries and data, no program. The ZFS plugin's
+# helper rick-zfs stays beside the binary.
+plugin_packages=target/release/plugin-packages
+rm -rf "$plugin_packages"
+mkdir -p "$plugin_packages"
 for id in $(jq -r '.plugins[].id' "$manifest"); do
   [ -d "$bundle/plugins/$id" ] || {
     echo "linux-package.sh: no plugins/$id in the bundle to take out" >&2
     exit 1
   }
-  rm -r "${bundle:?}/plugins/$id"
+  mv "${bundle:?}/plugins/$id" "$plugin_packages/$id"
+  find "$plugin_packages/$id" -type f -exec chmod 644 {} +
 done
+ls "$plugin_packages"
 cp third-party.json "$bundle/third-party.json"
 
 .github/scripts/check-plugins.sh "$bundle" --sevenzip --archive
