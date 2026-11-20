@@ -81,6 +81,7 @@ mod side_panel;
 mod small_items;
 mod ssh;
 mod startup;
+mod suggestions;
 mod svn;
 mod timeline;
 mod titlebar;

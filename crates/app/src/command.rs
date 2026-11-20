@@ -742,14 +742,14 @@ pub enum Event {
     },
     /// No previewer claims the pane's selection; the pane shows the File
     /// info card of SPEC.md's *No previewer*, centred: the file's facts
-    /// and what can be done about it.
+    /// and what can be done about it. Whether a plugin that is not there
+    /// would show the file is
+    /// [`App::preview_suggestion`](crate::App::preview_suggestion): the
+    /// card's head then reads *plugin available*, and its action row has
+    /// **Install** or **Enable**.
     PreviewNone {
         /// The pane.
         pane: PaneId,
-        /// A previewer plugin in the plugins directory whose manifest
-        /// claims the file's type but which is disabled, by id: the card's
-        /// head reads *plugin available*. `None`: *no previewer for …*.
-        plugin: Option<String>,
         /// The file's mode string and `owner:group`, `-rw-r--r--
         /// serge:serge`, for a local file where the platform has them.
         permissions: Option<String>,
@@ -1040,8 +1040,8 @@ impl fmt::Debug for Event {
             Self::PreviewFailed { pane, error } => {
                 pane_struct(f, "PreviewFailed", *pane, "error", error)
             }
-            Self::PreviewNone { pane, plugin, .. } => {
-                pane_struct(f, "PreviewNone", *pane, "plugin", plugin)
+            Self::PreviewNone { pane, permissions } => {
+                pane_struct(f, "PreviewNone", *pane, "permissions", permissions)
             }
             Self::PreviewEmpty { pane, permissions } => {
                 pane_struct(f, "PreviewEmpty", *pane, "permissions", permissions)

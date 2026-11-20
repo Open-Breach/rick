@@ -57,6 +57,9 @@ pub struct PaneRects {
     pub toolbar: Option<Rect>,
     /// The pane handle at the toolbar's right end.
     pub handle: Option<Rect>,
+    /// The suggestion bar under the toolbar, while a plugin that is not
+    /// there would show the file the hex view shows.
+    pub suggestion: Option<Rect>,
     /// The File info card pinned above the content, when it is pinned.
     pub panel: Option<Rect>,
     /// The File info card hanging under the info button, while it is open.
@@ -317,6 +320,8 @@ pub fn show(
     let info = toolbar(ui, row, &view, state, &mut acts, handle);
     separator(ui, width);
 
+    let suggestion = suggestion_bar(ui, app, previews, &view, state, requests);
+
     // Status bar at the foot, the explorer footer's height with its
     // hairline (SPEC.md *Footer*); the content gets what is left.
     let status_h = theme::metrics(ui.ctx()).footer_height();
@@ -367,6 +372,7 @@ pub fn show(
                 still: app.platform().reduce_motion(),
                 dates: crate::format::Dates::of(&app.model().settings),
                 columns: &app.model().settings.preview.columns,
+                suggestion: suggestion.as_ref(),
             };
             let act = previews.content(
                 &mut body_ui,
@@ -403,6 +409,37 @@ pub fn show(
     popover(ui, &view, state, info, content, &mut acts);
 
     apply_acts(acts, view.pane, previews, requests)
+}
+
+/// The suggestion for the file the pane shows
+/// (specs/plugin-distribution.md §8): a plugin that is not there would
+/// show it. Where the hex view shows the file, it is the bar drawn here,
+/// at the top of the pane under the toolbar; on the *No previewer* card
+/// it is the card's button, and nothing is drawn here. Returns the
+/// suggestion either way.
+fn suggestion_bar(
+    ui: &mut egui::Ui,
+    app: &App,
+    previews: &Previews,
+    view: &View<'_>,
+    state: &mut PaneState,
+    requests: &mut Vec<Request>,
+) -> Option<app::Suggestion> {
+    state.rects.suggestion = None;
+    let pane = view.pane.filter(|_| view.target.is_some())?;
+    let suggestion = app.preview_suggestion(pane)?;
+    let on_card = previews
+        .get(pane)
+        .is_some_and(|slot| slot.placeholder().is_some());
+    if !on_card {
+        let id = egui::Id::new("preview-suggestion");
+        let (rect, answer) = crate::suggestion::bar(ui, id, &suggestion);
+        state.rects.suggestion = Some(rect);
+        if let Some(answer) = answer {
+            requests.push(answer.request(&suggestion.id));
+        }
+    }
+    Some(suggestion)
 }
 
 /// What a button in the content asked for.
@@ -443,6 +480,7 @@ fn apply_preview_act(
                 });
             }
         }
+        PreviewAct::Suggestion(answer, id) => requests.push(answer.request(&id)),
         PreviewAct::Download(address) => ctx.open_url(egui::OpenUrl::new_tab(address)),
         // The pane itself stores a table's widths.
         PreviewAct::Columns(_) => {}

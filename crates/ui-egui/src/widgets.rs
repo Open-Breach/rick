@@ -416,7 +416,19 @@ pub fn card_button(
     label: &str,
     kind: ButtonKind,
 ) -> egui::Response {
-    button_sized(ui, glyph, label, kind, true, 32.0)
+    card_button_when(ui, glyph, label, kind, true)
+}
+
+/// [`card_button`], disabled unless `enabled`: for an action that is
+/// running already.
+pub fn card_button_when(
+    ui: &mut egui::Ui,
+    glyph: Option<&str>,
+    label: &str,
+    kind: ButtonKind,
+    enabled: bool,
+) -> egui::Response {
+    button_sized(ui, glyph, label, kind, enabled, 32.0)
 }
 
 /// A button `height` tall; a 36 px one has 16 px of padding at its sides,

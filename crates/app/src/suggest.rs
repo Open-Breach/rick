@@ -19,6 +19,10 @@
 //!   holds an entry named in its `markers`
 //!   ([`App::suggestion_for_folder`]), and the kinds of connection it adds
 //!   to a section of the side panel ([`App::suggested_connections`]).
+//! - **Where.** In the preview pane, for the file a pane's preview
+//!   follows while no loaded previewer claims it but the one of last
+//!   resort, or none at all ([`App::preview_suggestion`]): the hex view
+//!   then has the bar above it, and the *No previewer* card the button.
 //! - **When not.** With *Suggest plugins* off (`[plugins] suggest`), for a
 //!   plugin *Don't suggest again* silenced (`[plugins] no_suggest`,
 //!   [`Command::SuggestNever`](crate::Command::SuggestNever)), and for one
@@ -52,6 +56,8 @@ pub enum Remedy {
     Install {
         /// The size of the package in bytes.
         size: u64,
+        /// Its install is running: the button waits for it.
+        installing: bool,
     },
     /// The plugin is in a plugins folder and disabled: **Enable**.
     Enable,
@@ -241,6 +247,7 @@ impl App {
                 description: &offered.plugin.description,
                 remedy: Remedy::Install {
                     size: offered.build.size,
+                    installing: self.plugin_installing(&offered.plugin.id),
                 },
                 triggers: Triggers::List(&offered.plugin.meta.triggers),
             });
@@ -265,6 +272,20 @@ impl App {
             .iter()
             .find(|candidate| claims(candidate.previews(), &suffixes))
             .map(Candidate::suggestion)
+    }
+
+    /// The plugin suggested for the file the preview of `pane` shows
+    /// (specs/plugin-distribution.md §8, *The preview pane*): one whose
+    /// `previews` hold the file's extension, while no loaded previewer
+    /// claims the file but the one of last resort — the hex view shows
+    /// it — or none claims it at all and the pane shows the *No
+    /// previewer* card. `None` while a previewer of the file's own shows
+    /// it, for an empty file, which is given to no previewer, and until
+    /// the preview has opened.
+    #[must_use]
+    pub fn preview_suggestion(&self, pane: model::PaneId) -> Option<Suggestion> {
+        let job = self.preview.get(&pane).filter(|job| job.unclaimed)?;
+        self.suggestion_for_file(&job.full.name)
     }
 
     /// The plugin suggested for a folder whose listing holds entries of

@@ -31,9 +31,8 @@ and enters as a location when it browses it (unless the setting
 `archives.on_open` says `system`), anything else opens with the system
 default; nothing opens a viewer. The preview pane's *Copy* reads the whole
 file as a job and puts its text on the clipboard; a preview is reported
-with the previewer that opened it, and a file no previewer claims with the
-disabled plugin whose manifest claims its type and the file's permission
-line, for the pane's File info card (`Command::PreviewWith` shows one file
+with the previewer that opened it, and a file no previewer claims with
+the file's permission line, for the pane's File info card (`Command::PreviewWith` shows one file
 through a named previewer whatever the scores); *Always preview on <source>* writes
 `preview_always` into the source's connection and takes the size limit off
 there, whichever remote provider keeps the source; a whole file fetched
@@ -132,7 +131,11 @@ manifests of the plugins folders and from nothing else, so that a file
 selected or a folder entered never makes a request:
 `App::suggestion_for_file` by a file's extension, `suggestion_for_folder`
 by an entry of a folder's listing that is one of a plugin's markers, and
-`suggested_connections` for a section of the side panel. A plugin of the
+`suggested_connections` for a section of the side panel.
+`App::preview_suggestion` is the first of them for the file a pane's
+preview shows, while no loaded previewer claims the file but the one of
+last resort — the hex view shows it and the pane has the bar — or none
+at all, and the *No previewer* card has the button. A plugin of the
 list that fits this Rick and is in neither plugins folder is suggested
 with *Install*, one that is on the disk and disabled from its own
 manifest with *Enable*, and the one on the disk first. Nothing is
