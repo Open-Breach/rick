@@ -156,6 +156,39 @@ pub fn greyed_item(ui: &mut egui::Ui, icon: Option<&str>, label: &str, reason: &
     greyed_entry(ui, icon, label, None, reason);
 }
 
+/// [`item`] with a short text at its right, where a shortcut stands: the
+/// size of what choosing it fetches. Its accessible name is the label and
+/// that text, *S3, 3.6 MiB*.
+pub fn item_with(
+    ui: &mut egui::Ui,
+    icon: Option<&str>,
+    label: &str,
+    right: &str,
+) -> egui::Response {
+    let row = entry_button(
+        ui,
+        icon,
+        label,
+        Some(right.to_owned()),
+        Tone::Plain,
+        None,
+        CONTEXT,
+    );
+    labelled(ui.add(row), &format!("{label}, {right}"))
+}
+
+/// [`greyed_item`] with a short text at its right, as [`item_with`] has
+/// it: what the entry is waiting for.
+pub fn greyed_item_with(
+    ui: &mut egui::Ui,
+    icon: Option<&str>,
+    label: &str,
+    right: &str,
+    reason: &str,
+) {
+    greyed_entry(ui, icon, label, Some(right.to_owned()), reason);
+}
+
 /// An entry of a [`card`] that is on or off: the tick in its icon slot
 /// while it is `on`, and a checkbox to a screen reader.
 pub fn check_item(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
