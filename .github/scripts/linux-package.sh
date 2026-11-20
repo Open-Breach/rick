@@ -42,7 +42,7 @@
 #               programs pdfium_check and preview_check, which only run
 #               against the libraries they were built with, and two short
 #               videos. They leave as one tar file in TREBUCHET_DIST, which
-#               the release job does not publish.
+#               the release job takes off the release again.
 #
 # Before it packages, it checks the bundle the way the release's smoke test
 # checks an archive: the default set loads and no separate plugin is left.

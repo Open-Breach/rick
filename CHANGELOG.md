@@ -117,6 +117,12 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   its plugins load, pdfium opens a PDF and a video plays. A package
   brings GStreamer's decoder for H.264 with it, so an MP4 plays without
   installing anything more (#282).
+- **Build attestations.** Every file of a release has a GitHub build
+  attestation, which says which workflow built it and from which commit:
+  `gh attestation verify <file> --owner Open-Breach --signer-repo
+  Open-Breach/trebuchet` for a Linux file, `gh attestation verify <file>
+  --repo Open-Breach/rick` for a macOS or Windows one. The release
+  workflow runs both on the release it has written (#282).
 - ***Look for plugins and updates online*** on the Behaviour page of the
   settings, on by default; `[registry] check` in `rick.toml`. On, Rick
   fetches the plugin list when the *Available* list is opened and, in the

@@ -44,6 +44,13 @@ name: release
 # branch's commit (the tag itself is only created if the draft is published).
 # No signing, notarisation or installers in 0.1.
 #
+# Every file of a release has a GitHub build attestation, made by the run
+# that built it (specs/system-integration.md §9): Trebuchet's workflow
+# attests the Linux files, this one the macOS and Windows archives, their
+# plugin packages and lists, and the checksums. The `verify` job then
+# checks one file of each kind the way a user would, with
+# `gh attestation verify`. A dry run attests too: its files are real builds.
+#
 # After a published release, the `repositories` job tells Trebuchet's
 # publisher, which takes the deb and rpm files from the release page into
 # the apt and dnf repositories on get.openbreach.dev. A pre-release and a
@@ -135,8 +142,9 @@ jobs:
   # package loads, pdfium opens a PDF, two videos play, and where the build
   # is also the archive its plugin packages install into the per-user
   # folder and load, for the package and once more for the unpacked
-  # archive. Nothing is attached by it: the release job below gathers its
-  # files with the others'.
+  # archive. The call names the release tag, so the workflow attests its
+  # files and attaches them to the release of the tag, a draft it makes
+  # where there is none yet; the release job below finishes that release.
   # The dependencies are per distribution. To build: GStreamer's
   # development files, beyond a compiler, and its tools and plug-ins to
   # write the smoke test's videos, an H.264 encoder among them. To run, all
@@ -150,8 +158,12 @@ jobs:
   # draw with.
   linux:
     needs: licenses
+    # contents: write to attach to the release; the other two for the
+    # build attestations, which a called workflow cannot grant itself.
     permissions:
-      contents: read
+      contents: write
+      id-token: write
+      attestations: write
     uses: Open-Breach/trebuchet/.github/workflows/linux-packages.yml@main
     with:
       app: rick
@@ -159,6 +171,7 @@ jobs:
       build-artifact: third-party-licenses
       build-command: .github/scripts/linux-package.sh
       smoke-command: .github/scripts/linux-smoke.sh
+      release-tag: ${{ inputs.tag || github.ref_name }}
       bundle-dir: target/release/bundle
       desktop-file: packaging/linux/rick.desktop
       icon: assets/icons/linux/hicolor
@@ -220,6 +233,12 @@ jobs:
           - { os: "${{ vars.RUNNER_WINDOWS || 'windows-latest' }}", platform: windows-x64, pdfium: pdfium-win-x64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    # Reading is all the build needs of the repository; the other two are
+    # for the build attestations of what it makes.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       # The whole history: crates/rick/build.rs writes the names of `git
       # shortlog` into the binary for the About dialog's credits, and a
@@ -570,6 +589,16 @@ jobs:
           rm -r "$NAME"
           mkdir -p ../check
           cp "../target/release/examples/pdfium_check$exe" "../target/release/examples/preview_check$exe" ../check/
+      # A build attestation for the release files this job made: the
+      # archive, the plugin packages and their list
+      # (specs/system-integration.md §9). The Linux files are attested by
+      # Trebuchet's workflow, which builds them.
+      - uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/*.rkp
+            dist/plugins-*.json
       - uses: actions/upload-artifact@v4
         with:
           name: archive-${{ matrix.platform }}
@@ -802,6 +831,12 @@ jobs:
     needs: [build, smoke, linux]
     runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 15
+    # contents: write for the release; the other two to attest the
+    # checksums, the one release file this job makes.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -848,25 +883,91 @@ jobs:
             echo "Linux packages: a \`.deb\` for each supported Debian and Ubuntu release and an \`.rpm\` for each supported Fedora release, for x86-64 and arm64, with the same plugins as the archives. They are also in the apt and dnf repositories on get.openbreach.dev."
             echo
             echo "\`SHA256SUMS.txt\` has the checksums of the archives, the packages and the lists. Not signed or notarised (see docs/building.md)."
+            echo
+            echo "Every file has a GitHub build attestation, which says which workflow built it and from which commit. To check a Linux file, with the GitHub CLI: \`gh attestation verify <file> --owner Open-Breach --signer-repo Open-Breach/trebuchet\`. A macOS or Windows file, or \`SHA256SUMS.txt\`: \`gh attestation verify <file> --repo Open-Breach/rick\`. An attestation proves where a file comes from, not that it is safe."
           } >> body.md
           cat body.md
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/attest@v4
         with:
-          tag_name: ${{ env.TAG }}
-          target_commitish: ${{ github.sha }}
-          name: Rick ${{ env.TAG }}
-          body_path: body.md
-          draft: ${{ contains(env.TAG, '-') || github.event_name == 'workflow_dispatch' }}
-          prerelease: ${{ contains(env.TAG, '-') }}
-          files: |
-            dist/*.tar.gz
-            dist/*.zip
-            dist/*.deb
-            dist/*.rpm
-            dist/*.rkp
-            dist/plugins-*.json
-            dist/SHA256SUMS.txt
-          fail_on_unmatched_files: true
+          subject-path: dist/SHA256SUMS.txt
+      # The release of the tag. Trebuchet's job has attached the Linux files
+      # already and, where the tag had no release yet, made a draft for
+      # them. This step works on that same release: it adds the files of
+      # the other platforms and the checksums, gives the release its name
+      # and its notes, and publishes it, unless the tag is a pre-release or
+      # this is a dry run, which both stay drafts. The Linux files are
+      # uploaded once more, the same bytes, so that the release holds what
+      # SHA256SUMS.txt names even where Trebuchet's job attached nothing.
+      - name: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DRAFT: ${{ contains(env.TAG, '-') || github.event_name == 'workflow_dispatch' }}
+          PRERELEASE: ${{ contains(env.TAG, '-') }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --draft --title "Rick $TAG" --notes-file body.md --target "$GITHUB_SHA"
+          fi
+          gh release upload "$TAG" --clobber \
+            dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/*.rkp dist/plugins-*.json dist/SHA256SUMS.txt
+          # Trebuchet attaches every file of its jobs, the test programs of
+          # the smoke tests among them. They are not release files.
+          gh release view "$TAG" --json assets --jq '.assets[].name' | { grep -e '-smoke-' || true; } \
+            | while IFS= read -r asset; do
+              gh release delete-asset "$TAG" "$asset" --yes
+            done
+          gh release edit "$TAG" --title "Rick $TAG" --notes-file body.md --target "$GITHUB_SHA" \
+            --prerelease="$PRERELEASE" --draft="$DRAFT"
+          gh release view "$TAG" --json name,isDraft,isPrerelease,assets \
+            --jq '"\(.name): draft \(.isDraft), pre-release \(.isPrerelease), \(.assets | length) files"'
+
+  # The release, checked the way its users are told to check it
+  # (specs/system-integration.md §9). One Linux package and one archive of
+  # this workflow's own are downloaded from the release and verified with
+  # the two documented lines: the package against Trebuchet's workflow,
+  # which built it, the archive against this repository's. A copy of the
+  # package with one byte changed must not verify.
+  verify:
+    needs: release
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    # A draft is visible with write access only; a dry run's release is one.
+    permissions:
+      contents: write
+      attestations: read
+    steps:
+      - name: attestations
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          mkdir files
+          cd files
+          gh release download "$TAG" --pattern 'rick_*_amd64.deb' --pattern "rick-$version-macos-arm64.zip"
+          deb="$(find . -name 'rick_*_amd64.deb' | sort | sed -n 1p)"
+          archive="rick-$version-macos-arm64.zip"
+          test -n "$deb" || { echo "no deb on the release"; exit 1; }
+          echo "::group::$deb, built by Trebuchet's workflow"
+          gh attestation verify "$deb" --owner "$GITHUB_REPOSITORY_OWNER" --signer-repo Open-Breach/trebuchet
+          echo "::endgroup::"
+          echo "::group::$archive, built by this workflow"
+          gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY"
+          echo "::endgroup::"
+          # One byte of the package changed, in the middle of the file.
+          python3 -c 'import sys; d = bytearray(open(sys.argv[1], "rb").read()); d[len(d) // 2] ^= 1; open(sys.argv[2], "wb").write(d)' "$deb" changed.deb
+          echo "::group::the same package with one byte changed"
+          if gh attestation verify changed.deb --owner "$GITHUB_REPOSITORY_OWNER" --signer-repo Open-Breach/trebuchet; then
+            echo "::endgroup::"
+            echo "a package changed by one byte verified"
+            exit 1
+          fi
+          echo "::endgroup::"
+          echo "both files verify, and the changed one does not"
 
   # The apt and dnf repositories on get.openbreach.dev: Trebuchet's publisher
   # is told of the release and takes its deb and rpm files from the release
@@ -875,7 +976,7 @@ jobs:
   # cannot fetch, and the repositories have one channel. The token may send
   # this one event to that one repository.
   repositories:
-    needs: [licenses, release]
+    needs: [licenses, release, verify]
     if: github.event_name == 'push' && !contains(github.ref_name, '-')
     runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 5

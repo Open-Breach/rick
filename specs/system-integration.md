@@ -104,7 +104,13 @@ Per the Figma frame: header with the app icon, title *Set up Rick on this system
 
 ## 9. Signing, provenance and plugin security
 
-- **Provenance.** Every file in a release — the archives, the packages, the installers, the DMG and the plugin packages — gets a GitHub build attestation, made by the workflow that builds it. Which workflow that is, Rick's release workflow or one of Trebuchet's that it calls, is not decided here: it is an open point for Trebuchet's spec. Verification instructions (`gh attestation verify … --owner Open-Breach`) go into the README's download section.
+- **Provenance.** Every file in a release — the archives, the packages, the installers, the DMG and the plugin packages — gets a GitHub build attestation, made by the workflow run that builds it; a run that only fetches a file never attests it (Trebuchet's spec, decision 10 and *Build attestations* in its section 3). Who attests what:
+  - **A workflow of Trebuchet's that Rick's release workflow calls attests what it builds.** Today that is `linux-packages.yml`: the debs, the rpms, the Linux archives, and the Linux plugin packages with their lists. `macos-dmg.yml` and `windows-installer.yml` will do the same for the DMG and the installer. The job that calls such a workflow grants it `id-token: write` and `attestations: write`. A file of this kind is verified with
+    `gh attestation verify <file> --owner Open-Breach --signer-repo Open-Breach/trebuchet`
+  - **Rick's release workflow attests what it still builds itself**: the macOS and Windows archives, their plugin packages and lists, and `SHA256SUMS.txt`. A file of this kind is verified with
+    `gh attestation verify <file> --repo Open-Breach/rick`
+
+  The release workflow runs both lines itself, on one file of each kind taken from the release it has just written, and fails when one does not verify or when a copy with one byte changed does. Both lines go into the README's download section and into the notes of every release.
 - The apt and dnf repositories are Open-Breach's own and are signed with the Open-Breach GPG key (`Release` and `InRelease`, `repomd.xml`): the public key is in `Open-Breach/trebuchet` (`keys/`), the private key a secret of that repository. It has no expiry and no rotation plan: a key that leaks is replaced, the new public key is published, and users add it again.
 - macOS: Developer ID signing and notarisation of `Rick.app` and the DMG (`notarytool`, API key as CI secrets), stapled. Windows: unsigned for now, the installer and the binaries alike. SmartScreen shows *Windows protected your PC* at the first run of each new release and the user clicks through; signing is taken up again, with Azure Trusted Signing or SignPath, if Rick gains a Windows audience.
 - **The README states plainly that signing proves origin, not safety.**
