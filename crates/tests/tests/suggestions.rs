@@ -18,6 +18,13 @@
 //! pane has it. Leaving the folder takes it away; **Not now** silences
 //! the plugin until Rick is started again, and **Don't suggest again**
 //! writes its id to `[plugins] no_suggest`.
+//!
+//! **Adding a connection.** Where the side panel lists the kinds of
+//! connection that can be added — the *Add…* row of an empty section and
+//! the menu of a section's header — the kinds of suggested plugins
+//! follow the ones that are there, each with the size of its plugin, and
+//! choosing one installs the plugin. The Cloud section shows, with
+//! *Add…*, while the registry offers a cloud plugin.
 
 use std::fs;
 use std::io::Write as _;
@@ -76,13 +83,22 @@ fn models_name() -> &'static str {
 /// folder with a manifest and a file in the library's place. It is
 /// unpacked and never loaded.
 fn models_package() -> Vec<u8> {
+    package(
+        "preview-3d",
+        "name = \"3D model preview\"\nversion = \"0.6.0\"\npoints = [\"previewer\"]\n\
+         previews = [\"stl\", \"obj\", \"3mf\"]\n",
+    )
+}
+
+/// A package for the plugin `id`: a zip archive of its folder with a
+/// manifest of `id` and `rest`, and a file in the library's place.
+fn package(id: &str, rest: &str) -> Vec<u8> {
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let options = zip::write::SimpleFileOptions::default();
-    let manifest = "id = \"preview-3d\"\nname = \"3D model preview\"\nversion = \"0.6.0\"\n\
-                    points = [\"previewer\"]\npreviews = [\"stl\", \"obj\", \"3mf\"]\n";
+    let manifest = format!("id = \"{id}\"\n{rest}");
     for (name, content) in [
-        ("preview-3d/plugin.toml", manifest),
-        ("preview-3d/libext_preview_3d.so", "library"),
+        (format!("{id}/plugin.toml"), manifest.as_str()),
+        (format!("{id}/lib{id}.so"), "library"),
     ] {
         zip.start_file(name, options)
             .unwrap_or_else(|e| panic!("{e}"));
@@ -1240,4 +1256,357 @@ fn wait(app: &mut app::App, done: impl Fn(&app::App) -> bool) {
         }
         assert!(Instant::now() < deadline, "did not get there");
     }
+}
+
+/// Where the test registry serves the S3 plugin's package.
+const S3_PACKAGE: &str = "plugins/rick/0.6.0/vfs-s3.rkp";
+
+/// The index entry of a plugin for [`RICK`], from its own manifest:
+/// listed with a package of `size` bytes, and served by nobody.
+fn listed(extension: &dyn Extension, size: u64) -> serde_json::Value {
+    registry::plugin(extension.manifest(), &[registry::listed(RICK, size)])
+}
+
+/// The plugins that add a kind of connection, as a release publishes
+/// them: SSH under Network, the three object stores under Cloud.
+fn connections() -> Vec<serde_json::Value> {
+    vec![
+        listed(&ext_ssh::SshExtension::new(), 6_348_800),
+        listed(&ext_vfs_s3::S3Extension::new(), 3_788_800),
+        listed(&ext_vfs_azure::AzureExtension::new(), 3_686_400),
+        listed(&ext_vfs_gcs::GcsExtension::new(), 3_891_200),
+    ]
+}
+
+/// The sections the side panel shows.
+fn sections(harness: &Harness<'_, RickUi>) -> Vec<model::Section> {
+    ui_egui::side_panel::sections_shown(harness.state().app())
+}
+
+/// The header of the side panel's section titled `title`.
+fn section_header(harness: &Harness<'_, RickUi>, title: &str) -> egui::Rect {
+    harness.get_by_label(title).rect()
+}
+
+/// The *Add…* row of the side panel's section titled `title`: the first
+/// row of that name under the section's header.
+fn add_row(harness: &Harness<'_, RickUi>, title: &str) -> egui::Rect {
+    let header = section_header(harness, title);
+    harness
+        .query_all_by_label("Add…")
+        .map(|node| node.rect())
+        .filter(|rect| rect.top() >= header.bottom() - 1.0)
+        .min_by(|a, b| a.top().total_cmp(&b.top()))
+        .unwrap_or_else(|| panic!("no Add… under {title}"))
+}
+
+/// Clicks at `at` with `button`, as the pointer does.
+fn click_at(harness: &mut Harness<'_, RickUi>, at: egui::Pos2, button: egui::PointerButton) {
+    harness.event(egui::Event::PointerMoved(at));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.step();
+    }
+    steps(harness);
+}
+
+/// Closes the menu that is open.
+fn escape(harness: &mut Harness<'_, RickUi>) {
+    harness.key_press(egui::Key::Escape);
+    steps(harness);
+}
+
+/// Whether the menu that is open has an entry called `label`.
+fn listed_in_menu(harness: &Harness<'_, RickUi>, label: &str) -> bool {
+    harness.query_by_label(label).is_some()
+}
+
+/// Acceptance: with no cloud plugin loaded and one in the registry, the
+/// Cloud section shows *Add…*, which lists it with its size; choosing it
+/// installs the plugin.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn the_cloud_section_shows_add_which_lists_the_registry_s_cloud_plugin_with_its_size() {
+    let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+    let s3 = ext_vfs_s3::S3Extension::new();
+    let bytes = package(
+        "vfs-s3",
+        "name = \"S3\"\nversion = \"0.6.0\"\npoints = [\"provider\"]\n",
+    );
+    server.put(S3_PACKAGE, bytes.clone());
+    let with_package = registry::plugin(
+        s3.manifest(),
+        &[registry::build(
+            RICK,
+            RICK,
+            &server.url(S3_PACKAGE),
+            bytes.len() as u64,
+            &sha256(&bytes),
+        )],
+    );
+    let mut plugins = connections();
+    plugins[1] = with_package;
+    plugins.push(git());
+    server.publish(&signer, &registry::index(&plugins));
+    let dir = projects();
+    let mut harness = window(Start {
+        fake: &fake,
+        settings: registry::rick_toml(&server, &signer, true),
+        folder: dir.path(),
+        rows: Vec::new(),
+        extensions: with_hex(),
+        preview: 0.0,
+    });
+    let asked = server.requests().len();
+
+    // No cloud plugin is loaded, and the registry offers three: the
+    // section is there, with *Add…*.
+    assert_eq!(
+        harness.state().app().model().cloud_providers,
+        [] as [types::ProviderId; 0]
+    );
+    assert_eq!(
+        sections(&harness),
+        [
+            model::Section::Machine,
+            model::Section::Network,
+            model::Section::Cloud
+        ]
+    );
+    let add = add_row(&harness, "Cloud");
+    assert!(add.top() > section_header(&harness, "Cloud").top());
+
+    // *Add…* lists the kinds, each with the size of its plugin's package,
+    // in the list's order, and none of another section.
+    let size = ui_egui::format::size(Some(bytes.len() as u64));
+    let s3_entry = format!("S3, {size}");
+    click_at(&mut harness, add.center(), egui::PointerButton::Primary);
+    for entry in [
+        s3_entry.as_str(),
+        "Azure Blob, 3.5 MiB",
+        "Google Cloud Storage, 3.7 MiB",
+    ] {
+        assert!(listed_in_menu(&harness, entry), "{entry}");
+    }
+    let top = |label: &str| harness.get_by_label(label).rect().top();
+    assert!(top(&s3_entry) < top("Azure Blob, 3.5 MiB"));
+    assert!(top("Azure Blob, 3.5 MiB") < top("Google Cloud Storage, 3.7 MiB"));
+    assert!(!listed_in_menu(&harness, "SSH, 6.1 MiB"));
+    escape(&mut harness);
+    assert!(!listed_in_menu(&harness, &s3_entry), "the menu closed");
+
+    // Network's *Add…* lists SSH.
+    let add = add_row(&harness, "Network");
+    click_at(&mut harness, add.center(), egui::PointerButton::Primary);
+    assert!(listed_in_menu(&harness, "SSH, 6.1 MiB"));
+    assert!(!listed_in_menu(&harness, &s3_entry));
+    escape(&mut harness);
+
+    // The menu of the section's header lists them too, after *Open in
+    // new tab*.
+    let header = section_header(&harness, "Cloud");
+    click_at(
+        &mut harness,
+        header.center(),
+        egui::PointerButton::Secondary,
+    );
+    assert!(listed_in_menu(&harness, "Open in new tab"));
+    assert!(listed_in_menu(&harness, &s3_entry));
+    escape(&mut harness);
+    assert_eq!(server.requests().len(), asked, "listing them asked nobody");
+
+    // Choosing one installs the plugin: the package the list names, from
+    // the test registry, into the per-user plugins folder.
+    let add = add_row(&harness, "Cloud");
+    click_at(&mut harness, add.center(), egui::PointerButton::Primary);
+    harness.get_by_label(&s3_entry).click();
+    steps(&mut harness);
+    let started = Instant::now();
+    while !harness
+        .state()
+        .app()
+        .plugins()
+        .iter()
+        .any(|row| row.id == "vfs-s3" && row.status == app::PluginStatus::Installed)
+    {
+        settle(&mut harness);
+        assert!(started.elapsed() < Duration::from_secs(20), "not installed");
+    }
+    let fetched: Vec<String> = server.requests()[asked..]
+        .iter()
+        .map(|request| request.path.clone())
+        .collect();
+    assert_eq!(fetched, [S3_PACKAGE], "the package, once");
+    assert!(
+        harness
+            .state()
+            .app()
+            .plugins_dir()
+            .join("vfs-s3")
+            .join("plugin.toml")
+            .is_file()
+    );
+    // The two the registry still offers keep the section and its *Add…*.
+    steps(&mut harness);
+    let add = add_row(&harness, "Cloud");
+    click_at(&mut harness, add.center(), egui::PointerButton::Primary);
+    assert!(listed_in_menu(&harness, "Azure Blob, 3.5 MiB"));
+    assert!(
+        !listed_in_menu(&harness, &s3_entry),
+        "S3 is on the disk now"
+    );
+}
+
+/// The Cloud section is absent while no cloud plugin is loaded and none
+/// is suggested: with no registry, with *Suggest plugins* off, and with
+/// every cloud plugin silenced. Network's *Add…* then says what would
+/// create connections, as it did.
+#[test]
+fn without_a_suggested_cloud_plugin_the_cloud_section_stays_away() {
+    let dir = projects();
+    let cloud_shown =
+        |harness: &Harness<'_, RickUi>| sections(harness).contains(&model::Section::Cloud);
+
+    // No registry at all.
+    let harness = window(Start {
+        fake: &fake(),
+        settings: String::new(),
+        folder: dir.path(),
+        rows: Vec::new(),
+        extensions: with_hex(),
+        preview: 0.0,
+    });
+    assert!(!cloud_shown(&harness));
+    drop(harness);
+
+    // A registry that offers them, and *Suggest plugins* off.
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(&signer, &registry::index(&connections()));
+    let mut harness = window(Start {
+        fake: &fake(),
+        settings: format!(
+            "[plugins]\nsuggest = false\n{}",
+            registry::rick_toml(&server, &signer, true)
+        ),
+        folder: dir.path(),
+        rows: Vec::new(),
+        extensions: with_hex(),
+        preview: 0.0,
+    });
+    assert!(!cloud_shown(&harness));
+    assert!(harness.query_by_label("Cloud").is_none(), "no header");
+    // Network's *Add…* lists nothing: it says what would create them.
+    let add = add_row(&harness, "Network");
+    click_at(&mut harness, add.center(), egui::PointerButton::Primary);
+    assert!(!listed_in_menu(&harness, "SSH, 6.1 MiB"));
+    assert!(
+        harness
+            .state()
+            .toasts()
+            .iter()
+            .any(|(_, text)| text.contains("network provider plugin")),
+        "{:?}",
+        harness.state().toasts()
+    );
+
+    // On: the section and the kinds are there; every cloud plugin
+    // silenced: gone again.
+    let send = |harness: &mut Harness<'_, RickUi>, command: app::Command| {
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(command, &mut Vec::new());
+        steps(harness);
+    };
+    send(
+        &mut harness,
+        app::Command::Settings(SettingsChange::SuggestPlugins(true)),
+    );
+    assert!(cloud_shown(&harness));
+    harness.get_by_label("Cloud");
+    for id in ["vfs-s3", "vfs-azure"] {
+        send(&mut harness, app::Command::SuggestNotNow(id.to_owned()));
+        assert!(cloud_shown(&harness), "one is left after {id}");
+    }
+    send(
+        &mut harness,
+        app::Command::SuggestNotNow("vfs-gcs".to_owned()),
+    );
+    assert!(!cloud_shown(&harness));
+}
+
+/// The suggested kinds follow the ones that are there: with the S3
+/// plugin loaded, *Add…* of Cloud lists its *Add S3 connection…* and
+/// then the kinds of the plugins that are not there. A loaded plugin is
+/// not suggested, whatever the registry offers, and a cloud plugin that
+/// is on the disk and disabled is listed with *Enable*.
+#[test]
+fn the_suggested_kinds_follow_the_ones_that_are_there() {
+    let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+    server.publish(&signer, &registry::index(&connections()));
+    let dir = projects();
+    let mut extensions = with_hex();
+    extensions.push(Arc::new(ext_vfs_s3::S3Extension::new()));
+    // Azure is on the disk and disabled; Google Cloud Storage is only
+    // in the registry.
+    let azure = ext_vfs_azure::AzureExtension::new();
+    let manifest = azure.manifest();
+    let mut row = disabled(manifest.id.0, manifest.name, manifest.description, &[]);
+    row.points = ext::Points::PROVIDER;
+    row.connections = manifest
+        .connections
+        .iter()
+        .map(|spec| app::ConnectionKind {
+            section: spec.section,
+            title: spec.title.to_owned(),
+        })
+        .collect();
+    let mut harness = window(Start {
+        fake: &fake,
+        settings: format!(
+            "[plugins]\ndisabled = [\"vfs-azure\"]\n{}",
+            registry::rick_toml(&server, &signer, true)
+        ),
+        folder: dir.path(),
+        rows: vec![row],
+        extensions,
+        preview: 0.0,
+    });
+
+    // One loaded kind and suggestions beside it: the row reads *Add…*
+    // and lists them, the loaded one first.
+    assert!(harness.query_by_label("Add connection…").is_none());
+    let add = add_row(&harness, "Cloud");
+    click_at(&mut harness, add.center(), egui::PointerButton::Primary);
+    let loaded = harness.get_by_label("Add S3 connection…").rect();
+    let enable = harness.get_by_label("Azure Blob, Enable").rect();
+    let install = harness.get_by_label("Google Cloud Storage, 3.7 MiB").rect();
+    assert!(loaded.top() < enable.top() && enable.top() < install.top());
+    assert!(
+        harness.query_by_label_contains("S3, ").is_none(),
+        "the loaded S3 is not suggested"
+    );
+    assert!(harness.query_by_label("Azure Blob, 3.5 MiB").is_none());
+
+    // The loaded kind opens its dialogue, as it did.
+    harness.get_by_label("Add S3 connection…").click();
+    steps(&mut harness);
+    assert!(harness.state().side_panel_state().connection.is_some());
+    escape(&mut harness);
+
+    // *Enable* on the disabled one takes it off `[plugins] disabled`.
+    let add = add_row(&harness, "Cloud");
+    click_at(&mut harness, add.center(), egui::PointerButton::Primary);
+    harness.get_by_label("Azure Blob, Enable").click();
+    steps(&mut harness);
+    assert_eq!(
+        harness.state().app().model().settings.plugins.disabled,
+        [] as [&str; 0]
+    );
 }
