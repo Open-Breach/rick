@@ -2,9 +2,11 @@
 //! by field after an exit and after a crash, a vanished folder opens at its
 //! parent with a note, layouts save, switch, start, rename and delete, a
 //! second window shares the jobs and the undo log, closing the last window
-//! exits with the session saved, and a big session starts about as fast as
-//! a small one. The headless tests drive `app` with `Command`s; the kittest
-//! ones go through the window.
+//! exits with the session saved, and a big session and a small one start
+//! with the windows and the tabs they hold. How long the big one takes is
+//! the benchmark `session-start`, an `#[ignore]`d timing test here. The
+//! headless tests drive `app` with `Command`s; the kittest ones go through
+//! the window.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -628,16 +630,13 @@ fn closing_the_last_window_exits_with_the_session_saved() {
     assert_eq!(d.location(d.app.model().focused), root);
 }
 
-#[test]
-fn a_big_session_starts_about_as_fast_as_a_small_one() {
-    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-    let root = dir.path().join("root");
-    tree(&root);
-
+/// Writes the two sessions the start tests open, both on the tree at
+/// `root`: three windows with their tabs under `big`, one window with one
+/// tab under `small`. Returns how many tabs the big one holds.
+fn a_big_and_a_small_session(root: &Path, big: &Path, small: &Path) -> usize {
     // Three windows, twenty tabs, written by one run.
-    let big = dir.path().join("big");
-    {
-        let mut d = Driver::new(&big, Some(&root));
+    let tabs = {
+        let mut d = Driver::new(big, Some(root));
         for window in 0..3 {
             if window > 0 {
                 d.step(Command::NewWindow);
@@ -648,43 +647,79 @@ fn a_big_session_starts_about_as_fast_as_a_small_one() {
             }
         }
         assert_eq!(d.app.model().windows().count(), 3);
-        let tabs: usize = d.app.model().panes().map(|(_, p)| p.tabs().len()).sum();
+        let tabs = tabs_of(&d.app);
         assert!(tabs >= 20, "{tabs} tabs");
         d.app.save_session().unwrap_or_else(|e| panic!("{e}"));
-    }
-    let small = dir.path().join("small");
-    {
-        let mut d = Driver::new(&small, Some(&root));
-        d.app.save_session().unwrap_or_else(|e| panic!("{e}"));
-    }
-
-    let time = |config: &Path| {
-        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
-        let ui = Arc::new(Scripted::default());
-        let started = Instant::now();
-        let app = App::new(Config {
-            platform: fake.clone(),
-            ui,
-            extensions: Vec::new(),
-            config_dir: Some(config.to_path_buf()),
-            start: None,
-        });
-        let took = started.elapsed();
-        (took, app)
+        tabs
     };
-    // Warm the caches once, then measure.
-    drop(time(&small));
-    let (small_took, small_app) = time(&small);
+    let mut d = Driver::new(small, Some(root));
+    d.app.save_session().unwrap_or_else(|e| panic!("{e}"));
+    tabs
+}
+
+/// The tabs of every pane of every window.
+fn tabs_of(app: &App) -> usize {
+    app.model().panes().map(|(_, p)| p.tabs().len()).sum()
+}
+
+/// An app started from the session under `config`, as a restart starts
+/// it, and the time `App::new` took.
+fn start(config: &Path) -> (Duration, App) {
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let ui = Arc::new(Scripted::default());
+    let started = Instant::now();
+    let app = App::new(Config {
+        platform: fake,
+        ui,
+        extensions: Vec::new(),
+        config_dir: Some(config.to_path_buf()),
+        start: None,
+    });
+    (started.elapsed(), app)
+}
+
+/// Both sessions come back with the windows and the tabs they were saved
+/// with. How long the big one takes is `the_start_of_a_big_session`'s to
+/// measure (issue 277): no time is held here.
+#[test]
+fn a_big_session_and_a_small_one_start_with_their_windows_and_tabs() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().join("root");
+    tree(&root);
+    let big = dir.path().join("big");
+    let small = dir.path().join("small");
+    let tabs = a_big_and_a_small_session(&root, &big, &small);
+
+    let (_, small_app) = start(&small);
     assert_eq!(small_app.model().windows().count(), 1);
+    assert_eq!(tabs_of(&small_app), 1);
+    let (_, big_app) = start(&big);
+    assert_eq!(big_app.model().windows().count(), 3);
+    assert_eq!(tabs_of(&big_app), tabs);
+}
+
+/// The benchmark `session-start`: `App::new` on the three-window,
+/// twenty-tab session. The start of the one-tab session is printed beside
+/// it and held to nothing: the bound this test once asserted, the big
+/// session within 300 ms of the small one, is given up for the
+/// `session-start` target, which is far inside it on every OS (issue 277).
+#[test]
+#[ignore = "timing; run with --ignored in release"]
+fn the_start_of_a_big_session() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().join("root");
+    tree(&root);
+    let big = dir.path().join("big");
+    let small = dir.path().join("small");
+    a_big_and_a_small_session(&root, &big, &small);
+
+    // Warm the caches once, then measure.
+    drop(start(&small));
+    let (small_took, _small_app) = start(&small);
     let mut bigs = Vec::new();
     for _ in 0..tests::bench::runs() {
-        let (big_took, big_app) = time(&big);
-        assert_eq!(big_app.model().windows().count(), 3);
+        let (big_took, _big_app) = start(&big);
         println!("session start: small {small_took:?}, big {big_took:?}");
-        assert!(
-            big_took <= small_took + Duration::from_millis(300),
-            "big {big_took:?} vs small {small_took:?}"
-        );
         bigs.push(big_took);
     }
     tests::bench::record("session-start", &bigs);

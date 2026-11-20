@@ -2,11 +2,15 @@ name: bench
 # Tier 3 of the pipeline (issue 35): the acceptance benchmarks, measured and
 # never blocking a pull request. Every benchmark runs RUNS times in release
 # with RICK_BENCH_RECORD set (a run over its target is recorded, not
-# failed); the job summary gets the runner's hardware line and the median
-# and the worst run per benchmark, and the raw logs, the hardware line and
-# the summary are the job's artifact. BENCHMARKS.md is written from the
-# summary of a manual run; the targets in crates/tests/src/bench.rs follow
-# from it.
+# failed); the job summary gets the runner's hardware line and, per
+# benchmark, the target, the median and the worst run, and the raw logs,
+# the hardware line and the summary are the job's artifact. The summary
+# marks every benchmark whose median is over its target and counts them in
+# a line above the table (issue 277); the run stays green, so the mark is
+# where a number past its target shows. One that gets slower and stays
+# under its target shows only by comparing runs. BENCHMARKS.md is written
+# from the summary of a manual run; the targets in
+# crates/tests/src/bench.rs follow from it.
 #
 # By hand from the Actions tab and on a `v*` tag: the three runners.
 # Nightly: Linux x64 on dev, the summary committed to the benchmark-history
@@ -93,14 +97,14 @@ jobs:
         # The fixtures on the runner's temp disk, as full.yml puts them.
         # Every ignored test of the one test binary is a timing but two,
         # which are skipped: the search walk cancelled by a new text and
-        # the throttled progress events, both full.yml's.
+        # the throttled progress events, both full.yml's. Every timing is
+        # an ignored test, and none is run by name (issue 277).
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
         run: |
           set -o pipefail
           for i in $(seq 1 "$RUNS"); do
             echo "::group::run $i"
             cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test main -- --ignored --nocapture --test-threads 1 --skip a_new_text_cancels_the_running_walk --skip progress_over_the_200k_fixture 2>&1 | tee "bench-$i.log"
-            cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test main -- --nocapture --test-threads 1 session::a_big_session_starts 2>&1 | tee -a "bench-$i.log"
             echo "::endgroup::"
           done
       - name: summary

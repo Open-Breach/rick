@@ -107,9 +107,10 @@ test reads them.
 - Tier 3, `bench.yml`: the acceptance benchmarks, measured with
   `RICK_BENCH_RECORD` and never blocking a pull request. By hand from the
   Actions tab and on `v*` tags on the three runners, with the logs as an
-  artifact and the median and worst table in the job summary; nightly on
-  `dev` on Linux x64, the summary committed to the `benchmark-history`
-  branch so a regression can be traced to a day range.
+  artifact and the table of target, median and worst run in the job
+  summary, every benchmark whose median is over its target marked there;
+  nightly on `dev` on Linux x64, the summary committed to the
+  `benchmark-history` branch so a regression can be traced to a day range.
 - `release.yml` is unchanged: a `v*` tag builds the archives and publishes
   the release.
 - The toolchain, cache, GStreamer, LibreOffice and pdfium setup is the
