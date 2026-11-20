@@ -571,7 +571,7 @@ fn offline_and_switched_off_say_so_in_one_line_with_check_now() {
         packaging: None,
     });
     choose(&mut harness, "Available");
-    harness.get_by_label("The plugin list could not be fetched. Rick may be offline.");
+    harness.get_by_label("The plugin list could not be fetched.");
     harness.get_by_label("Check now");
 }
 
@@ -583,7 +583,7 @@ fn offline_and_switched_off_say_so_in_one_line_with_check_now() {
 /// connection and says nothing, or is not there at all.
 #[test]
 fn while_the_registry_has_no_list_the_window_says_nothing_and_available_has_one_line() {
-    const LINE: &str = "The plugin list could not be fetched. Rick may be offline.";
+    const LINE: &str = "The plugin list could not be fetched.";
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     for kind in ["404", "no answer", "nobody there"] {
         let (server, signer) = (Server::start(), Signer::new(1));
@@ -625,7 +625,7 @@ fn while_the_registry_has_no_list_the_window_says_nothing_and_available_has_one_
         // Nothing in the window speaks of the plugin list, there is no
         // banner with its Retry over the file list, and the menu button
         // has no dot.
-        for words in ["plugin list", "Rick may be offline", "Retry", "Check now"] {
+        for words in ["plugin list", "could not be fetched", "Retry", "Check now"] {
             assert_eq!(
                 harness.query_all_by_label_contains(words).count(),
                 0,
