@@ -44,6 +44,8 @@ is changed. Do not change SPEC.md yourself.
   and Windows. Its summary is read before the tag is pushed: the line
   above each table names every benchmark over its target. Nothing
   enforces this step; the release workflow does not look for the run.
+  The tag then starts one more run, on the tagged commit: that run is
+  the record for the release.
 
 ## Decisions
 
