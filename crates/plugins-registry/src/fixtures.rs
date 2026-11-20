@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use base64::Engine as _;
@@ -122,13 +122,15 @@ type Requests = Arc<Mutex<Vec<Request>>>;
 
 /// An HTTP server on this machine: it answers a GET for a path it was
 /// given with those bytes, or with the redirect it was given for it, and
-/// any other with 404, and counts the lot.
+/// any other with 404, and counts the lot. Once it has [fallen
+/// silent](Server::fall_silent) it answers nothing at all.
 #[derive(Debug)]
 pub struct Server {
     address: SocketAddr,
     files: Files,
     requests: Requests,
     connections: Arc<AtomicUsize>,
+    silent: Arc<AtomicBool>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -153,16 +155,21 @@ impl Server {
         let files = Files::default();
         let requests = Requests::default();
         let connections = Arc::new(AtomicUsize::new(0));
+        let silent = Arc::new(AtomicBool::new(false));
         let handle = runtime::handle();
         let task = {
             let (files, requests) = (Arc::clone(&files), Arc::clone(&requests));
-            let connections = Arc::clone(&connections);
+            let (connections, silent) = (Arc::clone(&connections), Arc::clone(&silent));
             let _context = handle.enter();
             let listener = tokio::net::TcpListener::from_std(listener)
                 .unwrap_or_else(|error| panic!("the test registry's listener: {error}"));
             handle.spawn(async move {
                 while let Ok((stream, _)) = listener.accept().await {
                     connections.fetch_add(1, Ordering::SeqCst);
+                    if silent.load(Ordering::SeqCst) {
+                        // Taken and closed, without a word.
+                        continue;
+                    }
                     let (files, requests) = (Arc::clone(&files), Arc::clone(&requests));
                     runtime::handle().spawn(answer(stream, files, requests));
                 }
@@ -173,6 +180,7 @@ impl Server {
             files,
             requests,
             connections,
+            silent,
             task,
         }
     }
@@ -235,6 +243,14 @@ impl Server {
     #[must_use]
     pub fn connections(&self) -> usize {
         self.connections.load(Ordering::SeqCst)
+    }
+
+    /// Says nothing from now on: a connection is taken and closed again
+    /// without an answer, as by a machine that is there and serves
+    /// nothing. No request is recorded; [`Server::connections`] still
+    /// counts.
+    pub fn fall_silent(&self) {
+        self.silent.store(true, Ordering::SeqCst);
     }
 
     /// Stops listening: a request from now on is refused, as without a

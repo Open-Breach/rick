@@ -5274,7 +5274,7 @@ mod registry {
     use serde_json::json;
 
     use super::*;
-    use crate::{CACHE_DIR, RegistryCommand, RegistryProblem};
+    use crate::{CACHE_DIR, Offering, RegistryCommand, RegistryProblem};
 
     /// The Rick the tests ask as.
     const RICK: &str = "0.6.0";
@@ -5554,6 +5554,168 @@ mod registry {
         h.settle();
         assert_eq!(h.git().as_deref(), Some("0.6.0"));
         assert_eq!(h.app.plugin_registry().problem, None);
+    }
+
+    /// How a registry has no list to give.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum NoList {
+        /// The server answers the list's address with 404.
+        NotFound,
+        /// The server takes the connection and closes it without an
+        /// answer.
+        Silent,
+        /// Nobody is there: the connection is refused.
+        Gone,
+    }
+
+    /// A registry without a list, and the `[registry]` table that names
+    /// it with the switch on.
+    struct Listless {
+        kind: NoList,
+        settings: String,
+        /// The server, while there is one to count what it was asked.
+        server: Option<Server>,
+    }
+
+    impl Listless {
+        fn new(kind: NoList) -> Self {
+            let (server, signer) = (Server::start(), Signer::new(1));
+            let settings = table(&server, &signer, true);
+            let server = match kind {
+                NoList::NotFound => Some(server),
+                NoList::Silent => {
+                    server.fall_silent();
+                    Some(server)
+                }
+                NoList::Gone => {
+                    runtime::block_on(server.stop());
+                    None
+                }
+            };
+            Self {
+                kind,
+                settings,
+                server,
+            }
+        }
+
+        /// How often the registry was tried: the requests of a server
+        /// that answers, the connections of one that says nothing, and
+        /// `None` where nobody is there to count.
+        fn tried(&self) -> Option<usize> {
+            let server = self.server.as_ref()?;
+            Some(match self.kind {
+                NoList::NotFound => server.requests().len(),
+                NoList::Silent | NoList::Gone => server.connections(),
+            })
+        }
+    }
+
+    /// What `events` would have a window say: a notice, the toast of
+    /// the plugin updates and the one of a newer Rick.
+    fn said(events: &[Event]) -> Vec<String> {
+        events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    Event::Notify { .. } | Event::PluginUpdates { .. } | Event::RickUpdate { .. }
+                )
+            })
+            .map(|event| format!("{event:?}"))
+            .collect()
+    }
+
+    impl Harness {
+        /// The background check's look at the clock, as its timer sends
+        /// it; whether it went on to ask the registry.
+        fn look(&mut self) -> bool {
+            self.send(Command::Registry(RegistryCommand::Daily));
+            let asks = self.app.is_busy();
+            self.settle();
+            asks
+        }
+    }
+
+    /// The key is compiled into Rick before the registry has a list to
+    /// serve: what a Rick does until it has one, on Rick's own schedule
+    /// of a minute and a day.
+    #[test]
+    fn while_the_registry_has_no_list_rick_says_nothing_and_the_background_check_waits_a_day() {
+        for kind in [NoList::NotFound, NoList::Silent, NoList::Gone] {
+            let (registry, fake) = (Listless::new(kind), fake());
+            let mut h = start(&fake, &registry.settings);
+            assert!(h.app.plugin_registry().set_up);
+
+            // The first frame reads the cache, which is empty, and asks
+            // nobody.
+            h.registry(RegistryCommand::Start);
+            assert_eq!(registry.tried().unwrap_or(0), 0, "{kind:?}");
+            assert_eq!(h.app.plugin_registry().problem, None, "{kind:?}");
+
+            // A minute later the background check asks, once: the list
+            // does not arrive.
+            assert!(h.look(), "{kind:?}: the background check asks");
+            assert_eq!(registry.tried().unwrap_or(1), 1, "{kind:?}");
+            let view = h.app.plugin_registry();
+            assert_eq!(view.problem, Some(RegistryProblem::Offline), "{kind:?}");
+            assert_eq!((&view.index, view.fetched), (&None, None), "{kind:?}");
+            assert!(!view.checking, "{kind:?}");
+            assert_eq!(h.app.offering(), Offering::Nothing, "{kind:?}");
+
+            // The timer looks at the clock every hour. Within the day
+            // after the try that failed, a look asks nobody.
+            for hour in 1..=3 {
+                assert!(
+                    !h.look(),
+                    "{kind:?}: asked again {hour} h after the failure"
+                );
+            }
+            assert_eq!(registry.tried().unwrap_or(1), 1, "{kind:?}");
+
+            // The opening of the Available view and Check now are
+            // occasions of their own: each asks once, and neither brings
+            // the background check forward.
+            h.registry(RegistryCommand::Opened);
+            assert_eq!(registry.tried().unwrap_or(2), 2, "{kind:?}");
+            h.registry(RegistryCommand::CheckNow);
+            assert_eq!(registry.tried().unwrap_or(3), 3, "{kind:?}");
+            assert!(!h.look(), "{kind:?}");
+            assert_eq!(registry.tried().unwrap_or(3), 3, "{kind:?}");
+            let view = h.app.plugin_registry();
+            assert_eq!(view.problem, Some(RegistryProblem::Offline), "{kind:?}");
+            assert!(!view.checking, "{kind:?}");
+
+            // Nothing of all that was said, and nothing was cached.
+            assert_eq!(said(&h.take_events()), [] as [String; 0], "{kind:?}");
+            let cache = plugins_registry::Cache::new(&fake.config_dir().join(CACHE_DIR));
+            assert_eq!(cache.fetched(), None, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_list_the_user_fetched_after_a_check_that_failed_starts_the_day_over() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        let mut h = start(&fake, &table(&server, &signer, true));
+        h.registry(RegistryCommand::Start);
+        // The background check finds no list.
+        assert!(h.look());
+        assert_eq!(server.requests().len(), 1);
+        assert_eq!(
+            h.app.plugin_registry().problem,
+            Some(RegistryProblem::Offline)
+        );
+
+        // The list is published, and the user asks for it: it arrives,
+        // and nothing of the failure is left.
+        server.publish(&signer, &index(1, "0.6.0"));
+        h.registry(RegistryCommand::CheckNow);
+        assert_eq!(server.requests().len(), 3);
+        assert_eq!(h.git().as_deref(), Some("0.6.0"));
+        assert_eq!(h.app.plugin_registry().problem, None);
+        // The list is young now: the background check leaves it alone.
+        assert!(!h.look());
+        assert_eq!(server.requests().len(), 3);
     }
 
     #[test]

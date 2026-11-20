@@ -111,7 +111,9 @@ plugin list and asks nobody; `Daily`, which the application's own timer
 sends a minute after the start and from then on whenever the list becomes
 a day old, fetches it when it is that old, and `Opened` fetches when the
 *Available* view is opened, both only while `[registry] check` is on; and
-`CheckNow` fetches whatever the switch says. Each is a job off the loop's
+`CheckNow` fetches whatever the switch says. A `Daily` whose fetch failed
+is followed by the next one a day after it, whatever the timer's hourly
+looks find: a registry that does not answer is asked once a day. Each is a job off the loop's
 thread through the `plugins-registry` crate, and `App::plugin_registry` is
 what came of it: whether a key is there at all, the last index that
 verified, when it was fetched, and why the last attempt gave none.
