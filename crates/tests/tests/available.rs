@@ -461,17 +461,17 @@ fn an_index_with_a_bad_signature_is_not_used_and_the_view_says_so() {
 }
 
 #[test]
-fn a_build_without_a_key_says_the_list_is_not_set_up_and_asks_nobody() {
+fn a_rick_without_a_key_says_the_list_is_not_set_up_and_asks_nobody() {
     let (server, signer) = (Server::start(), Signer::new(1));
     server.publish(&signer, &registry::index(&[git()]));
-    // This build's own key: the committed file is empty, so the registry
-    // is off wherever the address points. Should a key be compiled in
-    // one day, a key that is none stands for the empty file.
-    let built_with_a_key = plugins_registry::Source::new(None, None).key.is_some();
-    let mut settings = format!("[registry]\nurl = \"{}\"\n", server.index_url());
-    if built_with_a_key {
-        settings.push_str("public_key = \"not a key\"\n");
-    }
+    // The build has the registry's key compiled in. A `public_key` that
+    // is no key leaves this Rick without one: the build's own never
+    // stands in for a key that was asked for, and the registry is off
+    // wherever the address points.
+    let settings = format!(
+        "[registry]\nurl = \"{}\"\npublic_key = \"not a key\"\n",
+        server.index_url()
+    );
     let fake = fake();
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let (mut harness, _) = window(&Start {
@@ -573,6 +573,88 @@ fn offline_and_switched_off_say_so_in_one_line_with_check_now() {
     choose(&mut harness, "Available");
     harness.get_by_label("The plugin list could not be fetched. Rick may be offline.");
     harness.get_by_label("Check now");
+}
+
+/// The registry's key is compiled into Rick before the registry has a
+/// list to serve. Until it has one, a Rick whose background check found
+/// none shows nothing of it — no toast, no bar or banner, no dot on the
+/// menu — and the *Available* view has the one line of a list that did
+/// not arrive, with **Check now**. The registry answers 404, takes the
+/// connection and says nothing, or is not there at all.
+#[test]
+fn while_the_registry_has_no_list_the_window_says_nothing_and_available_has_one_line() {
+    const LINE: &str = "The plugin list could not be fetched. Rick may be offline.";
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    for kind in ["404", "no answer", "nobody there"] {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        let settings = registry::rick_toml(&server, &signer, true);
+        // How often the registry was tried, where something is there to
+        // count: the requests of a server that answers, the connections
+        // of one that does not.
+        let server = match kind {
+            "404" => Some(server),
+            "no answer" => {
+                server.fall_silent();
+                Some(server)
+            }
+            _ => {
+                runtime::block_on(server.stop());
+                None
+            }
+        };
+        let tried = || {
+            server.as_ref().map(|server| match kind {
+                "404" => server.requests().len(),
+                _ => server.connections(),
+            })
+        };
+
+        // The window a minute after the start: the background check has
+        // asked, once, and got no list.
+        let fake = self::fake();
+        let (mut harness, _) = shell(&Start {
+            fake: &fake,
+            settings,
+            rick: RICK,
+            folder: dir.path(),
+            rows: Vec::new(),
+            packaging: None,
+        });
+        assert_eq!(tried().unwrap_or(1), 1, "{kind}");
+        assert_eq!(harness.state().toasts(), [], "{kind}: no toast");
+        // Nothing in the window speaks of the plugin list, there is no
+        // banner with its Retry over the file list, and the menu button
+        // has no dot.
+        for words in ["plugin list", "Rick may be offline", "Retry", "Check now"] {
+            assert_eq!(
+                harness.query_all_by_label_contains(words).count(),
+                0,
+                "{kind}: {words:?} in the window"
+            );
+        }
+        assert_eq!(count(&harness, "Update available"), 0, "{kind}: no dot");
+        assert_eq!(harness.state().app().rick_update(), None, "{kind}");
+
+        // The Extensions dialogue: nothing under Installed needs
+        // attention, and Available, which asks again as it is opened,
+        // has the one line and Check now. The control counts nothing.
+        let pane = harness.state().app().model().focused;
+        harness.state_mut().queue(Intent::Extensions, pane);
+        steps(&mut harness);
+        harness.get_by_label("0 installed  ·  0 enabled  ·  0 need attention");
+        choose(&mut harness, "Available");
+        assert_eq!(tried().unwrap_or(2), 2, "{kind}: opening the view asks");
+        assert_eq!(count(&harness, LINE), 1, "{kind}");
+        assert_eq!(count(&harness, "Check now"), 1, "{kind}");
+        harness.get_by_role_and_label(Role::RadioButton, "Available");
+        assert!(!listed(&harness, "Git"), "{kind}");
+
+        // Check now asks once more and the line stays; still no toast.
+        click(&mut harness, "Check now");
+        assert_eq!(tried().unwrap_or(3), 3, "{kind}");
+        assert_eq!(count(&harness, LINE), 1, "{kind}");
+        assert_eq!(harness.state().toasts(), [], "{kind}: no toast");
+    }
 }
 
 #[test]

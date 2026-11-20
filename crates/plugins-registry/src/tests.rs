@@ -329,8 +329,8 @@ fn the_source_is_this_build_s_unless_rick_toml_says_otherwise() {
     let other = Signer::new(2).public_key();
     let compiled = format!("untrusted comment: minisign public key\n{key}\n");
 
-    // The committed file is empty or a key, and this build reads the
-    // registry exactly when it is a key.
+    // The committed file is the registry's key, and this build reads the
+    // registry with it.
     let committed = include_str!("../keys/registry.pub");
     let own = Source::new(None, None);
     assert_eq!(own.url, INDEX_URL);
@@ -339,7 +339,7 @@ fn the_source_is_this_build_s_unless_rick_toml_says_otherwise() {
         own.key,
         Key::parse(committed).unwrap_or_else(|e| panic!("{e}"))
     );
-    assert_eq!(own.key.is_some(), !committed.trim().is_empty());
+    assert!(own.key.is_some(), "this build has the registry on");
     assert_eq!(own.host(), "get.openbreach.dev");
     assert_eq!(
         own.signature_url(),
@@ -381,6 +381,70 @@ fn the_source_is_this_build_s_unless_rick_toml_says_otherwise() {
     let broken = Source::with_compiled(&compiled, None, Some("not a key"));
     assert_eq!(broken.key, None);
     assert!(broken.custom);
+}
+
+/// Trebuchet's `keys/registry.pub` as it is on `main` of
+/// Open-Breach/trebuchet, read at its commit `38164ff`: the SHA-256 of the
+/// file, which `sha256sum keys/registry.pub` prints there.
+const TREBUCHET_KEY_SHA256: &str =
+    "e5d6bf252f53b832f3c874081b2d3e354b565104c6b2540db2b476a735da27dc";
+/// The id minisign gave that key: the last word of the file's first line,
+/// and what a signature names its key by.
+const TREBUCHET_KEY_ID: &str = "197B77080066F36E";
+
+/// The key compiled into Rick is a minisign public key, and it is
+/// Trebuchet's file byte for byte.
+///
+/// Nothing is asked for the comparison: the test holds what Trebuchet's
+/// file was when it was copied, its SHA-256 and the key's id, and the
+/// committed file must hash to the one and carry the other. A file that
+/// was edited here, or copied from elsewhere, fails. What the test cannot
+/// see is a key Trebuchet replaces later: that is a new file there, a new
+/// hash here and a release of Rick (Trebuchet's spec, 7.5).
+#[test]
+fn the_key_compiled_in_is_a_minisign_public_key_and_trebuchet_s_file() {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    let committed = include_str!("../keys/registry.pub");
+
+    // A `.pub` file as `minisign -G` writes it: the comment that names
+    // the key's id, then one line of base64.
+    let mut lines = committed.lines();
+    assert_eq!(
+        lines.next(),
+        Some(format!("untrusted comment: minisign public key {TREBUCHET_KEY_ID}").as_str())
+    );
+    let line = lines.next().unwrap_or_else(|| panic!("no key line"));
+    assert_eq!(lines.next(), None, "two lines and no more");
+    // The line is the algorithm, Ed25519, the eight bytes of the key's
+    // id and the 32 bytes of the key; the id is the comment's.
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(line)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(raw.len(), 2 + 8 + 32);
+    assert_eq!(&raw[..2], b"Ed");
+    let mut id = [0u8; 8];
+    id.copy_from_slice(&raw[2..10]);
+    assert_eq!(format!("{:016X}", u64::from_le_bytes(id)), TREBUCHET_KEY_ID);
+
+    // The client reads it as its key, and it is the key of this build.
+    let key = Key::parse(committed).unwrap_or_else(|e| panic!("{e}"));
+    assert!(key.is_some());
+    assert_eq!(Source::new(None, None).key, key);
+    // A signature of another key is not this key's.
+    let (other, bytes) = (Signer::new(1), b"an index");
+    assert!(matches!(
+        key.unwrap_or_else(|| panic!("no key"))
+            .verify(bytes, &other.sign(bytes)),
+        Err(Error::Unverified)
+    ));
+
+    // Trebuchet's file, byte for byte.
+    assert_eq!(
+        hex::encode(sha2::Sha256::digest(committed.as_bytes())),
+        TREBUCHET_KEY_SHA256
+    );
 }
 
 #[test]

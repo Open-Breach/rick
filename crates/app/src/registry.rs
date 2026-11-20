@@ -328,6 +328,10 @@ pub(crate) struct RegistryRun {
     source: Source,
     /// When the background check runs.
     schedule: Schedule,
+    /// When the background check last asked for the list and did not get
+    /// it. It does not ask again by itself until a day has passed since,
+    /// however often its timer looks; `None` once a list has arrived.
+    failed: Option<SystemTime>,
     /// Stops the timer of the background check that is waiting, if one
     /// is: there is never more than one.
     timer: CancelToken,
@@ -371,6 +375,7 @@ impl RegistryRun {
                 after_start: REGISTRY_AFTER_START,
                 every: CHECK_EVERY,
             },
+            failed: None,
             timer: CancelToken::new(),
             said: false,
             release_said: None,
@@ -452,14 +457,15 @@ impl App {
         let allowed = self.model.settings.registry.check;
         // The background check asks only for a list that is a day old,
         // and that is known here without a look at the disk.
-        let old = due_after(
-            self.plugin_registry.view.fetched,
-            SystemTime::now(),
-            schedule.every,
-        );
+        let now = SystemTime::now();
+        let old = due_after(self.plugin_registry.view.fetched, now, schedule.every);
+        // And when its last try failed, only a day after that try: the
+        // timer looks every hour, and a list that did not arrive is as
+        // old at the next look.
+        let waited = due_after(self.plugin_registry.failed, now, schedule.every);
         let fetch = match command {
             RegistryCommand::Start => false,
-            RegistryCommand::Daily => allowed && old,
+            RegistryCommand::Daily => allowed && old && waited,
             RegistryCommand::Opened => allowed,
             RegistryCommand::CheckNow => true,
         };
@@ -581,10 +587,18 @@ impl App {
         self.plugin_registry.job = None;
         self.plugin_registry.view.checking = false;
         match fetched {
-            Some(Ok(cached)) => self.registry_take(cached),
+            Some(Ok(cached)) => {
+                self.plugin_registry.failed = None;
+                self.registry_take(cached);
+            }
             Some(Err(error)) => {
                 tracing::warn!(%error, "the plugin list was not fetched");
                 self.plugin_registry.view.problem = Some(RegistryProblem::from(&error));
+                // The background check's own try: the next one is a day
+                // from now. One the user started leaves its day alone.
+                if command == RegistryCommand::Daily {
+                    self.plugin_registry.failed = Some(SystemTime::now());
+                }
             }
             None => {}
         }
@@ -950,19 +964,26 @@ impl App {
         });
     }
 
-    /// How long until the background check is due again: until the list
-    /// that arrived last is a day old. A whole day when it is that old
-    /// already or there is none, which is after a check that failed and
-    /// while the switch is off: the background check does not try again
-    /// sooner by itself.
+    /// How long until the background check is due again: until a day
+    /// has passed since its try that failed, when its last one did, and
+    /// else until the list that arrived last is a day old. A whole day
+    /// when the list is that old already or there is none, which is while
+    /// the switch is off. The timer sleeps an hour of it at most
+    /// ([`LOOK_EVERY`]); the look that follows asks only when the time
+    /// is up.
     fn registry_next(&self) -> Duration {
-        let every = self.plugin_registry.schedule.every;
-        self.plugin_registry
-            .view
-            .fetched
-            .and_then(|fetched| SystemTime::now().duration_since(fetched).ok())
-            .and_then(|age| every.checked_sub(age))
-            .filter(|left| !left.is_zero())
+        let run = &self.plugin_registry;
+        let every = run.schedule.every;
+        let now = SystemTime::now();
+        // What is left of the day that began at `since`.
+        let left = |since: Option<SystemTime>| {
+            since
+                .and_then(|since| now.duration_since(since).ok())
+                .and_then(|age| every.checked_sub(age))
+                .filter(|left| !left.is_zero())
+        };
+        left(run.failed)
+            .or_else(|| left(run.view.fetched))
             .unwrap_or(every)
     }
 

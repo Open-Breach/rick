@@ -7,9 +7,9 @@ use crate::Key;
 /// `.minisig` appended.
 pub const INDEX_URL: &str = "https://get.openbreach.dev/registry/index.json";
 
-/// The registry's public key, Trebuchet's `keys/registry.pub`, as
-/// committed in this crate's `keys/` folder. Empty until the key pair
-/// exists, and the registry is off for as long.
+/// The registry's public key: Trebuchet's `keys/registry.pub`, committed
+/// in this crate's `keys/` folder byte for byte, which a test holds it
+/// to. A build whose file is empty has no key, and its registry is off.
 const COMPILED_KEY: &str = include_str!("../keys/registry.pub");
 
 /// The index to read and the key it must be signed with.

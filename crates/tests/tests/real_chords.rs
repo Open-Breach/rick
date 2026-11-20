@@ -160,10 +160,14 @@ fn the_real_chords_copy_cut_and_paste_in_a_real_window() {
         std::fs::create_dir_all(folder).unwrap_or_else(|e| panic!("{e}"));
     }
     std::fs::write(deep.join("one.txt"), "one").unwrap_or_else(|e| panic!("{e}"));
-    // No set-up dialogue at the first start: it would take the keys.
+    // No set-up dialogue at the first start: it would take the keys. And
+    // no look for plugins online: this is the binary, with the registry's
+    // key compiled in, and a run that takes more than a minute would ask
+    // the real registry.
     std::fs::write(
         config.join("rick.toml"),
-        "[integration]\nask = false\ncheck_at_startup = false\nshell_integration = false\n",
+        "[integration]\nask = false\ncheck_at_startup = false\nshell_integration = false\n\
+         [registry]\ncheck = false\n",
     )
     .unwrap_or_else(|e| panic!("{e}"));
 
