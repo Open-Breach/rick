@@ -142,9 +142,12 @@ jobs:
   # package loads, pdfium opens a PDF, two videos play, and where the build
   # is also the archive its plugin packages install into the per-user
   # folder and load, for the package and once more for the unpacked
-  # archive. The call names the release tag, so the workflow attests its
-  # files and attaches them to the release of the tag, a draft it makes
-  # where there is none yet; the release job below finishes that release.
+  # archive. What that script needs from the build, two test programs and
+  # two videos, travels in the workflow's folder for the smoke test, which
+  # no release sees. The call names the release tag, so the workflow
+  # attests its release files and attaches them to the release of the tag,
+  # a draft it makes where there is none yet; the release job below
+  # finishes that release.
   # The dependencies are per distribution. To build: GStreamer's
   # development files, beyond a compiler, and its tools and plug-ins to
   # write the smoke test's videos, an H.264 encoder among them. To run, all
@@ -852,9 +855,6 @@ jobs:
           set -euo pipefail
           cd dist
           ls -l
-          # The test programs the Linux builds sent to their smoke tests
-          # came along in the same folders; they are not release files.
-          rm -f ./rick-*-smoke-*.tar
           for arch in x64 arm64; do
             test -f "rick-${TAG#v}-linux-$arch.tar.gz" || { echo "no Linux archive for $arch"; exit 1; }
             test -f "plugins-linux-$arch.json" || { echo "no plugin list for linux-$arch"; exit 1; }
@@ -912,12 +912,6 @@ jobs:
           fi
           gh release upload "$TAG" --clobber \
             dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/*.rkp dist/plugins-*.json dist/SHA256SUMS.txt
-          # Trebuchet attaches every file of its jobs, the test programs of
-          # the smoke tests among them. They are not release files.
-          gh release view "$TAG" --json assets --jq '.assets[].name' | { grep -e '-smoke-' || true; } \
-            | while IFS= read -r asset; do
-              gh release delete-asset "$TAG" "$asset" --yes
-            done
           gh release edit "$TAG" --title "Rick $TAG" --notes-file body.md --target "$GITHUB_SHA" \
             --prerelease="$PRERELEASE" --draft="$DRAFT"
           gh release view "$TAG" --json name,isDraft,isPrerelease,assets \

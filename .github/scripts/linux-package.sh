@@ -16,8 +16,11 @@
 #   TREBUCHET_VERSION   the release's version
 #   TREBUCHET_TARBALL   true in the one job per architecture whose build
 #                       is also the release archive
-#   TREBUCHET_DIST      the folder the workflow uploads whole: its files go
-#                       to the smoke test and to the release job
+#   TREBUCHET_DIST      the workflow's folder for the release: its files go
+#                       to the smoke test and to the release job, and are
+#                       attested and attached to the release
+#   TREBUCHET_SMOKE_FILES   the workflow's folder for the smoke test only:
+#                       its files go to this job's smoke test and no further
 #
 # What it leaves, under target/release/:
 #
@@ -41,8 +44,8 @@
 #               to test the package where it is installed: the test
 #               programs pdfium_check and preview_check, which only run
 #               against the libraries they were built with, and two short
-#               videos. They leave as one tar file in TREBUCHET_DIST, which
-#               the release job takes off the release again.
+#               videos. They leave as one tar file in
+#               TREBUCHET_SMOKE_FILES, which no release job sees.
 #
 # Before it packages, it checks the bundle the way the release's smoke test
 # checks an archive: the default set loads and no separate plugin is left.
@@ -160,15 +163,17 @@ gst-launch-1.0 -q $pattern ! $h264 ! mp4mux ! filesink location="$smoke/sample-h
 ls -l "$smoke"
 
 if [ -n "${TREBUCHET_DIST:-}" ]; then
-  mkdir -p "$TREBUCHET_DIST"
-  # One per job, named after it: the release job gathers the files of
-  # every job into one folder.
-  tar --create --file "$TREBUCHET_DIST/rick-${TREBUCHET_VERSION:?}-smoke-${TREBUCHET_TARGET:?}-$platform.tar" \
+  mkdir -p "$TREBUCHET_DIST" "${TREBUCHET_SMOKE_FILES:?}"
+  # What only the smoke test needs, in the workflow's folder for it: it
+  # reaches this job's smoke test and neither a release nor an
+  # attestation. One tar file, so that the programs keep their mode on the
+  # way, named after its job, so that the test knows its own.
+  tar --create --file "$TREBUCHET_SMOKE_FILES/rick-${TREBUCHET_VERSION:?}-smoke-${TREBUCHET_TARGET:?}-$platform.tar" \
     --directory "$smoke" pdfium_check preview_check sample.avi sample-h264.mp4
   # The plugin packages and their manifest belong to the archive of this
   # build, so they leave with it, once per architecture.
   if [ "${TREBUCHET_TARBALL:-}" = true ]; then
     cp "$packages"/*.rkp "$manifest" "$TREBUCHET_DIST/"
   fi
-  ls -l "$TREBUCHET_DIST"
+  ls -l "$TREBUCHET_DIST" "$TREBUCHET_SMOKE_FILES"
 fi

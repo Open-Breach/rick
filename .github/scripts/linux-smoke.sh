@@ -21,10 +21,12 @@
 #
 #   TREBUCHET_SMOKE        package or tarball
 #   TREBUCHET_SMOKE_DIR    the unpacked archive, for tarball
-#   TREBUCHET_DIST         the files of the build job: the package, the
-#                          archive and the plugin packages where the job
-#                          made them, and the tar file of test programs
-#                          that linux-package.sh put there
+#   TREBUCHET_DIST         the build job's files for the release: the
+#                          package, and the archive and the plugin
+#                          packages where the job made them
+#   TREBUCHET_SMOKE_FILES  the build job's files for this test only: the
+#                          tar file of test programs and videos that
+#                          linux-package.sh put there. No release gets it.
 #   TREBUCHET_FORMAT       deb or rpm
 #   TREBUCHET_TARGET, TREBUCHET_ARCH, TREBUCHET_VERSION
 #
@@ -47,6 +49,7 @@ fail() {
 
 what="${TREBUCHET_SMOKE:?}"
 dist="${TREBUCHET_DIST:?}"
+files="${TREBUCHET_SMOKE_FILES:?}"
 format="${TREBUCHET_FORMAT:?}"
 target="${TREBUCHET_TARGET:?}"
 version="${TREBUCHET_VERSION:?}"
@@ -171,10 +174,12 @@ fi
 # The two test programs of this build, and the video. They sit beside the
 # binary while they run: that is where they look for pdfium and for
 # plugins/, and where the libraries they share with Rick are.
-tar="$(find "$dist" -maxdepth 1 -name "rick-*-smoke-$target-$platform.tar")"
+tar="$(find "$files" -maxdepth 1 -name "rick-*-smoke-$target-$platform.tar")"
 if [ -z "$tar" ] || [ "$(wc -l <<< "$tar")" != 1 ]; then
-  fail "not exactly one tar file of test programs for $target $platform in $dist"
+  fail "not exactly one tar file of test programs for $target $platform in $files"
 fi
+# They are not release files, and none is among the files for the release.
+[ -z "$(find "$dist" -name '*-smoke-*')" ] || fail "test files among the files for the release in $dist"
 programs="$(mktemp -d)"
 tar --extract --file "$tar" --directory "$programs"
 cleanup() {
