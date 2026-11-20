@@ -4537,7 +4537,7 @@ fn screenshots_of_a_registry_without_a_list() {
     }
     settle(&mut harness);
     assert_eq!(server.requests().len(), 2, "opening the view asks");
-    harness.get_by_label("The plugin list could not be fetched. Rick may be offline.");
+    harness.get_by_label("The plugin list could not be fetched.");
     for (theme, mode) in modes {
         set(&mut harness, theme);
         shoot(
