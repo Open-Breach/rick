@@ -3983,7 +3983,9 @@ fn suggestions_window(
 /// where the hex view shows a 3D model, and **Install** in the action
 /// row of the *No previewer* card where the hex view is not loaded. In
 /// the file list: the bar between the toolbar and the list of a pane
-/// that entered a Git work tree, beside a pane that did not.
+/// that entered a Git work tree, beside a pane that did not. In the side
+/// panel: *Add…* of Cloud, shown because the registry offers cloud
+/// plugins, and of Network, each listing the kinds with their sizes.
 #[test]
 #[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
 #[allow(clippy::too_many_lines)]
@@ -4137,6 +4139,45 @@ fn screenshots_of_the_plugin_suggestions() {
     for (theme, mode) in modes {
         set(&mut harness, theme);
         shoot(&mut harness, &format!("suggest-list-bar-two-panes-{mode}"));
+    }
+    std::mem::drop(harness);
+
+    // The side panel: no cloud plugin is loaded and the registry offers
+    // three, so the Cloud section is there with *Add…*, which lists them
+    // with their sizes; Network's lists SSH.
+    let (mut harness, _server) = suggestions_window(&projects, previewers());
+    for (section, scene) in [("Cloud", "cloud"), ("Network", "network")] {
+        for (theme, mode) in modes {
+            set(&mut harness, theme);
+            let header = harness.get_by_label(section).rect();
+            let add = harness
+                .query_all_by_label("Add…")
+                .map(|node| node.rect())
+                .filter(|rect| rect.top() >= header.bottom() - 1.0)
+                .min_by(|a, b| a.top().total_cmp(&b.top()))
+                .unwrap_or_else(|| panic!("no Add… under {section}"));
+            harness.event(egui::Event::PointerMoved(add.center()));
+            harness.step();
+            for pressed in [true, false] {
+                harness.event(egui::Event::PointerButton {
+                    pos: add.center(),
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                harness.step();
+            }
+            // The pointer rests on the first entry, as it does after the
+            // click that opened the list.
+            for _ in 0..6 {
+                harness.step();
+            }
+            shoot(&mut harness, &format!("suggest-add-{scene}-{mode}"));
+            harness.key_press(egui::Key::Escape);
+            for _ in 0..4 {
+                harness.step();
+            }
+        }
     }
 }
 
