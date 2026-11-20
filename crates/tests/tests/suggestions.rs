@@ -11,6 +11,13 @@
 //! reads *plugin available* and has **Install …** after *Open with…*. A
 //! plugin that is on the disk and disabled gets **Enable** in both
 //! places, with no registry at all. *Suggest plugins* off shows neither.
+//!
+//! **The file list.** A pane that enters a folder of the local file
+//! system whose loaded listing holds a plugin's marker — `.git`, hidden
+//! or not — has the bar between its toolbar and its list, and no other
+//! pane has it. Leaving the folder takes it away; **Not now** silences
+//! the plugin until Rick is started again, and **Don't suggest again**
+//! writes its id to `[plugins] no_suggest`.
 
 use std::fs;
 use std::io::Write as _;
@@ -121,7 +128,8 @@ struct Start<'a> {
     rows: Vec<app::Plugin>,
     /// The extensions loaded.
     extensions: Vec<Arc<dyn Extension>>,
-    /// The width of the pane the Preview tab is in.
+    /// The width of the pane the Preview tab is in; none, and the tab
+    /// stays closed.
     preview: f32,
 }
 
@@ -154,13 +162,14 @@ fn window(start: Start<'_>) -> Harness<'static, RickUi> {
     settle(&mut harness);
     registry::background_check(harness.state_mut().app_mut());
     settle(&mut harness);
-    if !harness.state().inspector_open() {
+    let wanted = start.preview > 0.0;
+    if harness.state().inspector_open() != wanted {
         let pane = harness.state().app().model().focused;
         harness.state_mut().queue(Intent::ToggleInspector, pane);
         harness.step();
     }
     steps(&mut harness);
-    assert!(harness.state().inspector_open());
+    assert_eq!(harness.state().inspector_open(), wanted);
     harness
 }
 
@@ -762,4 +771,473 @@ fn ten_thousand_selections_with_a_cached_list_make_no_request() {
     settle(&mut harness);
     assert!(suggested > 0, "the bar was shown on the way");
     assert_eq!(server.requests().len(), asked, "nobody was asked");
+}
+
+/// The index entry of Git for [`RICK`], from its own manifest: listed,
+/// and served by nobody.
+fn git() -> serde_json::Value {
+    registry::plugin(
+        ext_git::GitExtension::new().manifest(),
+        &[registry::listed(RICK, 4_812_800)],
+    )
+}
+
+/// What the bar says of Git: its manifest's name and description.
+fn git_text() -> String {
+    let git = ext_git::GitExtension::new();
+    let manifest = git.manifest();
+    format!("{} plugin — {}", manifest.name, manifest.description)
+}
+
+/// A folder with two work trees and a plain folder in it.
+fn projects() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    for (name, entries) in [
+        ("rick", &[".git", "src", "target"][..]),
+        ("trebuchet", &[".git", "docs"][..]),
+        ("notes", &[".github", "drafts"][..]),
+    ] {
+        for entry in entries {
+            fs::create_dir_all(dir.path().join(name).join(entry)).unwrap_or_else(|e| panic!("{e}"));
+        }
+        fs::write(dir.path().join(name).join("README.md"), "# Readme\n")
+            .unwrap_or_else(|e| panic!("{e}"));
+        fs::write(dir.path().join(name).join(".gitignore"), "target\n")
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    dir
+}
+
+/// Shows `folder` in `pane` and waits for its listing.
+fn enter(harness: &mut Harness<'_, RickUi>, pane: model::PaneId, folder: &Path) {
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane,
+            to: local(folder),
+        },
+        &mut Vec::new(),
+    );
+    settle(harness);
+}
+
+/// The active tab of `pane`.
+fn tab_of(harness: &Harness<'_, RickUi>, pane: model::PaneId) -> model::TabId {
+    harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .unwrap_or_else(|| panic!("no tab in {pane:?}"))
+        .0
+}
+
+/// The suggestion bar of the file list of `pane`, where it stands.
+fn list_bar(harness: &Harness<'_, RickUi>, pane: model::PaneId) -> Option<egui::Rect> {
+    harness.state().suggestion_bar(tab_of(harness, pane))
+}
+
+/// Acceptance: with a test registry that offers a Git plugin and none
+/// installed, entering a folder with `.git` shows the bar in that pane
+/// and in no other, between the toolbar and the list; leaving the folder
+/// takes it away.
+#[test]
+fn entering_a_folder_with_a_marker_shows_the_bar_in_that_pane_and_in_no_other() {
+    let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+    server.publish(&signer, &registry::index(&[git(), models()]));
+    let dir = projects();
+    let mut harness = window(Start {
+        fake: &fake,
+        settings: registry::rick_toml(&server, &signer, true),
+        folder: dir.path(),
+        rows: Vec::new(),
+        extensions: with_hex(),
+        preview: 0.0,
+    });
+    let asked = server.requests().len();
+    let left = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::Split {
+            pane: left,
+            dir: model::SplitDir::Right,
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let right = harness.state().app().model().focused;
+    assert_ne!(left, right);
+    assert_eq!(list_bar(&harness, left), None);
+    assert_eq!(list_bar(&harness, right), None, "no marker in the parent");
+
+    // The pane does not show hidden entries, and `.git` is one: the
+    // listing it has loaded holds it all the same.
+    enter(&mut harness, right, &dir.path().join("rick"));
+    let tab = tab_of(&harness, right);
+    let shown = harness
+        .state()
+        .app()
+        .model()
+        .tab(tab)
+        .map(|t| t.listing.rows().map(|e| e.name.clone()).collect::<Vec<_>>());
+    assert!(shown.is_some_and(|names| !names.contains(&".git".to_owned())));
+    let bar_rect = list_bar(&harness, right).unwrap_or_else(|| panic!("no bar"));
+    assert_eq!(list_bar(&harness, left), None, "in no other pane");
+
+    // Between the toolbar and the list of that pane, as wide as the pane
+    // and one line high.
+    let toolbar = harness
+        .state()
+        .toolbar_row(tab)
+        .unwrap_or_else(|| panic!("toolbar"));
+    let header = harness
+        .state()
+        .header_band(tab)
+        .unwrap_or_else(|| panic!("header band"));
+    assert!(
+        bar_rect.top() >= toolbar.bottom() - 0.5 && bar_rect.bottom() <= header.top() + 0.5,
+        "{toolbar:?}, {bar_rect:?}, {header:?}"
+    );
+    assert!((bar_rect.width() - toolbar.width()).abs() < 1.0);
+    assert!(
+        (bar_rect.height() - ui_egui::footer_height(model::Density::Comfortable)).abs() < 0.5,
+        "one line: {bar_rect:?}"
+    );
+    assert!(inside(&harness, &git_text(), bar_rect), "{}", git_text());
+    for button in ["Install", "Not now", "Don't suggest again"] {
+        assert!(inside(&harness, button, bar_rect), "{button}");
+    }
+
+    // It takes no focus: the keyboard stays where it was.
+    assert!(
+        ["Install", "Not now", "Don't suggest again"]
+            .iter()
+            .all(|label| !harness.get_by_label(label).is_focused())
+    );
+
+    // Leaving the folder takes it away; a folder whose names only look
+    // like the marker has none; the other work tree has it again.
+    enter(&mut harness, right, &dir.path().join("notes"));
+    assert_eq!(list_bar(&harness, right), None);
+    enter(&mut harness, right, &dir.path().join("trebuchet"));
+    assert!(list_bar(&harness, right).is_some());
+    // And the other pane has its own when it enters one.
+    enter(&mut harness, left, &dir.path().join("rick"));
+    assert!(list_bar(&harness, left).is_some());
+    assert!(list_bar(&harness, right).is_some());
+    assert_eq!(server.requests().len(), asked, "no request was made");
+}
+
+/// Acceptance: **Not now** takes the bar away until Rick restarts;
+/// **Don't suggest again** writes `git` to `[plugins] no_suggest` and the
+/// bar does not come back after a restart.
+#[test]
+fn not_now_and_dont_suggest_again_on_the_bar_of_a_folder() {
+    let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+    server.publish(&signer, &registry::index(&[git()]));
+    let dir = projects();
+    let repo = dir.path().join("rick");
+    let start = |settings: String| Start {
+        fake: &fake,
+        settings,
+        folder: &repo,
+        rows: Vec::new(),
+        extensions: with_hex(),
+        preview: 0.0,
+    };
+    let path = fake.config_dir().join(app::SETTINGS_FILE);
+    let written = || fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
+
+    // The folder is listed before the plugin list arrives: the bar comes
+    // with the list.
+    let mut harness = window(start(registry::rick_toml(&server, &signer, true)));
+    let pane = harness.state().app().model().focused;
+    assert!(list_bar(&harness, pane).is_some());
+    click(&mut harness, "Not now");
+    assert_eq!(list_bar(&harness, pane), None);
+    // Not in the other work tree either, and nothing is written.
+    enter(&mut harness, pane, &dir.path().join("trebuchet"));
+    assert_eq!(list_bar(&harness, pane), None);
+    assert_eq!(
+        harness.state().app().model().settings.plugins.no_suggest,
+        [] as [&str; 0]
+    );
+    drop(harness);
+
+    // Rick restarts: the bar is back.
+    let mut harness = window(start(written()));
+    let pane = harness.state().app().model().focused;
+    assert!(list_bar(&harness, pane).is_some(), "a new start suggests");
+    click(&mut harness, "Don't suggest again");
+    assert_eq!(list_bar(&harness, pane), None);
+    assert_eq!(
+        harness.state().app().model().settings.plugins.no_suggest,
+        ["git"]
+    );
+    let started = Instant::now();
+    while !written().contains("no_suggest = [\"git\"]") {
+        assert!(started.elapsed() < Duration::from_secs(10), "not written");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    drop(harness);
+
+    // And after this restart it does not come back.
+    let mut harness = window(start(written()));
+    let pane = harness.state().app().model().focused;
+    assert_eq!(list_bar(&harness, pane), None);
+    enter(&mut harness, pane, &dir.path().join("trebuchet"));
+    assert_eq!(list_bar(&harness, pane), None);
+}
+
+/// A Git plugin that is on the disk and disabled gets **Enable** on the
+/// folder's bar, with no registry at all; and *Suggest plugins* off shows
+/// no bar.
+#[test]
+fn a_disabled_plugin_gets_enable_on_the_bar_of_a_folder() {
+    let fake = fake();
+    let dir = projects();
+    let repo = dir.path().join("rick");
+    let git = ext_git::GitExtension::new();
+    let manifest = git.manifest();
+    let mut row = disabled(manifest.id.0, manifest.name, manifest.description, &[]);
+    row.markers = manifest.markers.iter().map(|m| (*m).to_owned()).collect();
+    let mut harness = window(Start {
+        fake: &fake,
+        settings: "[plugins]\ndisabled = [\"git\"]\n".to_owned(),
+        folder: &repo,
+        rows: vec![row],
+        extensions: with_hex(),
+        preview: 0.0,
+    });
+    let pane = harness.state().app().model().focused;
+    let bar_rect = list_bar(&harness, pane).unwrap_or_else(|| panic!("no bar"));
+    for button in ["Enable", "Not now", "Don't suggest again"] {
+        assert!(inside(&harness, button, bar_rect), "{button}");
+    }
+    assert!(harness.query_by_label("Install").is_none());
+
+    // *Suggest plugins* off: no bar; on again, it is back.
+    let switch = |harness: &mut Harness<'_, RickUi>, on: bool| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::SuggestPlugins(on)),
+            &mut Vec::new(),
+        );
+        steps(harness);
+    };
+    switch(&mut harness, false);
+    assert_eq!(list_bar(&harness, pane), None);
+    switch(&mut harness, true);
+    assert!(list_bar(&harness, pane).is_some());
+
+    // **Enable** takes Git off `[plugins] disabled`.
+    click(&mut harness, "Enable");
+    assert_eq!(
+        harness.state().app().model().settings.plugins.disabled,
+        [] as [&str; 0]
+    );
+    assert_eq!(list_bar(&harness, pane), None);
+}
+
+/// One bar per pane: a model selected in a work tree has the folder's
+/// bar over the list and the file's bar over the hex view, each in its
+/// own pane and each for its own plugin.
+#[test]
+fn the_folder_s_bar_and_the_file_s_bar_stand_each_in_its_own_pane() {
+    let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+    server.publish(&signer, &registry::index(&[git(), models()]));
+    let dir = projects();
+    let repo = dir.path().join("rick");
+    let noise: Vec<u8> = (0..2048u32).map(|i| (i * 31 % 251) as u8).collect();
+    fs::write(repo.join("case.stl"), noise).unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = window(Start {
+        fake: &fake,
+        settings: registry::rick_toml(&server, &signer, true),
+        folder: &repo,
+        rows: Vec::new(),
+        extensions: with_hex(),
+        preview: 560.0,
+    });
+    let pane = harness.state().app().model().focused;
+    select(&mut harness, "case.stl");
+    let of_list = list_bar(&harness, pane).unwrap_or_else(|| panic!("no bar over the list"));
+    let of_file = bar(&harness).unwrap_or_else(|| panic!("no bar over the hex view"));
+    assert!(!of_list.intersects(of_file), "{of_list:?}, {of_file:?}");
+    assert!(inside(&harness, &git_text(), of_list));
+    assert!(inside(
+        &harness,
+        &format!("{} plugin", models_name()),
+        of_file
+    ));
+    assert_eq!(harness.query_all_by_label("Install").count(), 2);
+
+    // **Not now** on the file's bar silences the 3D previewer and leaves
+    // Git's bar where it is.
+    let not_now = harness
+        .query_all_by_label("Not now")
+        .find(|node| of_file.contains_rect(node.rect()))
+        .unwrap_or_else(|| panic!("the file's Not now"));
+    not_now.click();
+    steps(&mut harness);
+    settle(&mut harness);
+    assert_eq!(bar(&harness), None);
+    assert!(list_bar(&harness, pane).is_some());
+}
+
+/// Acceptance: entering a folder of 200,000 entries is not measurably
+/// slower with suggestions on. Two measurements say so. The folder is
+/// entered in turn by a Rick that holds a plugin list with markers, and
+/// so holds every name of the listing against them, and by one that knows
+/// no marker at all: their medians lie within what two runs of one
+/// differ by. And holding the 200,000 names of the loaded listing against
+/// the markers, the work itself, is timed alone: it is under a hundredth
+/// of entering the folder.
+#[test]
+#[ignore = "lists 200 000 entries; run with --ignored in release"]
+#[allow(clippy::too_many_lines)]
+fn entering_a_folder_of_200k_entries_is_not_slower_with_suggestions_on() {
+    use tests::fixture::{Config, SizeDistribution};
+    const ENTRIES: usize = 200_000;
+    let fixture = Config {
+        entries: ENTRIES,
+        max_depth: 0,
+        sizes: SizeDistribution::Empty,
+        ..Config::new(ENTRIES, 11)
+    }
+    .generate()
+    .unwrap_or_else(|e| panic!("{e}"));
+    // The marker is in the folder: the listing that is held against the
+    // markers finds one.
+    fs::create_dir(fixture.root().join(".git")).unwrap_or_else(|e| panic!("{e}"));
+    let elsewhere = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (server, signer) = (Server::start(), Signer::new(1));
+    server.publish(&signer, &registry::index(&[git(), models()]));
+
+    // A Rick on `settings`, started in `elsewhere`, after its start read
+    // or fetched what there is of a plugin list.
+    let rick = |settings: String| {
+        let fake = fake();
+        let config = fake.config_dir();
+        fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(config.join(app::SETTINGS_FILE), settings).unwrap_or_else(|e| panic!("{e}"));
+        let mut app = app::App::new(app::Config {
+            platform: fake,
+            ui: Arc::new(EguiHost::new()),
+            extensions: Vec::new(),
+            config_dir: Some(config),
+            start: Some(local(elsewhere.path())),
+        });
+        app.set_rick_version(RICK);
+        let mut events = Vec::new();
+        for command in [app::RegistryCommand::Start, app::RegistryCommand::Daily] {
+            app.handle(app::Command::Registry(command), &mut events);
+            wait(&mut app, |app| !app.is_busy());
+        }
+        app
+    };
+    // Enters the fixture and says how long its listing took to complete.
+    let enter = |app: &mut app::App| {
+        let pane = app.model().focused;
+        let mut events = Vec::new();
+        app.handle(
+            app::Command::Navigate {
+                pane,
+                to: local(elsewhere.path()),
+            },
+            &mut events,
+        );
+        wait(app, |app| !app.is_busy());
+        let started = Instant::now();
+        app.handle(
+            app::Command::Navigate {
+                pane,
+                to: local(fixture.root()),
+            },
+            &mut events,
+        );
+        wait(app, |app| {
+            app.model()
+                .active_tab(pane)
+                .is_some_and(|(_, tab)| tab.listing.complete && tab.listing.len() > ENTRIES)
+        });
+        started.elapsed()
+    };
+    let median = |samples: &mut Vec<Duration>| {
+        samples.sort();
+        samples[samples.len() / 2]
+    };
+
+    let mut with = rick(registry::rick_toml(&server, &signer, true));
+    let mut without = rick(String::new());
+    assert!(with.plugin_registry().index.is_some());
+    assert!(without.plugin_registry().index.is_none());
+    // One entry each to warm the file system's cache and the runtime,
+    // then the two in turn, each going first every other time.
+    enter(&mut without);
+    enter(&mut with);
+    let (mut on, mut off) = (Vec::new(), Vec::new());
+    for round in 0..6 {
+        if round % 2 == 0 {
+            off.push(enter(&mut without));
+            on.push(enter(&mut with));
+        } else {
+            on.push(enter(&mut with));
+            off.push(enter(&mut without));
+        }
+    }
+    let pane = with.model().focused;
+    let found = |app: &app::App| app.folder_suggestion(pane).map(|s| s.id);
+    assert_eq!(
+        found(&with).as_deref(),
+        Some("git"),
+        "and the marker was found among them"
+    );
+    assert_eq!(without.folder_suggestion(without.model().focused), None);
+
+    // The work itself: the 200,000 names of the listing the pane has
+    // loaded, held against the markers once more, as when the plugin
+    // host's rows arrive after the folder was listed.
+    let mut scans = Vec::new();
+    for _ in 0..9 {
+        let started = Instant::now();
+        with.set_plugins(Vec::new());
+        scans.push(started.elapsed());
+        assert_eq!(found(&with).as_deref(), Some("git"));
+    }
+
+    println!("with a plugin list that names markers: {on:?}");
+    println!("without: {off:?}");
+    let (on, off, scan) = (median(&mut on), median(&mut off), median(&mut scans));
+    println!(
+        "entering 200 000 entries on {}: {on:?} with a plugin list that names markers, \
+         {off:?} without; holding the names against the markers {scan:?}",
+        std::env::consts::OS
+    );
+    if std::env::var_os("RICK_BENCH_RECORD").is_none() {
+        // Entering the folder varies by a quarter from one run to the
+        // next; the two medians are no further apart than that.
+        assert!(
+            on <= off + off / 4,
+            "{on:?} with suggestions, {off:?} without"
+        );
+        // What suggestions add is under a hundredth of it.
+        assert!(
+            scan * 100 <= off,
+            "{scan:?} to hold the names against the markers, {off:?} to enter"
+        );
+    }
+}
+
+/// Runs the application's loop until `done` holds, for a minute at most.
+fn wait(app: &mut app::App, done: impl Fn(&app::App) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut events = Vec::new();
+    loop {
+        let handled = app.poll(&mut events);
+        events.clear();
+        if handled == 0 {
+            if done(app) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(Instant::now() < deadline, "did not get there");
+    }
 }

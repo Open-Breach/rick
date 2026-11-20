@@ -7378,6 +7378,204 @@ mod suggest {
         }
     }
 
+    /// A folder with `names` in it, each a folder of its own when it ends
+    /// in `/`.
+    fn folder(parent: &Path, name: &str, names: &[&str]) -> std::path::PathBuf {
+        let dir = parent.join(name);
+        fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+        for name in names {
+            match name.strip_suffix('/') {
+                Some(sub) => {
+                    fs::create_dir_all(dir.join(sub)).unwrap_or_else(|e| panic!("{e}"));
+                }
+                None => fs::write(dir.join(name), name).unwrap_or_else(|e| panic!("{e}")),
+            }
+        }
+        dir
+    }
+
+    impl Harness {
+        /// Shows `dir` in `pane` and waits for its listing.
+        fn enter(&mut self, pane: model::PaneId, dir: &Path) {
+            self.send(Command::Navigate {
+                pane,
+                to: local(dir),
+            });
+            self.settle();
+        }
+
+        /// The id of the plugin suggested for the folder `pane` shows.
+        fn suggested(&self, pane: model::PaneId) -> Option<String> {
+            self.app.folder_suggestion(pane).map(|s| s.id)
+        }
+
+        /// Runs the loop until the folder of `pane` is suggested `id`, or
+        /// nothing for `None`; a change on the disk takes its time to
+        /// arrive.
+        fn until_suggested(&mut self, pane: model::PaneId, id: Option<&str>) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while self.suggested(pane).as_deref() != id {
+                assert!(
+                    Instant::now() < deadline,
+                    "{:?}, not {id:?}",
+                    self.suggested(pane)
+                );
+                self.settle();
+            }
+        }
+    }
+
+    #[test]
+    fn a_pane_that_enters_a_folder_with_a_marker_is_suggested_the_plugin() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        server.publish(&signer, &index());
+        let mut h = started(&fake(), &server, &signer, "", Vec::new());
+        let root = h.root.path().to_owned();
+        let repo = folder(&root, "repo", &[".git/", "src/", "README.md"]);
+        let plain = folder(
+            &root,
+            "plain",
+            &[".github/", ".gitignore", "git", "notes.txt"],
+        );
+        let left = h.app.model().focused;
+        h.send(Command::Split {
+            pane: left,
+            dir: model::SplitDir::Right,
+        });
+        h.settle();
+        let right = h.app.model().focused;
+        assert_ne!(left, right);
+
+        // The marker is a hidden entry, and the pane does not show hidden
+        // entries: the listing it has loaded holds it all the same.
+        h.enter(right, &repo);
+        assert!(!h.names().contains(&".git".to_owned()));
+        assert_eq!(
+            h.app.folder_suggestion(right),
+            Some(Suggestion {
+                id: "git".to_owned(),
+                name: "Git".to_owned(),
+                description: "What Git does.".to_owned(),
+                remedy: Remedy::Install {
+                    size: 1024,
+                    installing: false,
+                },
+            })
+        );
+        // In that pane and in no other.
+        assert_eq!(h.suggested(left), None);
+
+        // A folder with names that only look like the marker.
+        h.enter(right, &plain);
+        assert_eq!(h.suggested(right), None, "gone when the pane leaves");
+        h.send(Command::Back(right));
+        h.settle();
+        assert_eq!(h.suggested(right).as_deref(), Some("git"));
+
+        // A new workspace tab has a pane of its own: it is suggested
+        // what it shows, and the pane left behind keeps its own.
+        h.send(Command::NewTab(local(&plain)));
+        h.settle();
+        let third = h.app.model().focused;
+        assert!(third != left && third != right);
+        assert_eq!(h.suggested(third), None);
+        assert_eq!(h.suggested(right).as_deref(), Some("git"));
+        h.enter(third, &repo);
+        assert_eq!(h.suggested(third).as_deref(), Some("git"));
+        assert_eq!(h.suggested(left), None);
+
+        // Silenced, and taken back.
+        h.send(Command::SuggestNotNow("git".to_owned()));
+        assert_eq!(h.suggested(right), None);
+        h.send(Command::SuggestAgain("git".to_owned()));
+        assert_eq!(h.suggested(right).as_deref(), Some("git"));
+        h.send(Command::Settings(SettingsChange::SuggestPlugins(false)));
+        assert_eq!(h.suggested(right), None);
+    }
+
+    #[test]
+    fn the_folder_s_suggestion_follows_the_listing_the_pane_has_loaded() {
+        let (server, signer) = (Server::start(), Signer::new(1));
+        server.publish(&signer, &index());
+        let mut h = started(&fake(), &server, &signer, "", Vec::new());
+        let root = h.root.path().to_owned();
+        let work = folder(&root, "work", &["src/", "README.md"]);
+        let pane = h.app.model().focused;
+        h.enter(pane, &work);
+        assert_eq!(h.suggested(pane), None);
+
+        // `git init` beside the pane: the watch brings the entry, and the
+        // suggestion with it; the entry removed takes it away.
+        fs::create_dir(work.join(".git")).unwrap_or_else(|e| panic!("{e}"));
+        h.until_suggested(pane, Some("git"));
+        fs::remove_dir(work.join(".git")).unwrap_or_else(|e| panic!("{e}"));
+        h.until_suggested(pane, None);
+
+        // A refresh swaps the listing in when it is complete, and the
+        // suggestion is what the new listing holds.
+        fs::create_dir(work.join(".git")).unwrap_or_else(|e| panic!("{e}"));
+        h.send(Command::Refresh(pane));
+        h.settle();
+        assert_eq!(h.suggested(pane).as_deref(), Some("git"));
+        h.send(Command::Refresh(pane));
+        h.settle();
+        assert_eq!(h.suggested(pane).as_deref(), Some("git"));
+
+        // A marker is an entry directly inside the folder: a flattened
+        // listing is not looked at.
+        h.send(Command::Flatten { pane, on: true });
+        h.settle();
+        assert_eq!(h.suggested(pane), None, "flattened");
+        h.send(Command::Flatten { pane, on: false });
+        h.settle();
+        assert_eq!(h.suggested(pane).as_deref(), Some("git"));
+        // A filter that hides the entry hides nothing from the listing.
+        h.send(Command::Filter {
+            pane,
+            text: "README".to_owned(),
+        });
+        h.settle();
+        assert_eq!(h.suggested(pane).as_deref(), Some("git"));
+    }
+
+    #[test]
+    fn a_plugin_list_that_arrives_later_suggests_for_the_folder_already_shown() {
+        let (server, signer, fake) = (Server::start(), Signer::new(1), fake());
+        server.publish(&signer, &index());
+        // The folder is listed before the first word to the registry.
+        let mut h = rick(&fake, &registry(&server, &signer), Vec::new());
+        let root = h.root.path().to_owned();
+        let repo = folder(&root, "repo", &[".git/", ".svn/", "src/"]);
+        let pane = h.app.model().focused;
+        h.enter(pane, &repo);
+        assert_eq!(h.suggested(pane), None, "no list yet");
+
+        h.send(Command::Registry(RegistryCommand::Start));
+        h.settle();
+        h.send(Command::Registry(RegistryCommand::Daily));
+        h.settle();
+        // One plugin for the pane: Git comes first in the list, and
+        // Subversion has no build for this Rick.
+        assert_eq!(h.suggested(pane).as_deref(), Some("git"));
+
+        // The plugin host's rows arrive after the application was made,
+        // as the binary hands them over: a disabled Subversion on the
+        // disk is suggested from its own manifest, before the list's Git.
+        let mut svn = row("svn", "Subversion", PluginStatus::Disabled);
+        svn.markers = vec![".svn".to_owned()];
+        h.send(Command::Settings(SettingsChange::Plugin {
+            id: "svn".to_owned(),
+            enabled: false,
+        }));
+        h.app.set_plugins(vec![svn]);
+        assert_eq!(
+            h.app.folder_suggestion(pane).map(|s| (s.id, s.remedy)),
+            Some(("svn".to_owned(), Remedy::Enable))
+        );
+        h.send(Command::SuggestNotNow("svn".to_owned()));
+        assert_eq!(h.suggested(pane).as_deref(), Some("git"), "the next one");
+    }
+
     /// Decision 6 of specs/plugin-distribution.md: suggestions come from
     /// the cached index, and Rick never goes online because a file was
     /// selected. The test registry counts what it is asked.

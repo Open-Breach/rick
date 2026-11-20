@@ -1,5 +1,7 @@
 //! One tab's content: toolbar with path bar, the file view, and the foot
-//! with the status line and the filter.
+//! with the status line and the filter. Between the toolbar and the view
+//! stand, when there is a reason for them, the time slider, the bar that
+//! suggests a plugin for the folder, and a banner.
 
 use ext::t;
 use std::collections::{BTreeMap, BTreeSet};
@@ -57,6 +59,7 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         .frame(egui::Frame::NONE)
         .show(ui, |ui| toolbar(ui, cx));
     crate::timeline_bar::show(ui, cx);
+    suggestion_bar(ui, cx);
     if cx.tab.failure.is_some() {
         egui::Panel::top(egui::Id::new(("failure", cx.tab_id)))
             .show_separator_line(true)
@@ -73,6 +76,28 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         .frame(egui::Frame::NONE)
         .show(ui, |ui| foot(ui, cx));
     egui::CentralPanel::no_frame().show(ui, |ui| views::show(ui, cx));
+}
+
+/// The suggestion bar (specs/plugin-distribution.md §8, *The file list*):
+/// between the toolbar and the list of a pane whose folder holds an entry
+/// that is a plugin's marker, while that plugin is not there. One bar a
+/// pane; it goes when the pane leaves the folder.
+fn suggestion_bar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    cx.tab_ui.suggestion = None;
+    let Some(suggestion) = cx.app.folder_suggestion(cx.pane) else {
+        return;
+    };
+    egui::Panel::top(egui::Id::new(("suggestion", cx.tab_id)))
+        .show_separator_line(false)
+        .frame(egui::Frame::NONE)
+        .show(ui, |ui| {
+            let id = egui::Id::new(("suggestion-bar", cx.tab_id));
+            let (rect, answer) = crate::suggestion::bar(ui, id, &suggestion);
+            cx.tab_ui.suggestion = Some(rect);
+            if let Some(answer) = answer {
+                cx.requests.push(answer.request(&suggestion.id));
+            }
+        });
 }
 
 /// The banner over a list that could not be read: why, and *Retry*, which

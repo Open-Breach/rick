@@ -3981,9 +3981,12 @@ fn suggestions_window(
 /// plugin that is not there, against a registry of the test's own, in
 /// Light and Dark. In the preview pane: the bar at the top of the pane
 /// where the hex view shows a 3D model, and **Install** in the action
-/// row of the *No previewer* card where the hex view is not loaded.
+/// row of the *No previewer* card where the hex view is not loaded. In
+/// the file list: the bar between the toolbar and the list of a pane
+/// that entered a Git work tree, beside a pane that did not.
 #[test]
 #[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
 fn screenshots_of_the_plugin_suggestions() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let root = dir.path().join("Projects").join("enclosure");
@@ -4071,6 +4074,69 @@ fn screenshots_of_the_plugin_suggestions() {
     for (theme, mode) in modes {
         set(&mut harness, theme);
         shoot(&mut harness, &format!("suggest-preview-card-{mode}"));
+    }
+    std::mem::drop(harness);
+
+    // The file list: a work tree in the right pane, its parent in the
+    // left one. One bar, in the pane that is in the work tree.
+    let projects = dir.path().join("Projects");
+    let repo = projects.join("rick");
+    for folder in [".git", "crates", "docs", "specs"] {
+        fs::create_dir_all(repo.join(folder)).unwrap_or_else(|e| panic!("{e}"));
+    }
+    for (name, text) in [
+        ("Cargo.toml", "[workspace]\n"),
+        ("README.md", "# Rick\n"),
+        ("SPEC.md", "# Rick — File Manager Specification\n"),
+        (".gitignore", "target\n"),
+    ] {
+        fs::write(repo.join(name), text).unwrap_or_else(|e| panic!("{e}"));
+    }
+    // One pane, in the work tree.
+    let (mut harness, _server) = suggestions_window(&repo, previewers());
+    let pane = harness.state().app().model().focused;
+    let bar_of = |harness: &Harness<'_, RickUi>, pane: model::PaneId| {
+        let (tab, _) = harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .unwrap_or_else(|| panic!("tab"));
+        harness.state().suggestion_bar(tab)
+    };
+    assert!(bar_of(&harness, pane).is_some());
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("suggest-list-bar-{mode}"));
+    }
+    std::mem::drop(harness);
+
+    // Two panes: the bar in the one that is in the work tree, and in no
+    // other.
+    let (mut harness, _server) = suggestions_window(&projects, previewers());
+    let left = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::Split {
+            pane: left,
+            dir: model::SplitDir::Right,
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let right = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane: right,
+            to: local(&repo),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    assert!(bar_of(&harness, right).is_some());
+    assert!(bar_of(&harness, left).is_none());
+    for (theme, mode) in modes {
+        set(&mut harness, theme);
+        shoot(&mut harness, &format!("suggest-list-bar-two-panes-{mode}"));
     }
 }
 
