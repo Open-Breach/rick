@@ -458,3 +458,22 @@ in 8–24 ms).
 | Linux | 300 ms | — | — |
 | macOS | 300 ms | — | — |
 | Windows | 300 ms | — | — |
+
+### `settings-reload` — an edit of `rick.toml` on disk reaching the model
+
+No spec number: the spec says the app watches its settings files and
+reloads on change (Engineering guidelines → Configuration). Issue 3's
+acceptance asked for 500 ms, which an ordinary test asserted until issue
+277; it is the Linux target. From the end of the write to the edit in the
+model: the platform's watcher reporting the write (inotify, FSEvents,
+`ReadDirectoryChangesW`), then the file loaded again. Headless. Test:
+`the_reload_of_settings_edited_on_disk` in `app.rs`; that an edit arrives
+at all is the ordinary test `settings_edited_on_disk_reach_the_model`,
+which waits ten seconds for it. The macOS and Windows targets are
+provisional, the Linux 500 ms, until a measured run sets them.
+
+| OS | Target | Median | Worst |
+| --- | --- | --- | --- |
+| Linux | 500 ms | — | — |
+| macOS | 500 ms | — | — |
+| Windows | 500 ms | — | — |

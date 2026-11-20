@@ -434,22 +434,23 @@ fn a_command_script_drives_the_app_headlessly() {
     assert!(notices.is_empty(), "{notices:?}");
 }
 
+/// An edit of `rick.toml` on disk reaches the model: the watcher reports
+/// the write and the file is loaded again. The wait has the ten-second
+/// deadline the other waits on the disk have; how long the reload takes
+/// is the benchmark `settings-reload`, `the_reload_of_settings_edited_on_disk`
+/// below (issue 277).
 #[test]
-fn settings_edited_on_disk_reach_the_model_within_500_ms() {
+fn settings_edited_on_disk_reach_the_model() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let mut d = Driver::new(dir.path());
     assert_eq!(d.app.model().settings, model::Settings::default());
     let path = d.app.settings_path().to_path_buf();
 
     fs::write(&path, "theme = \"dark\"\nfolders_first = false\n").unwrap_or_else(|e| panic!("{e}"));
-    let started = Instant::now();
+    let deadline = Instant::now() + Duration::from_secs(10);
     runtime::block_on(async {
         while d.app.model().settings.theme != model::Theme::Dark {
-            assert!(
-                started.elapsed() < Duration::from_millis(500),
-                "settings not reflected after {:?}",
-                started.elapsed()
-            );
+            assert!(Instant::now() < deadline, "settings not reloaded");
             let _ =
                 tokio::time::timeout(Duration::from_millis(10), d.app.tick(&mut d.events)).await;
         }
@@ -459,4 +460,38 @@ fn settings_edited_on_disk_reach_the_model_within_500_ms() {
         d.app.model().settings.show_extensions,
         "unset keys keep their defaults"
     );
+}
+
+/// The benchmark `settings-reload`: from the write of `rick.toml` to the
+/// edit in the model, which is the platform's watcher reporting the write
+/// and the file loaded again. Each run writes a font size the model does
+/// not have yet. A reload that has not come after ten seconds is recorded
+/// as those ten seconds and fails nothing here: the time is held by
+/// `record` alone, and that an edit arrives at all is the ordinary test's,
+/// `settings_edited_on_disk_reach_the_model`.
+#[test]
+#[ignore = "timing; run with --ignored in release"]
+fn the_reload_of_settings_edited_on_disk() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let mut d = Driver::new(dir.path());
+    let path = d.app.settings_path().to_path_buf();
+
+    let mut samples = Vec::new();
+    for size in (15u8..).take(tests::bench::runs()) {
+        assert_ne!(d.app.model().settings.font_size, size);
+        fs::write(&path, format!("font_size = {size}\n")).unwrap_or_else(|e| panic!("{e}"));
+        let started = Instant::now();
+        runtime::block_on(async {
+            while d.app.model().settings.font_size != size
+                && started.elapsed() < Duration::from_secs(10)
+            {
+                let _ = tokio::time::timeout(Duration::from_millis(10), d.app.tick(&mut d.events))
+                    .await;
+            }
+        });
+        samples.push(started.elapsed());
+        // Whatever the write still has on its way is in before the next.
+        d.settle();
+    }
+    tests::bench::record("settings-reload", &samples);
 }

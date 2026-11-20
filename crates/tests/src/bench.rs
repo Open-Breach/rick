@@ -199,6 +199,12 @@ pub const BENCHMARKS: &[Benchmark] = &[
         macos: ms(300),
         windows: ms(300),
     },
+    Benchmark {
+        key: "settings-reload",
+        linux: ms(500),
+        macos: ms(500),
+        windows: ms(500),
+    },
 ];
 
 /// The benchmark named `key`.
