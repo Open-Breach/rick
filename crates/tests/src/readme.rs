@@ -640,6 +640,17 @@ pub fn release_platforms(workflow: &str) -> Vec<String> {
     platforms
 }
 
+/// How a downloaded file is checked against its build attestation: the
+/// two lines of specs/system-integration.md §9, the first for what
+/// Trebuchet's workflow builds and the second for what Rick's own does,
+/// and the sentence the same section asks the README to state plainly.
+const VERIFY: &str = "Every file of a release has a GitHub build attestation. It proves where a \
+     file comes from, not that it is safe. To check one with the GitHub CLI:\n\n```bash\n\
+     gh attestation verify <file> --owner Open-Breach --signer-repo Open-Breach/trebuchet   \
+     # a Linux file\n\
+     gh attestation verify <file> --repo Open-Breach/rick                                   \
+     # a macOS or Windows file\n```";
+
 /// One platform's block of the Install section: its title, the links to
 /// its archives and the steps.
 fn install_block(title: &str, links: &[String], steps: &str) -> Option<String> {
@@ -649,8 +660,8 @@ fn install_block(title: &str, links: &[String], steps: &str) -> Option<String> {
 /// The body of the Install section (specs/readme.md, *Install*): per
 /// operating system the direct link to each archive of `platforms` for
 /// the release `version`, and the steps to get Rick running from it; then
-/// what the Office and media previews need installed, and the line on the
-/// plugins.
+/// how a file is verified, what the Office and media previews need
+/// installed, and the line on the plugins.
 #[must_use]
 pub fn install(version: &str, platforms: &[String]) -> String {
     let base = format!(
@@ -698,6 +709,7 @@ pub fn install(version: &str, platforms: &[String]) -> String {
         ),
     ];
     let mut out: Vec<String> = blocks.into_iter().flatten().collect();
+    out.push(VERIFY.to_owned());
     out.push(
         "Office documents preview through LibreOffice when it is installed; on Linux, audio and \
          video need the GStreamer plug-ins."
@@ -1067,7 +1079,12 @@ mod tests {
         );
         assert!(text.contains("rick-1.2.3-windows-x64.zip"));
         // No archive for a platform, no block for it.
-        assert!(!text.contains("macOS"));
+        assert!(!text.contains("**macOS**"));
+        // The two lines that verify a file, one for each builder.
+        assert!(text.contains(
+            "gh attestation verify <file> --owner Open-Breach --signer-repo Open-Breach/trebuchet"
+        ));
+        assert!(text.contains("gh attestation verify <file> --repo Open-Breach/rick"));
         assert!(text.contains("\n\nOffice documents preview through LibreOffice when it is"));
         assert!(text.ends_with("that plugin is gone."));
     }
