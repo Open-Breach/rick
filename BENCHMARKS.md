@@ -8,9 +8,13 @@ each runner, the median and the worst run below. Each benchmark is an
 `#[ignore]`d test in `crates/tests/tests`, timed against the target of the
 runner's OS in `crates/tests/src/bench.rs`, whose table a unit test checks
 against this file. Since issue 35 CI measures the targets without asserting
-them: the `bench` workflow runs by hand, on release tags and nightly on
-Linux x64 from `dev`, its nightly summaries on the `benchmark-history`
-branch; a release run without `RICK_BENCH_RECORD` asserts them. Since
+them: the `bench` workflow runs in full, on the three runners, when it is
+started by hand, and it is started before every release, on the release
+commit, with its summary read before the tag is pushed; a `v*` tag starts
+it once more. It has no scheduled run: the nightly run on Linux x64 from
+`dev` ended in November 2026 (decided on pull request 290), and its
+summaries stay on the `benchmark-history` branch. A release run without
+`RICK_BENCH_RECORD` asserts the targets. Since
 issue 277 the summary of a run shows each target beside the median and the
 worst run and marks every benchmark whose median is over it; the run stays
 green. The same issue added `settings-reload`, the last table below, and
