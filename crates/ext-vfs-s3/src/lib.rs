@@ -18,8 +18,16 @@
 //! nothing: `watch` is `Unsupported` and the kernel polls; the account is
 //! a remote-latency mount (`REMOTE`).
 //!
+//! A connection may name its buckets in the optional *Buckets* field,
+//! separated by commas: the account then shows exactly those names, as
+//! typed and without a request, which is the way in for a key that may
+//! work inside a bucket but may not list the account's buckets (a
+//! bucket-scoped R2 token, an AWS key limited to one bucket). With the
+//! field empty the account lists its buckets with `ListBuckets`
+//! (specs/s3-connection.md 1.1).
+//!
 //! Connections are the application's: it keeps endpoint, region, access
-//! key and addressing style in `rick.toml` and the secret key in the
+//! key, bucket names and addressing style in `rick.toml` and the secret key in the
 //! platform keychain, and hands the list to the [`Connector`] this plugin
 //! registers ([`S3Connections`]). Requests are signed with Signature
 //! Version 4 ([`sign`]) and travel over rustls with ring.
@@ -47,7 +55,7 @@ use ext::{
 use types::{Error, ExtId, Location, ProviderId};
 
 pub use client::{S3Client, S3Error, sign};
-pub use connection::{S3Connections, schema};
+pub use connection::{S3Connections, bucket_names, schema};
 pub use provider::S3Provider;
 
 /// The extension id.
