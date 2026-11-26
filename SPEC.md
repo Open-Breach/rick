@@ -48,6 +48,7 @@ Proposed performance targets, to confirm: a 200,000-entry directory paints its f
 | `specs/plugin-distribution.md` | Separate specs: plugin distribution — packages, the registry client, the *Available* view and updates, suggestions | A plugin package or its manifest, the registry, installing or updating a plugin from the Extensions dialogue, or a suggestion to install one |
 | `specs/readme.md` | Separate specs: the README, its fixed structure and how each release brings it up to date | `README.md` is written or changed, or a release is prepared |
 | `specs/ext-zfs.md` | Separate specs: `ext-zfs`, OpenZFS snapshots | Version 0.4, Linux only; the file is not in the repository yet |
+| `specs/s3-connection.md` | Separate specs: the S3 connection, the connection test and the connection GUI, release 0.6.1 | An S3 connection and its buckets, the *Add connection…* dialogue of any provider, the test of a cloud connection, or the Cloud overview's table |
 
 A citation `QUESTIONS.md N` anywhere in the repository means entry `QN` in `specs/decisions.md`.
 
