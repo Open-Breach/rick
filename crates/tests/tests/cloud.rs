@@ -655,27 +655,16 @@ fn a_100_mb_upload_streams_with_progress_and_cancelled_half_way_leaves_no_object
 }
 
 /// A point inside the control of the connection dialogue's row whose
-/// label starts with `label`: the controls share a column right of the
-/// longest label.
+/// label starts with `label`. The label column is 128 px wide whatever
+/// the font, so the point is taken from the label's left edge and not
+/// from how wide the system's font makes the labels.
 fn dialogue_field(harness: &Harness<'_, RickUi>, label: &str) -> egui::Pos2 {
-    let right = [
-        "Endpoint",
-        "Region",
-        "Access key",
-        "Secret key",
-        "Buckets",
-        "Path-style",
-    ]
-    .iter()
-    .filter_map(|text| harness.query_all_by_label_contains(text).next())
-    .map(|node| node.rect().right())
-    .fold(0.0, f32::max);
     let row = harness
         .query_all_by_label_contains(label)
         .next()
         .unwrap_or_else(|| panic!("the row {label}"))
         .rect();
-    egui::pos2(right + 60.0, row.center().y)
+    egui::pos2(row.left() + 128.0 + 80.0, row.center().y)
 }
 
 /// Issue 309, `specs/s3-connection.md` 1.4, through the real dialogue:
