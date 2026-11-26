@@ -7009,3 +7009,214 @@ fn readme_window(theme: Theme) -> Harness<'static, RickUi> {
     hold_still(&mut harness, 8);
     harness
 }
+
+/// One provider's connection dialogue in the shell: only its plugin is
+/// loaded, so its section offers the one *Add connection…* row.
+fn connection_shell(
+    extension: Arc<dyn ext::Extension>,
+    theme: Theme,
+    density: Density,
+) -> (Harness<'static, RickUi>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![extension],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1100.0, 900.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    for change in [
+        SettingsChange::Theme(theme),
+        SettingsChange::Density(density),
+    ] {
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::Settings(change), &mut Vec::new());
+    }
+    settle(&mut harness);
+    (harness, dir)
+}
+
+fn click_point(harness: &mut Harness<'_, RickUi>, at: egui::Pos2, button: egui::PointerButton) {
+    harness.event(egui::Event::PointerMoved(at));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.step();
+    }
+    for _ in 0..4 {
+        harness.step();
+    }
+}
+
+/// Issue 311: the *Add connection…* and *Edit…* dialogues of S3, Azure
+/// Blob, Google Cloud Storage and SSH, in light and dark, Comfortable and
+/// Compact, for the pull request to show against the style guide.
+#[test]
+#[ignore = "renders screenshots; run with --ignored on a machine with a GPU adapter"]
+fn screenshots_of_the_connection_dialogues() {
+    type Make = fn() -> Arc<dyn ext::Extension>;
+    let providers: [(&str, &str, Make, &[(&str, &str)]); 4] = [
+        (
+            "s3",
+            "s3",
+            || Arc::new(ext_vfs_s3::S3Extension::new()),
+            &[
+                ("endpoint", "https://abc123.r2.cloudflarestorage.com"),
+                ("region", "auto"),
+                ("access_key", "0123456789abcdef"),
+                ("secret_key", "not-a-real-secret"),
+                ("buckets", "packages, media"),
+                ("path_style", "true"),
+            ],
+        ),
+        (
+            "azure",
+            "azure",
+            || Arc::new(ext_vfs_azure::AzureExtension::new()),
+            &[("account", "rickstorage"), ("key", "bm90LWEtcmVhbC1rZXk=")],
+        ),
+        (
+            "gcs",
+            "gcs",
+            || Arc::new(ext_vfs_gcs::GcsExtension::new()),
+            &[("project", "rick-project")],
+        ),
+        (
+            "ssh",
+            "ssh",
+            || Arc::new(ext_ssh::SshExtension::new()),
+            &[("host", "nas.example.org"), ("user", "serge")],
+        ),
+    ];
+    for (name, provider, make, values) in providers {
+        for (theme, density) in LOOKS {
+            let look = look(theme, density);
+            let (mut harness, _dir) = connection_shell(make(), theme, density);
+            let add = harness
+                .query_all_by_label_contains("Add connection")
+                .next()
+                .unwrap_or_else(|| panic!("{name}: the Add connection row"))
+                .rect()
+                .center();
+            click_point(&mut harness, add, egui::PointerButton::Primary);
+            // A long form finds its height over a few frames.
+            hold_still(&mut harness, 8);
+            shoot(&mut harness, &format!("connection-add-{name}-{look}"));
+            let cancel = harness.get_by_label("Cancel").rect().center();
+            click_point(&mut harness, cancel, egui::PointerButton::Primary);
+            settle(&mut harness);
+
+            // A saved connection, and its Edit… dialogue from the row's menu.
+            harness.state_mut().app_mut().handle(
+                app::Command::AddConnection {
+                    provider: types::ProviderId::intern(provider),
+                    name: "acme-prod".into(),
+                    values: values
+                        .iter()
+                        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                        .collect(),
+                },
+                &mut Vec::new(),
+            );
+            settle(&mut harness);
+            // The side panel's row: the job in the operations area may
+            // name the connection too.
+            let row = harness
+                .query_all_by_label_contains("acme-prod")
+                .map(|node| node.rect())
+                .filter(|rect| rect.center().x < 400.0)
+                .min_by(|a, b| a.top().total_cmp(&b.top()))
+                .unwrap_or_else(|| panic!("{name}: the connection's row"))
+                .center();
+            click_point(&mut harness, row, egui::PointerButton::Secondary);
+            let edit = harness
+                .query_all_by_label_contains("Edit")
+                .next()
+                .unwrap_or_else(|| panic!("{name}: Edit… in the row's menu"))
+                .rect()
+                .center();
+            click_point(&mut harness, edit, egui::PointerButton::Primary);
+            hold_still(&mut harness, 8);
+            shoot(&mut harness, &format!("connection-edit-{name}-{look}"));
+        }
+    }
+}
+
+/// Issue 311: the connection test in the S3 dialogue, light and dark: the
+/// card of its checks after *Test*, and the warning with *Save anyway*
+/// after *Save*. The endpoint is a local port nothing listens on, so the
+/// first check fails and the rest is not run; no account is involved.
+#[test]
+#[ignore = "renders screenshots; run with --ignored on a machine with a GPU adapter"]
+fn screenshots_of_the_connection_test() {
+    for theme in [Theme::Light, Theme::Dark] {
+        let look = look(theme, Density::Comfortable);
+        let (mut harness, _dir) = connection_shell(
+            Arc::new(ext_vfs_s3::S3Extension::new()),
+            theme,
+            Density::Comfortable,
+        );
+        harness.state_mut().app_mut().handle(
+            app::Command::AddConnection {
+                provider: types::ProviderId::intern("s3"),
+                name: "acme-prod".into(),
+                values: [
+                    ("endpoint", "http://127.0.0.1:1"),
+                    ("region", "us-east-1"),
+                    ("access_key", "0123456789abcdef"),
+                    ("secret_key", "not-a-real-secret"),
+                    ("buckets", "packages, media"),
+                    ("path_style", "true"),
+                ]
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+            },
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+        let row = harness
+            .query_all_by_label_contains("acme-prod")
+            .map(|node| node.rect())
+            .filter(|rect| rect.center().x < 400.0)
+            .min_by(|a, b| a.top().total_cmp(&b.top()))
+            .unwrap_or_else(|| panic!("the connection's row"))
+            .center();
+        click_point(&mut harness, row, egui::PointerButton::Secondary);
+        let edit = harness
+            .query_all_by_label_contains("Edit")
+            .next()
+            .unwrap_or_else(|| panic!("Edit… in the row's menu"))
+            .rect()
+            .center();
+        click_point(&mut harness, edit, egui::PointerButton::Primary);
+        hold_still(&mut harness, 8);
+        for (button, name) in [("Test", "tested"), ("Save", "held")] {
+            let at = harness.get_by_label(button).rect().center();
+            click_point(&mut harness, at, egui::PointerButton::Primary);
+            step_until(&mut harness, Duration::from_secs(15), |h| {
+                h.query_all_by_label_contains("Not run").next().is_some()
+            });
+            hold_still(&mut harness, 8);
+            shoot(&mut harness, &format!("connection-test-{name}-{look}"));
+            if name == "tested" {
+                // An edit forgets the result, so *Save* starts afresh.
+                harness.key_press(egui::Key::Tab);
+                hold_still(&mut harness, 4);
+            }
+        }
+    }
+}
