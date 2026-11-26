@@ -39,7 +39,9 @@ pub use listing::{
     Column, FOLDER_TYPE, Group, IconSize, Listing, Sort, SortDir, ViewMode, ViewSpec, is_media,
     type_of,
 };
-pub use panel::{DEFAULT_PLACE_ICON, Place, Places, TrashView};
+pub use panel::{
+    ConnectionTestRun, ConnectionTestState, DEFAULT_PLACE_ICON, Place, Places, TrashView,
+};
 pub use platform::{TrashedItem, Volume, VolumeKind};
 use serde::{Deserialize, Serialize};
 pub use session::{
@@ -959,6 +961,9 @@ pub struct Model {
     /// The network rows: what the network providers list at their roots,
     /// their connections; the mounted network volumes are in `volumes`.
     pub network: Vec<Entry>,
+    /// The connection test a connection dialogue asked for last, running
+    /// or ended; `None` before the first.
+    pub connection_test: Option<ConnectionTestRun>,
     /// The trash's contents.
     pub trash: TrashView,
     /// The settings snapshot.
@@ -1008,6 +1013,7 @@ impl Model {
             cloud: Vec::new(),
             network_providers: Vec::new(),
             network: Vec::new(),
+            connection_test: None,
             trash: TrashView::default(),
             settings,
             integration: Integration::default(),
@@ -2630,6 +2636,31 @@ impl Model {
             }
         }
         moved
+    }
+
+    /// A connection test started: the dialogue's `request` and the job
+    /// that runs it. It replaces the run before it.
+    pub fn connection_test_started(&mut self, request: u64, job: JobId) {
+        self.connection_test = Some(ConnectionTestRun {
+            request,
+            job: Some(job),
+            state: ConnectionTestState::Running,
+        });
+    }
+
+    /// The connection test `request` ended with `result`, or was cancelled
+    /// (`None`). A run the dialogue has replaced since is dropped.
+    pub fn connection_tested(&mut self, request: u64, result: Option<ext::ConnectionTest>) {
+        match &mut self.connection_test {
+            Some(run) if run.request != request => {}
+            slot => {
+                *slot = Some(ConnectionTestRun {
+                    request,
+                    job: None,
+                    state: result.map_or(ConnectionTestState::Cancelled, ConnectionTestState::Done),
+                });
+            }
+        }
     }
 
     /// Records why the pane's active tab's listing failed, for the banner
