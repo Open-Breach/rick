@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use ext::Text;
 use ext::platform::Platform;
 use ext::{
-    Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, ConnectionTest,
-    ConnectionTestForm, Connector, async_trait, secret_key,
+    Connection, ConnectionField, ConnectionFieldKind, ConnectionForm, ConnectionReaction,
+    ConnectionSchema, ConnectionTest, ConnectionTestForm, Connector, async_trait, secret_key,
 };
 use types::{CancelToken, Error, ProviderId};
 
@@ -192,6 +192,18 @@ impl Connector for AzureConnections {
     fn is_connected(&self, name: &str) -> bool {
         self.conn(name)
             .is_ok_and(|conn| conn.client.try_lock().is_ok_and(|slot| slot.is_some()))
+    }
+
+    /// The one thing to say about the form: an empty endpoint is Azure's
+    /// own.
+    fn react(&self, form: &ConnectionForm<'_>) -> ConnectionReaction {
+        let mut reaction = ConnectionReaction::default();
+        if form.get(field::ENDPOINT).is_empty() {
+            reaction
+                .notes
+                .push((field::ENDPOINT, ext::t!("azure-endpoint-note")));
+        }
+        reaction
     }
 
     fn checks(&self) -> Vec<String> {
