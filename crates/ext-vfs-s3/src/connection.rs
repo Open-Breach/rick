@@ -185,6 +185,7 @@ pub fn react(form: &ConnectionForm<'_>) -> ConnectionReaction {
     reaction
         .fill
         .push((field::PATH_STYLE, path_style.to_string()));
+    reaction.notes.push((field::BUCKETS, t!("s3-buckets-note")));
     reaction
 }
 

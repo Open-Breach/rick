@@ -1011,3 +1011,19 @@ fn save_anyway_saves_a_connection_whose_test_is_not_good() {
         Some("typed-secret")
     );
 }
+
+/// Issue 311: the connection dialogue has the keyboard while it is open.
+/// Escape is *Cancel*, with the focus in a field too. Before the fix the
+/// side panel behind the dialogue took the key, and the dialogue stayed.
+#[test]
+fn escape_closes_the_connection_dialogue() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, _fake) = s3_dialogue(dir.path(), "packages");
+    assert!(shows(&harness, "Add S3 connection"));
+    harness.key_press(egui::Key::Escape);
+    for _ in 0..4 {
+        harness.step();
+    }
+    assert!(!shows(&harness, "Add S3 connection"), "Escape left it open");
+    assert_eq!(saved_connections(&harness), 0);
+}
