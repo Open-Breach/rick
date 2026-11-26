@@ -8,9 +8,9 @@ use ext::Text;
 use ext::platform::Platform;
 use ext::{
     Connection, ConnectionField, ConnectionFieldKind, ConnectionForm, ConnectionReaction,
-    ConnectionSchema, Connector, async_trait, secret_key,
+    ConnectionSchema, ConnectionTest, ConnectionTestForm, Connector, async_trait, secret_key, t,
 };
-use types::{Error, ProviderId};
+use types::{CancelToken, Error, ProviderId};
 
 use crate::PROVIDER_ID;
 use crate::client::{Bucket, S3Client, message};
@@ -133,7 +133,7 @@ pub fn split_endpoint(text: &str) -> (String, Option<String>) {
 /// The endpoint and the bucket names of a connection's fields: the
 /// endpoint without its path, and the names of *Buckets* with the bucket
 /// the path named, when it is not among them already.
-fn endpoint_and_buckets(endpoint: &str, buckets: &str) -> (String, Vec<String>) {
+pub(crate) fn endpoint_and_buckets(endpoint: &str, buckets: &str) -> (String, Vec<String>) {
     let (endpoint, pasted) = split_endpoint(endpoint);
     let mut names = bucket_names(buckets);
     if let Some(bucket) = pasted
@@ -271,6 +271,21 @@ impl S3Connections {
         lock(&self.conns).get(name).cloned().ok_or(Error::NotFound)
     }
 
+    /// The secret key of the connection `name`, from the keychain.
+    async fn secret_of(&self, name: &str) -> Result<String, Error> {
+        let platform = Arc::clone(&self.platform);
+        let key = secret_key(PROVIDER_ID, name, field::SECRET_KEY);
+        ext::runtime::handle()
+            .spawn_blocking(move || platform.get_secret(&key))
+            .await
+            .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))))?
+            .ok_or_else(|| {
+                message(format!(
+                    "connection {name} has no secret key in the keychain"
+                ))
+            })
+    }
+
     /// The client of `name`, built on first use with the secret from the
     /// keychain.
     pub(crate) async fn client(&self, name: &str) -> Result<Arc<S3Client>, Error> {
@@ -283,17 +298,7 @@ impl S3Connections {
         let access_key = settings
             .get(field::ACCESS_KEY)
             .ok_or_else(|| message(format!("connection {name} has no access key")))?;
-        let platform = Arc::clone(&self.platform);
-        let key = secret_key(PROVIDER_ID, name, field::SECRET_KEY);
-        let secret = ext::runtime::handle()
-            .spawn_blocking(move || platform.get_secret(&key))
-            .await
-            .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))))?
-            .ok_or_else(|| {
-                message(format!(
-                    "connection {name} has no secret key in the keychain"
-                ))
-            })?;
+        let secret = self.secret_of(name).await?;
         let client = Arc::new(S3Client::new(
             &conn.endpoint,
             settings.get(field::REGION).unwrap_or_default(),
@@ -368,5 +373,22 @@ impl Connector for S3Connections {
 
     fn react(&self, form: &ConnectionForm<'_>) -> ConnectionReaction {
         react(form)
+    }
+
+    fn checks(&self) -> Vec<String> {
+        crate::check::labels()
+    }
+
+    /// The four checks of specs/s3-connection.md 3.2 on the form's values.
+    /// The secret key is the one typed; in *Edit…*, left empty, it is the
+    /// keychain's, read and never written.
+    async fn test(&self, form: &ConnectionTestForm<'_>, cancel: &CancelToken) -> ConnectionTest {
+        let typed = form.get(field::SECRET_KEY);
+        let secret = match (typed.is_empty(), form.name) {
+            (false, _) => Ok(typed.to_owned()),
+            (true, Some(name)) => self.secret_of(name).await,
+            (true, None) => Err(message(t!("s3-test-no-secret"))),
+        };
+        crate::check::run(form, secret, ext::CHECK_TIMEOUT, cancel).await
     }
 }

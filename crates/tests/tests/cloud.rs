@@ -797,3 +797,217 @@ fn a_connection_saved_before_the_buckets_field_loads_unchanged() {
     assert_eq!(value("region"), "us-east-1");
     assert_eq!(value("endpoint"), "http://127.0.0.1:1");
 }
+
+/// A local stand-in for an S3 service with a bucket-scoped key: listing
+/// the buckets is refused, the bucket `packages` lists, every other
+/// bucket does not exist. Returns its endpoint. No real account.
+fn scoped_s3_service() -> String {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("{e}"));
+    let port = listener
+        .local_addr()
+        .unwrap_or_else(|e| panic!("{e}"))
+        .port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let Ok(clone) = stream.try_clone() else {
+                continue;
+            };
+            let mut reader = BufReader::new(clone);
+            let mut request = String::new();
+            if reader.read_line(&mut request).is_err() {
+                continue;
+            }
+            let mut line = String::new();
+            while reader.read_line(&mut line).is_ok_and(|n| n > 0) && line != "\r\n" {
+                line.clear();
+            }
+            let target = request.split_whitespace().nth(1).unwrap_or_default();
+            let error =
+                |code: &str| format!("<Error><Code>{code}</Code><Message>{code}</Message></Error>");
+            let (status, body) = if target == "/" {
+                (403, error("AccessDenied"))
+            } else if target.starts_with("/packages/") {
+                (
+                    200,
+                    "<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>"
+                        .to_owned(),
+                )
+            } else {
+                (404, error("NoSuchBucket"))
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} X\r\ncontent-type: application/xml\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+/// Pastes `text` over what the field of the row `label` holds.
+fn fill_field(harness: &mut Harness<'_, RickUi>, label: &str, text: &str) {
+    // The dialogue moves when a row comes or goes: let it rest.
+    for _ in 0..4 {
+        harness.step();
+    }
+    let at = dialogue_field(harness, label);
+    click_at(harness, at, egui::PointerButton::Primary);
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    harness.step();
+    harness.event(egui::Event::Paste(text.to_owned()));
+    harness.step();
+    harness.step();
+}
+
+fn click_label(harness: &mut Harness<'_, RickUi>, label: &str) {
+    for _ in 0..4 {
+        harness.step();
+    }
+    let at = harness.get_by_label(label).rect().center();
+    click_at(harness, at, egui::PointerButton::Primary);
+}
+
+fn shows(harness: &Harness<'_, RickUi>, text: &str) -> bool {
+    harness.query_all_by_label_contains(text).next().is_some()
+}
+
+fn saved_connections(harness: &Harness<'_, RickUi>) -> usize {
+    harness.state().app().model().settings.connections.len()
+}
+
+/// The *Add S3 connection* dialogue, filled in for a bucket-scoped key on
+/// a local stand-in, with *Buckets* as given.
+fn s3_dialogue(dir: &Path, buckets: &str) -> (Harness<'static, RickUi>, Arc<Fake>) {
+    let endpoint = scoped_s3_service();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![Arc::new(ext_vfs_s3::S3Extension::new())],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1400.0, 800.0))
+        .with_step_dt(0.05)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let add = panel_rects(&harness, "Add connection");
+    click_at(&mut harness, add[0].center(), egui::PointerButton::Primary);
+    harness.step();
+    assert!(shows(&harness, "Test"), "the S3 dialogue has a Test button");
+    // The name has the focus when the dialogue opens.
+    harness.event(egui::Event::Paste("scoped".to_owned()));
+    harness.step();
+    fill_field(&mut harness, "Endpoint", &endpoint);
+    fill_field(&mut harness, "Access key", "key");
+    fill_field(&mut harness, "Secret key", "typed-secret");
+    fill_field(&mut harness, "Buckets", buckets);
+    (harness, fake)
+}
+
+/// OK was clicked: steps until the test that is not good holds the save.
+fn held(harness: &mut Harness<'_, RickUi>) {
+    assert!(step_until(harness, Duration::from_secs(10), |h| {
+        shows(h, "Save anyway")
+    }));
+    assert!(shows(harness, "The test did not pass"));
+}
+
+/// Issue 310, `specs/s3-connection.md` 3.6, through the real dialogue:
+/// *OK* with a test that is not good saves nothing, and neither does
+/// going back to the fields or the *Test* button; with the bucket's name
+/// put right the test is good and *OK* saves at once. The typed secret
+/// reaches the keychain only then, and no file.
+#[test]
+fn a_test_that_is_not_good_saves_nothing_and_going_back_saves_nothing() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, fake) = s3_dialogue(dir.path(), "pakages");
+
+    click_label(&mut harness, "OK");
+    held(&mut harness);
+    assert!(shows(&harness, "The bucket pakages can be opened"));
+    assert!(shows(&harness, "NoSuchBucket"));
+    assert_eq!(saved_connections(&harness), 0);
+    assert_eq!(fake.secrets().len(), 0, "{:?}", fake.secrets());
+
+    click_label(&mut harness, "Back to the fields");
+    settle(&mut harness);
+    assert!(!shows(&harness, "Save anyway"));
+    assert!(shows(&harness, "Add S3 connection"), "the dialogue stays");
+    assert_eq!(saved_connections(&harness), 0);
+
+    // The Test button shows the result and offers no save.
+    click_label(&mut harness, "Test");
+    assert!(step_until(&mut harness, Duration::from_secs(10), |h| {
+        shows(h, "NoSuchBucket")
+    }));
+    assert!(!shows(&harness, "Save anyway"));
+    assert_eq!(saved_connections(&harness), 0);
+    assert_eq!(fake.secrets().len(), 0, "{:?}", fake.secrets());
+
+    // The name put right: the result of the old form goes, the test is
+    // good, and OK saves and closes.
+    fill_field(&mut harness, "Buckets", "packages");
+    assert!(
+        !shows(&harness, "NoSuchBucket"),
+        "an edit forgets the result"
+    );
+    click_label(&mut harness, "OK");
+    assert!(step_until(&mut harness, Duration::from_secs(10), |h| {
+        saved_connections(h) == 1
+    }));
+    assert!(!shows(&harness, "Add S3 connection"), "the dialogue closed");
+    settle(&mut harness);
+    assert_eq!(
+        fake.secrets()
+            .get("s3/scoped/secret_key")
+            .map(String::as_str),
+        Some("typed-secret")
+    );
+    for file in fs::read_dir(fake.config_dir())
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let text = fs::read(file.path()).unwrap_or_default();
+        assert!(
+            !String::from_utf8_lossy(&text).contains("typed-secret"),
+            "the secret is in {}",
+            file.path().display()
+        );
+    }
+}
+
+/// The other choice of 3.4: *Save anyway* saves the connection as typed,
+/// mistyped name and all, which is also how one is added while offline.
+#[test]
+fn save_anyway_saves_a_connection_whose_test_is_not_good() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, fake) = s3_dialogue(dir.path(), "pakages");
+    click_label(&mut harness, "OK");
+    held(&mut harness);
+    assert_eq!(saved_connections(&harness), 0);
+    click_label(&mut harness, "Save anyway");
+    assert!(step_until(&mut harness, Duration::from_secs(10), |h| {
+        saved_connections(h) == 1
+    }));
+    assert!(!shows(&harness, "Add S3 connection"), "the dialogue closed");
+    let entry = harness.state().app().model().settings.connections[0].clone();
+    assert_eq!(entry.name, "scoped");
+    assert_eq!(
+        entry.settings.get("buckets").map(String::as_str),
+        Some("pakages")
+    );
+    settle(&mut harness);
+    assert_eq!(
+        fake.secrets()
+            .get("s3/scoped/secret_key")
+            .map(String::as_str),
+        Some("typed-secret")
+    );
+}

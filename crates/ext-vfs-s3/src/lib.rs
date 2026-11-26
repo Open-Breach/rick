@@ -47,6 +47,7 @@
 // allowance (QUESTIONS.md 82).
 #![deny(unsafe_code)]
 
+mod check;
 mod client;
 mod connection;
 mod provider;
