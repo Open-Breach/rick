@@ -1290,3 +1290,136 @@ fn an_empty_endpoint_is_aws_and_an_unknown_host_is_the_generic_form() {
         ]
     );
 }
+
+/// The fields of specs/s3-connection.md 1.1 and the messages of 1.2
+/// against a real store (issue 309): `MinIO` as the round trip uses it,
+/// with its administrator's key, which may list buckets. The refusals a
+/// bucket-scoped key meets are in the tests above, against a local server
+/// that answers with the service's own error body. Skips with a note
+/// without `RICK_S3_ENDPOINT`, and fails instead under
+/// `RICK_REQUIRE_CONTAINERS`.
+#[test]
+// One scenario against one store, start to finish.
+#[allow(clippy::too_many_lines)]
+fn against_a_store_named_buckets_show_without_listing_and_refusals_keep_their_code() {
+    use platform::Secrets as _;
+
+    let Ok(endpoint) = std::env::var("RICK_S3_ENDPOINT") else {
+        eprintln!("RICK_S3_ENDPOINT is not set: no S3 store to test against; skipped");
+        assert!(
+            std::env::var_os("RICK_REQUIRE_CONTAINERS").is_none(),
+            "RICK_REQUIRE_CONTAINERS is set but RICK_S3_ENDPOINT is not"
+        );
+        return;
+    };
+    english();
+    let access = std::env::var("RICK_S3_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".into());
+    let secret = std::env::var("RICK_S3_SECRET_KEY").unwrap_or_else(|_| "minioadmin".into());
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let bucket = format!("rick-named-{stamp}");
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let conns = Arc::new(S3Connections::new(fake.clone()));
+    let provider = S3Provider::new(Arc::clone(&conns));
+    // admin: lists; named: the same key with the bucket and a mistyped one
+    // named; pasted: the bucket's address as the endpoint; badkey and
+    // badsecret: wrong credentials.
+    let connection = |name: &str, endpoint: &str, access: &str, secret: &str, buckets: &str| {
+        let mut conn = ext::Connection {
+            name: name.into(),
+            ..ext::Connection::default()
+        };
+        conn.settings.insert("endpoint".into(), endpoint.to_owned());
+        conn.settings.insert("access_key".into(), access.to_owned());
+        if !buckets.is_empty() {
+            conn.settings.insert("buckets".into(), buckets.to_owned());
+        }
+        fake.store_secret(&ext::secret_key(PROVIDER_ID, name, "secret_key"), secret)
+            .unwrap_or_else(|e| panic!("{e}"));
+        conn
+    };
+    let missing = format!("rick-missing-{stamp}");
+    conns.update(vec![
+        connection("admin", &endpoint, &access, &secret, ""),
+        connection(
+            "named",
+            &endpoint,
+            &access,
+            &secret,
+            &format!("{bucket}, {missing}"),
+        ),
+        connection(
+            "pasted",
+            &format!("{endpoint}/{bucket}"),
+            &access,
+            &secret,
+            "",
+        ),
+        connection("badkey", &endpoint, "rick-no-such-key", &secret, ""),
+        connection("badsecret", &endpoint, &access, "rick-wrong-secret", ""),
+    ]);
+    let at = |path: &str| Location::new(PROVIDER_ID, path);
+    runtime::block_on(async {
+        provider
+            .create_dir(&at(&format!("/admin/{bucket}")))
+            .await
+            .unwrap_or_else(|e| panic!("create bucket: {e}"));
+
+        // An admin key with *Buckets* empty lists every bucket, as before.
+        let all = names_at(&provider, "/admin", ext::Depth::One).await;
+        assert!(all.unwrap_or_else(|e| panic!("{e}")).contains(&bucket));
+
+        // Named buckets are the root, as typed, and open.
+        let named = names_at(&provider, "/named", ext::Depth::One).await;
+        assert_eq!(
+            named.unwrap_or_else(|e| panic!("{e}")),
+            [bucket.clone(), missing.clone()]
+        );
+        let inside = names_at(&provider, &format!("/named/{bucket}"), ext::Depth::One).await;
+        assert_eq!(
+            inside.unwrap_or_else(|e| panic!("{e}")),
+            Vec::<String>::new()
+        );
+        // A name that was saved all the same is reported when it is
+        // opened, with the service's reason.
+        let gone = names_at(&provider, &format!("/named/{missing}"), ext::Depth::One)
+            .await
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(gone.contains("NoSuchBucket"), "{gone}");
+        assert!(gone.contains("does not exist"), "{gone}");
+
+        // The bucket's address as the endpoint: the root shows the bucket.
+        let pasted = names_at(&provider, "/pasted", ext::Depth::One).await;
+        assert_eq!(
+            pasted.unwrap_or_else(|e| panic!("{e}")),
+            std::slice::from_ref(&bucket)
+        );
+        let inside = names_at(&provider, &format!("/pasted/{bucket}"), ext::Depth::One).await;
+        assert_eq!(
+            inside.unwrap_or_else(|e| panic!("{e}")),
+            Vec::<String>::new()
+        );
+
+        // Wrong credentials say which they were.
+        let key = conns.connect("badkey").await.err().map(|e| e.to_string());
+        let key = key.unwrap_or_default();
+        assert!(key.contains("InvalidAccessKeyId"), "{key}");
+        assert!(key.contains("not recognised"), "{key}");
+        let sig = conns
+            .connect("badsecret")
+            .await
+            .err()
+            .map(|e| e.to_string());
+        let sig = sig.unwrap_or_default();
+        assert!(sig.contains("SignatureDoesNotMatch"), "{sig}");
+        assert!(sig.contains("wrong secret key"), "{sig}");
+
+        provider
+            .remove(&at(&format!("/admin/{bucket}")), ext::RemoveMode::Permanent)
+            .await
+            .unwrap_or_else(|e| panic!("remove bucket: {e}"));
+    });
+}
