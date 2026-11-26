@@ -7,6 +7,74 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+### Added
+
+- **S3: a *Buckets* field for keys that may not list buckets.** A
+  connection can name its buckets, separated by commas. Its root then
+  shows exactly those names, without asking the service, which is the way
+  in for a bucket-scoped Cloudflare R2 token or an AWS key limited to one
+  bucket. With the field empty the root lists the account's buckets as
+  before, and `s3:/<connection>/<bucket>` in the address bar opens a
+  bucket whether or not it is named (#312).
+- S3: the provider is recognised from the endpoint as it is typed or
+  pasted. Its name shows under the endpoint, and the region and the
+  addressing style fill in where nothing was typed: Amazon S3, Cloudflare
+  R2, Backblaze B2, Wasabi, DigitalOcean Spaces, Scaleway, OVHcloud and
+  Google Cloud Storage through its S3-compatible API. An empty endpoint
+  is AWS; any other host gets the full form as before. A value typed by
+  hand is never replaced (#316).
+- The extension API is 24 (#315): a connection dialogue can react while
+  the user types. `ext::Connector` gained `react`, with a default: the
+  dialogue hands it the form after each edit, and the plugin may fill
+  fields the user has not edited, move pasted input into the fields it
+  belongs to and put a short note by a field. A plugin that does not
+  react is only rebuilt.
+- **A cloud connection is tested before it is saved.** The *Add
+  connection…* and *Edit…* dialogues of S3, Azure Blob and Google Cloud
+  Storage have a *Test* button, which tests what is in the form and
+  saves nothing. *Add* and *Save* run the test first: a good test saves
+  and closes; one that is not good keeps the dialogue open with its
+  checks, each passed, failed with the service's code and reason, or not
+  run, and offers *Save anyway* beside going back to the fields. A test
+  only reads, each check gives up after ten seconds, and the test can be
+  cancelled (#320).
+- S3 tests four things: the host is reachable, the credentials are
+  accepted, the key may list buckets, and each bucket named in *Buckets*
+  can be opened. With buckets named, a key that may not list them is a
+  note and not a failure; with none it fails with the hint to name them
+  (#322).
+- Azure Blob and Google Cloud Storage test three things each: the host
+  is reachable, the credentials are accepted, and the containers or
+  buckets can be listed (#323).
+- The extension API is 25 (#320): a connection can be tested.
+  `ext::Connector` gained `checks` and `test`, both with defaults. A
+  plugin without a test shows no *Test* button and is saved as before;
+  it is only rebuilt.
+
+### Changed
+
+- The first button of a connection dialogue reads *Add*, or *Save* when
+  editing; it read *OK* (#322).
+
+### Fixed
+
+- A debug log no longer holds a connection's secret. Adding or editing
+  a connection wrote the command with all its values, the secret key or
+  password among them, into the log at debug level. The log now names
+  the fields and no value. A log written at debug level by 0.6.0 or
+  earlier may hold such a secret (#320).
+- S3: a refusal says what it was. Every 403 used to read "permission
+  denied"; now a key that may not list buckets is told to name them in
+  the *Buckets* field, and a wrong access key, a wrong secret key, a
+  missing bucket and a denied bucket or object each have their own
+  message, with the service's code (#314).
+- S3: a bucket's address pasted as the endpoint no longer loses its
+  bucket. The path was dropped silently on every request; now the
+  endpoint is left clean and the bucket goes into *Buckets*, in the
+  dialogue as it is pasted and for a connection that was saved that way
+  (#316).
+- `url` 2.5.9, for RUSTSEC-2026-0592 (#313).
+
 ## [0.6.0] - 2026-11-20
 
 Plugins come in two kinds from here on: the ones every install has, and
