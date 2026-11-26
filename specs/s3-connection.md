@@ -1,8 +1,8 @@
-# Rick — S3 connection and connection GUI
+# Rick — S3 connection, connection GUI and connection test
 
-Status: drafted 2026-11-19, deferred. Not started and not binding yet: the work begins once the release now in progress, which reconfigures the plugins, is out. Until then this file is not in the `SPEC.md` index and no issue lists it. It has two parts, meant to be opened as two separate tasks against `dev`. The task that starts a part adds this file to the index and brings the sections it changes in line: *Object storage* in `specs/scope.md`, *Dialogues* in `specs/gui-dialogues.md`, and *Cloud* and *Virtual locations* in `specs/gui-side-panel.md`.
+Status: binding from 2026-11-26, for release 0.6.1. Drafted on 2026-11-19 and deferred until 0.6.0 was out. It has three parts, each an issue against `dev`. The order of work is Part 1, the S3 connection (issue #309); then Part 3, the connection test (issue #310); then Part 2, the connection GUI (issue #311). Part 3 was added on 2026-11-26, and the parts kept their numbers.
 
-Related: specs/scope.md, specs/gui-look.md, specs/gui-dialogues.md, specs/gui-side-panel.md, specs/gui-main-area.md, specs/ext-ssh.md
+Related: specs/scope.md, specs/gui-look.md, specs/gui-dialogues.md, specs/gui-side-panel.md, specs/gui-main-area.md, specs/plugins.md, specs/plugin-distribution.md, specs/ext-ssh.md
 
 ## Background
 
@@ -15,7 +15,9 @@ An S3 connection to Cloudflare R2 with a bucket-scoped token ("Object Read & Wri
 
 This is general S3 behaviour, not an R2 quirk: listing buckets is an account-level permission, separate from access inside one bucket.
 
-Confirmed in the app on 2026-11-19: with the plain endpoint, typing `s3:/<connection>/<bucket>` in the address bar opens the bucket, so a bucket-scoped token works inside its bucket. With such a token that is the only way in today.
+Confirmed in the app on 2026-11-19: with the plain endpoint, typing `s3:/<connection>/<bucket>` in the address bar opens the bucket, so a bucket-scoped token works inside its bucket. With such a token that is the only way in before 0.6.1.
+
+A second gap, named on 2026-11-26: a cloud connection is saved without any check. A wrong endpoint, a wrong key or a mistyped bucket name shows only later, when the connection is opened. Part 3 closes it.
 
 ## Part 1 — S3 connection
 
@@ -23,15 +25,17 @@ Confirmed in the app on 2026-11-19: with the plain endpoint, typing `s3:/<connec
 
 - New optional field *Buckets* on the S3 connection: one text field, bucket names separated by commas.
 - Parsing: split on commas, trim whitespace, ignore empty entries, drop duplicates, keep the order typed.
-- When the field has names, the connection root shows exactly those names as folders. Rick does not call `ListBuckets` and does not check the names up front.
+- When the field has names, the connection root shows exactly those names as folders, as typed. Showing the root sends no request: Rick does not call `ListBuckets` for it and does not check the names there.
 - When the field is empty, behaviour is as today: the root is filled from `ListBuckets`.
-- A mistyped or forbidden bucket is reported only when it is opened, with the server's real reason (see 1.2).
-- The names are stored on the connection entry in `rick.toml` and are optional. Existing connections without them load and behave unchanged.
+- The names are checked when the connection is added, saved or tested (Part 3). The rule of 2026-11-19, that a name is never checked up front, was revoked on 2026-11-26.
+- A name that was saved all the same, through *Save anyway*, is reported when it is opened, with the service's real reason (see 1.2).
+- The names are stored on the connection entry in `rick.toml` and are optional. They are kept as the text typed, through a text field of the connection: no new field kind and no TOML list. Existing connections without them load and behave unchanged.
 - Going straight to a bucket through the address bar (`s3:/<connection>/<bucket>`) keeps working whether or not that bucket is in the list.
+- *Connect* on a saved connection lists the buckets when *Buckets* is empty, as today, so wrong credentials are reported at once. With *Buckets* filled it sends no request.
 
 Bucket path pasted onto the endpoint:
 
-- Today the client replaces the endpoint's path with its own on every request. A bucket name added to the endpoint is silently dropped, and Rick still calls `ListBuckets`.
+- Before 0.6.1 the client replaces the endpoint's path with its own on every request. A bucket name added to the endpoint is silently dropped, and Rick still calls `ListBuckets`.
 - New behaviour: when the endpoint carries a path, Rick takes the bucket name from it, adds it to *Buckets*, and keeps the endpoint without the path. Pasting the bucket address that Cloudflare's dashboard shows then just works.
 - The dialogue shows this as it happens: the endpoint field is left clean and the name appears in *Buckets*. Nothing is dropped silently.
 - A connection already saved with a path on its endpoint is treated the same way when it is loaded.
@@ -57,6 +61,7 @@ Keep the service's error code instead of folding every 403 into "permission deni
 - An empty endpoint means AWS, where only the region matters. An Amazon address pasted in is recognised as AWS too.
 - An unknown host shows the full form as today (generic S3-compatible, such as MinIO or Ceph).
 - Recognition is a small table: host pattern, provider name, region rule, path-style default. Adding a provider means adding a row.
+- The fields of the dialogue, in order: Endpoint, the recognised provider, Region, Access key, Secret key, Buckets, Path-style addressing.
 
 First table; every provider in it is confirmed for the first cut. The patterns and defaults are written from memory and must be checked against each provider's documentation before they are hard-coded.
 
@@ -85,13 +90,15 @@ First table; every provider in it is confirmed for the first cut. The patterns a
 
 ## Part 2 — Connection GUI tidy-up
 
-The style guide below is the project's own: *Look and feel* in `specs/gui-look.md` and the rules every dialogue follows at the top of *Dialogues* in `specs/gui-dialogues.md`. This part points at them and does not restate them.
+The style guide below is the project's own: *Look and feel* in `specs/gui-look.md` and the rules every dialogue follows at the top of *Dialogues* in `specs/gui-dialogues.md`. This part points at them and does not restate them. It is the last of the three parts to be built.
 
 ### 2.1 Connection dialogues
 
 - All cloud provider and network provider connection dialogues are still off the style guide: cramped and not nice. Bring every one of them in line with it.
-- The S3 dialogue is rebuilt in Part 1 anyway. Do it to the style guide first and use it as the model for the others.
-- No functional change to the other dialogues in this task.
+- *Add connection…* and *Edit…* are one dialogue, built from each plugin's fields, so it is brought on the guide once, for S3, Azure Blob, Google Cloud Storage and SSH. The S3 dialogue, with its recognised-provider label and its test, is the one to check first.
+- The *Test* button and the list of its results (Part 3) belong to the dialogue and follow the guide like the rest.
+- No behaviour of a connection changes in this part.
+- The dialogue gets an entry of its own under *Dialogues* in `specs/gui-dialogues.md`, written by the task that builds it.
 
 ### 2.2 Cloud connections view
 
@@ -104,13 +111,77 @@ The style guide below is the project's own: *Look and feel* in `specs/gui-look.m
 - Every cloud and network connection dialogue has been checked against the style guide.
 - Columns in the connections view resize by dragging and fit themselves to content, the same as in the details view.
 
+## Part 3 — Connection test
+
+Decided on 2026-11-26. It is built after Part 1, whose error codes it uses, and before Part 2.
+
+### 3.1 The Test button
+
+- The *Add connection…* and *Edit…* dialogues of the cloud providers (S3, Azure Blob, Google Cloud Storage) get a **Test** button.
+- It tests what is in the form at that moment. Nothing is saved first. In *Edit*, a secret left empty is the one in the keychain.
+- The result is a short list of checks in the dialogue, in the order they ran. Each is passed, failed or not run. A failed check shows the service's own code and reason, as 1.2 has it.
+- A check that depends on a failed one is not run.
+- SSH has no *Test* button for now, and a saved connection has no *Test* entry in its context menu.
+
+### 3.2 The checks
+
+| Provider | Checks, in order |
+| --- | --- |
+| S3 | 1. The host is reachable. 2. The credentials are accepted. 3. The key may list buckets. 4. Each name in *Buckets* can be opened: accessible, denied or missing, per name. |
+| Azure Blob | 1. The host is reachable. 2. The credentials are accepted. 3. The account's containers can be listed. |
+| Google Cloud Storage | 1. The host is reachable. 2. The credentials are accepted. 3. The project's buckets can be listed. |
+
+The names in *Buckets* are checked whether or not the key may list buckets, so a mistyped name is caught either way.
+
+### 3.3 When a test is good
+
+- Azure Blob and Google Cloud Storage: all three checks passed.
+- S3, always: the host is reachable and the credentials are accepted.
+- S3 with names in *Buckets*: every name can be opened. Whether the key may list buckets is then shown as information and is not a failure.
+- S3 with *Buckets* empty: the key may list buckets. If it may not, the test is not good, and the message is the one of 1.2 with the hint to add bucket names.
+
+### 3.4 Saving
+
+- *Add* and, in *Edit*, *Save* run the test first.
+- A good test saves and closes, as before.
+- A test that is not good keeps the dialogue open, shows the results with a warning, and offers **Save anyway** beside going back to the fields. Nothing is saved until the user chooses.
+- An unreachable host is not good, like any other failure. *Save anyway* is how a connection is added while offline.
+
+### 3.5 Limits
+
+- The test only reads. It creates, changes and deletes nothing on the service.
+- Each check gives up after 10 seconds, and the test can be cancelled. The dialogue stays usable while it runs.
+- A secret typed in the form goes to the plugin's test and nowhere else: not into a file, not into a log.
+- Browsing does not change. The root of an S3 connection with *Buckets* filled still shows the names as typed, without a request (1.1), and *Connect* on a saved connection stays as 1.1 has it.
+
+### 3.6 Acceptance
+
+- R2 with a bucket-scoped key and the bucket named: the test is good, and the list-buckets line shows as information.
+- The same key with *Buckets* empty, a wrong secret, a mistyped bucket name and an unreachable host each give a test that is not good, with their own line and reason.
+- *Add* with a test that is not good saves nothing until *Save anyway* is chosen, and saves nothing when the user goes back to the fields.
+- An admin key with *Buckets* empty: the test is good.
+- Azure Blob and Google Cloud Storage: a good test and a test that is not good, each.
+- After a test, a typed secret is in no file and in no log line.
+
+## Extension point
+
+Parts 1 and 3 each need something the connection extension point does not have: the dialogue is one generic form built from a plugin's fixed list of fields, and a connection is saved without asking the plugin anything.
+
+- Part 1: the dialogue asks the plugin after each edit, and the plugin may fill fields the user has not edited by hand and put a short note by a field. The recognition table lives in `ext-vfs-s3`, not in the dialogue.
+- Part 3: each plugin says what its test checks and runs it on the values of the form. A plugin without a test shows no *Test* button and is saved as before.
+- Each of the two changes raises the extension API by one: Part 1 makes it 24, Part 3 makes it 25. A plugin that uses neither changes only its API version.
+- Decided on 2026-11-26: both changes ship in 0.6.1, a patch release. A plugin build fits one Rick release anyway (`specs/plugin-distribution.md`), so every plugin is published again with it.
+- The shape of each change is proposed by the pull request that makes it. A docs pull request then records it here and where `specs/plugins.md` describes the versioned contract.
+
 ## Code pointers
 
-Not part of the decisions above: where each point lands in the code, read on `dev` at `f80ea84` (2026-11-19). The release in progress may move them.
+Not part of the decisions above: where each point lands in the code, read on `dev` at `f28c813` (2026-11-26, v0.6.0). Lines move.
 
-- The account root: `list()` in `crates/ext-vfs-s3/src/provider.rs`, the `Place::Account` arm, which calls `list_buckets()` (lines 477–479).
-- The folded 403s: `failed()` in `crates/ext-vfs-s3/src/client.rs` (lines 73–76).
-- The dropped endpoint path: `target()` in the same file, `url.set_path(&path)` (line 411).
-- The fields of the S3 connection: `schema()` in `crates/ext-vfs-s3/src/connection.rs`. A `Text` field keeps *Buckets* in `rick.toml` as the text typed; a TOML list would need a new field kind.
-- *Add connection…* is one generic dialogue built from each plugin's `ConnectionSchema` (`crates/ext/src/connection.rs`), and S3, Azure Blob, GCS and SSH all go through it. The schema is a fixed list of fields, so the form reacting to the endpoint (1.3, and the pasted path in 1.1) needs something it does not have today. That changes an extension point, a major decision under `CLAUDE.md`: the task lists it under **Needs a decision**.
-- The Cloud overview's table: `cloud_table()` in `crates/ui-egui/src/overview.rs`.
+- The account root: `list()` in `crates/ext-vfs-s3/src/provider.rs`, the `Place::Account` arm, which calls `list_buckets()` (line 479). The same file calls it once more for a listing of unlimited depth beneath an account (line 357); with *Buckets* filled that one goes through the names too.
+- *Connect*: `connect()` in `crates/ext-vfs-s3/src/connection.rs` verifies with `list_buckets()` (line 196).
+- The folded 403s: `failed()` in `crates/ext-vfs-s3/src/client.rs` (line 67).
+- The dropped endpoint path: `target()` in the same file, `url.set_path(&path)` (line 412).
+- The fields of the S3 connection: `schema()` in `crates/ext-vfs-s3/src/connection.rs`.
+- The extension point: `Connector`, `ConnectionSchema` and `ConnectionFieldKind` in `crates/ext/src/connection.rs`; `API_VERSION` in `crates/ext/src/registry.rs`.
+- The dialogue: `ConnectionDialog` and `connection_dialog()` in `crates/ui-egui/src/side_panel.rs`. It is one generic dialogue, and S3, Azure Blob, GCS and SSH all go through it. Saving is `Command::AddConnection` and `Command::EditConnection`, handled in `crates/app/src/lib.rs`; nothing is tested there before 0.6.1.
+- The Cloud overview's table: `cloud_table()` in `crates/ui-egui/src/overview.rs`, which the connections of the Network overview share. The details view's columns are the shared table in `crates/ui-egui/src/table.rs`.
