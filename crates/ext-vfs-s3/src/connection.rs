@@ -14,6 +14,7 @@ use types::{Error, ProviderId};
 
 use crate::PROVIDER_ID;
 use crate::client::{Bucket, S3Client, message};
+use crate::recognition::recognise;
 
 /// The field keys of the *Add connection…* dialogue and `rick.toml`.
 pub mod field {
@@ -33,6 +34,10 @@ pub mod field {
     pub const PATH_STYLE: &str = "path_style";
 }
 
+/// The region a connection signs with when nothing says another: what
+/// the generic S3-compatible stores take.
+const DEFAULT_REGION: &str = "us-east-1";
+
 /// The fields of the dialogue, in display order.
 #[must_use]
 pub fn schema() -> ConnectionSchema {
@@ -51,7 +56,7 @@ pub fn schema() -> ConnectionSchema {
                 key: field::REGION,
                 label: Text("s3-region"),
                 kind: ConnectionFieldKind::Text {
-                    default: "us-east-1".to_owned(),
+                    default: DEFAULT_REGION.to_owned(),
                 },
                 required: false,
             },
@@ -139,20 +144,47 @@ fn endpoint_and_buckets(endpoint: &str, buckets: &str) -> (String, Vec<String>) 
     (endpoint, names)
 }
 
-/// What the dialogue does after an edit (specs/s3-connection.md 1.1): an
-/// endpoint that carries a path, once it is whole, is left clean and the
-/// bucket its path named joins *Buckets*. Nothing is dropped silently.
+/// What the dialogue does after an edit.
+///
+/// An endpoint that carries a path, once it is whole, is left clean and
+/// the bucket its path named joins *Buckets*; nothing is dropped silently
+/// (specs/s3-connection.md 1.1).
+///
+/// The provider is recognised from the endpoint's host as it is typed:
+/// its name shows by the endpoint, and the region and the addressing
+/// style it settles fill their fields where the user has not typed. An
+/// empty endpoint is AWS, where the user enters the region; a host no row
+/// of the table knows gets the generic form, with the schema's defaults
+/// (specs/s3-connection.md 1.3).
 #[must_use]
 pub fn react(form: &ConnectionForm<'_>) -> ConnectionReaction {
     let mut reaction = ConnectionReaction::default();
     let typed = form.get(field::ENDPOINT);
+    let mut endpoint = typed.to_owned();
     if form.settled {
-        let (endpoint, buckets) = endpoint_and_buckets(typed, form.get(field::BUCKETS));
-        if endpoint != typed {
-            reaction.rewrite.push((field::ENDPOINT, endpoint));
+        let (clean, buckets) = endpoint_and_buckets(typed, form.get(field::BUCKETS));
+        if clean != typed {
+            reaction.rewrite.push((field::ENDPOINT, clean.clone()));
             reaction.rewrite.push((field::BUCKETS, buckets.join(", ")));
+            endpoint = clean;
         }
     }
+    // What the host does not settle starts at the schema's defaults: the
+    // region of AWS with an empty endpoint is the user's to enter.
+    let (region, path_style) = match recognise(&endpoint) {
+        Some(known) => {
+            reaction.notes.push((field::ENDPOINT, known.provider.get()));
+            (known.region, known.path_style)
+        }
+        None => (None, true),
+    };
+    reaction.fill.push((
+        field::REGION,
+        region.unwrap_or_else(|| DEFAULT_REGION.to_owned()),
+    ));
+    reaction
+        .fill
+        .push((field::PATH_STYLE, path_style.to_string()));
     reaction
 }
 

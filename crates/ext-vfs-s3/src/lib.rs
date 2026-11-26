@@ -50,6 +50,7 @@
 mod client;
 mod connection;
 mod provider;
+mod recognition;
 
 use std::sync::Arc;
 
@@ -62,6 +63,7 @@ use types::{Error, ExtId, Location, ProviderId};
 pub use client::{S3Client, S3Error, sign};
 pub use connection::{S3Connections, bucket_names, react, schema, split_endpoint};
 pub use provider::S3Provider;
+pub use recognition::{Recognised, RegionRule, Row, TABLE, recognise};
 
 /// The extension id.
 pub const ID: ExtId = ExtId("vfs-s3");
