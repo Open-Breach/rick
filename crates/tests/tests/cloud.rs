@@ -910,7 +910,7 @@ fn s3_dialogue(dir: &Path, buckets: &str) -> (Harness<'static, RickUi>, Arc<Fake
     (harness, fake)
 }
 
-/// OK was clicked: steps until the test that is not good holds the save.
+/// *Add* was clicked: steps until the test that is not good holds the save.
 fn held(harness: &mut Harness<'_, RickUi>) {
     assert!(step_until(harness, Duration::from_secs(10), |h| {
         shows(h, "Save anyway")
@@ -919,16 +919,16 @@ fn held(harness: &mut Harness<'_, RickUi>) {
 }
 
 /// Issue 310, `specs/s3-connection.md` 3.6, through the real dialogue:
-/// *OK* with a test that is not good saves nothing, and neither does
+/// *Add* with a test that is not good saves nothing, and neither does
 /// going back to the fields or the *Test* button; with the bucket's name
-/// put right the test is good and *OK* saves at once. The typed secret
+/// put right the test is good and *Add* saves at once. The typed secret
 /// reaches the keychain only then, and no file.
 #[test]
 fn a_test_that_is_not_good_saves_nothing_and_going_back_saves_nothing() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let (mut harness, fake) = s3_dialogue(dir.path(), "pakages");
 
-    click_label(&mut harness, "OK");
+    click_label(&mut harness, "Add");
     held(&mut harness);
     assert!(shows(&harness, "The bucket pakages can be opened"));
     assert!(shows(&harness, "NoSuchBucket"));
@@ -951,13 +951,13 @@ fn a_test_that_is_not_good_saves_nothing_and_going_back_saves_nothing() {
     assert_eq!(fake.secrets().len(), 0, "{:?}", fake.secrets());
 
     // The name put right: the result of the old form goes, the test is
-    // good, and OK saves and closes.
+    // good, and Add saves and closes.
     fill_field(&mut harness, "Buckets", "packages");
     assert!(
         !shows(&harness, "NoSuchBucket"),
         "an edit forgets the result"
     );
-    click_label(&mut harness, "OK");
+    click_label(&mut harness, "Add");
     assert!(step_until(&mut harness, Duration::from_secs(10), |h| {
         saved_connections(h) == 1
     }));
@@ -989,7 +989,7 @@ fn a_test_that_is_not_good_saves_nothing_and_going_back_saves_nothing() {
 fn save_anyway_saves_a_connection_whose_test_is_not_good() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let (mut harness, fake) = s3_dialogue(dir.path(), "pakages");
-    click_label(&mut harness, "OK");
+    click_label(&mut harness, "Add");
     held(&mut harness);
     assert_eq!(saved_connections(&harness), 0);
     click_label(&mut harness, "Save anyway");

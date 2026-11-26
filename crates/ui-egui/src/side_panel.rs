@@ -859,7 +859,14 @@ fn connection_dialog(
             let held = matches!(dialog.test, TestPhase::Done { held: true, .. });
             ui.horizontal(|ui| {
                 let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                let ok = ui.add_enabled(!busy && !held, egui::Button::new(t!("ok")));
+                // *Add* and, in *Edit…*, *Save*, as specs/s3-connection.md 3.4
+                // names them.
+                let primary = if dialog.editing {
+                    t!("connection-save")
+                } else {
+                    t!("connection-add")
+                };
+                let ok = ui.add_enabled(!busy && !held, egui::Button::new(primary));
                 if ok.clicked() || (enter && !busy && !held) {
                     asked = Some(Asked::Ok);
                 }
