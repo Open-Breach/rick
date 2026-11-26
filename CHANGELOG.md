@@ -55,6 +55,23 @@ the pull request that brought the change.
 
 - The first button of a connection dialogue reads *Add*, or *Save* when
   editing; it read *OK* (#322).
+- **The connection dialogues follow the style guide.** *Add
+  connection…* and *Edit…* of S3, Azure Blob, Google Cloud Storage and
+  SSH are one dialogue in the frame of the others: a header with the
+  section's icon, the title and the section or the connection's name;
+  the fields in a grid, labels left of their controls and every control
+  as wide as its column; a footer with *Test*, *Cancel* and *Add* or
+  *Save*. The connection test is a card with a row per check, and a
+  refused save says why inside the dialogue. The long SSH form scrolls
+  while header and footer stay (#326).
+- The labels of the connection dialogues are short, and what a label
+  said in brackets stands under its field: *Endpoint* in place of
+  *Endpoint (empty for AWS)*, *Preview size cap* with *In MiB. 0 for the
+  default.* under it. No setting changed its key (#326).
+- The Cloud overview and the connections of the Network overview are
+  drawn with the table of the details view: the columns fit their
+  content, a drag on a divider resizes, a double-click fits again. A
+  connection's name is no longer cut to an ellipsis (#327).
 
 ### Fixed
 
@@ -63,6 +80,8 @@ the pull request that brought the change.
   password among them, into the log at debug level. The log now names
   the fields and no value. A log written at debug level by 0.6.0 or
   earlier may hold such a secret (#320).
+- Escape closes a connection dialogue. The side panel behind the
+  dialogue took the key, and Enter with it (#326).
 - S3: a refusal says what it was. Every 403 used to read "permission
   denied"; now a key that may not list buckets is told to name them in
   the *Buckets* field, and a wrong access key, a wrong secret key, a
