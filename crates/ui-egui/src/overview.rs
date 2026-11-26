@@ -97,16 +97,7 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, which: Virtual) {
     let entries: Vec<Entry> = cx.tab.listing.rows().cloned().collect();
     ui.add_space(6.0);
     if entries.is_empty() && cx.tab.listing.complete {
-        let text = match which {
-            Virtual::Network => {
-                "No network file system is mounted and no connection is configured. Add connection… in the side panel's Network section creates one."
-            }
-            Virtual::Cloud => {
-                "No cloud account is configured. Add connection… in the side panel's Cloud section creates one."
-            }
-            _ => "No drive is mounted.",
-        };
-        ui.weak(text);
+        empty(ui, cx, which);
         return;
     }
     egui::ScrollArea::vertical()
@@ -135,89 +126,302 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, which: Virtual) {
         });
 }
 
-/// One header cell.
-fn head(ui: &mut egui::Ui, text: &str) {
-    ui.strong(text);
+/// An overview with nothing in it: centred in the pane like the empty
+/// folder's message, the section's glyph, what is missing and, for Cloud
+/// and Network, a button per kind of connection a plugin offers, which
+/// opens its *Add connection…* dialogue right here.
+fn empty(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, which: Virtual) {
+    let scheme = crate::theme::scheme(ui);
+    let rect = ui.available_rect_before_wrap();
+    let (glyph, title, hint, section) = match which {
+        Virtual::Cloud => (
+            icons::CLOUD,
+            t!("overview-empty-cloud"),
+            t!("overview-empty-cloud-hint"),
+            Some(model::Section::Cloud),
+        ),
+        Virtual::Network => (
+            icons::NETWORK,
+            t!("overview-empty-network"),
+            t!("overview-empty-network-hint"),
+            Some(model::Section::Network),
+        ),
+        _ => (
+            icons::DISK,
+            t!("overview-empty-machine"),
+            String::new(),
+            None,
+        ),
+    };
+    let connectors = section.map_or_else(Vec::new, |s| crate::side_panel::connectors_of(cx.app, s));
+    let hint = if section.is_some() && connectors.is_empty() {
+        t!("overview-empty-no-plugin")
+    } else {
+        hint
+    };
+    // The block's height, so that it sits in the middle as a whole.
+    let buttons = if connectors.is_empty() {
+        0.0
+    } else {
+        36.0 + 20.0
+    };
+    let height = 64.0 + 16.0 + 20.0 + 6.0 + 18.0 + buttons;
+    let top = (rect.center().y - height / 2.0).max(rect.top() + 12.0);
+    let mut block = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(egui::Rect::from_min_max(
+                egui::pos2(rect.left(), top),
+                rect.max,
+            ))
+            .layout(egui::Layout::top_down(egui::Align::Center)),
+    );
+    block.spacing_mut().item_spacing.y = 0.0;
+    block.add(
+        egui::Label::new(
+            egui::RichText::new(glyph)
+                .size(64.0)
+                .color(scheme.icon_default.gamma_multiply(0.45)),
+        )
+        .selectable(false),
+    );
+    block.add_space(16.0);
+    block.add(
+        egui::Label::new(
+            egui::RichText::new(title)
+                .size(crate::theme::TEXT_BODY)
+                .color(scheme.text_primary),
+        )
+        .selectable(false),
+    );
+    if !hint.is_empty() {
+        block.add_space(6.0);
+        block.add(
+            egui::Label::new(
+                egui::RichText::new(hint)
+                    .size(crate::theme::TEXT_SECONDARY)
+                    .color(scheme.text_secondary),
+            )
+            .selectable(false),
+        );
+    }
+    if !connectors.is_empty() {
+        block.add_space(20.0);
+        add_buttons(&mut block, cx, &connectors, rect.width());
+    }
+    ui.allocate_rect(rect, egui::Sense::hover());
 }
 
-/// The drive table of This Machine and Network.
-fn drive_table(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, entries: &[Entry]) {
-    let grid = egui::Grid::new(("overview", cx.tab_id))
-        .striped(true)
-        .num_columns(9)
-        .spacing(egui::vec2(16.0, 6.0));
-    grid.show(ui, |ui| {
-        for title in [
-            "Name",
-            "Mount point",
-            "File system",
-            "Total",
-            "Used",
-            "Free",
-            "Utilisation",
-            "Removable",
-            "",
-        ] {
-            head(ui, title);
-        }
-        ui.end_row();
-        for entry in entries {
-            let volume = volume_of(cx, entry).cloned();
-            let selected = cx.tab.selection.contains(&entry.id);
-            let icon = volume.as_ref().map_or(icons::DISK, |v| volume_icon(v.kind));
-            let response = ui.add(
-                egui::Button::selectable(selected, format!("{icon} {}", entry.name)).truncate(),
-            );
-            row_interaction(cx, entry, &response);
-            if let Some(v) = &volume {
-                ui.label(v.mount_point.display().to_string());
-                ui.label(if v.fs_type.is_empty() {
-                    "—".to_owned()
-                } else {
-                    v.fs_type.clone()
-                });
-                ui.label(format::size(v.total));
-                ui.label(format::size(v.used()));
-                ui.label(format::size(v.free));
-                ui.horizontal(|ui| {
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(80.0, 8.0), egui::Sense::hover());
-                    volume_bar(ui, rect, v);
-                    ui.label(percent(v));
-                });
-                ui.label(if v.is_removable() {
-                    t!("overview-yes")
-                } else {
-                    t!("overview-no")
-                });
-                if v.is_removable() {
-                    if ui.small_button(format!("{} Eject", icons::EJECT)).clicked() {
-                        cx.requests
-                            .push(Request::Command(Command::Eject(v.mount_point.clone())));
-                    }
-                } else {
-                    ui.label("");
-                }
-            } else {
-                ui.label(entry.path.to_string());
-                for _ in 0..7 {
-                    ui.label("—");
+/// The buttons of an empty overview, side by side and centred as a row:
+/// one per kind of connection, the first the filled one. A click opens
+/// that kind's *Add connection…* dialogue.
+fn add_buttons(
+    ui: &mut egui::Ui,
+    cx: &mut PaneCx<'_>,
+    connectors: &[std::sync::Arc<dyn ext::Connector>],
+    room: f32,
+) {
+    let labels: Vec<String> = connectors
+        .iter()
+        .map(|c| {
+            let kind = c.schema().title.to_string();
+            t!("panel-add-a-connection", kind = kind.as_str())
+        })
+        .collect();
+    let widths: f32 = labels
+        .iter()
+        .map(|label| text_width(ui, label) + 32.0)
+        .sum();
+    #[allow(clippy::cast_precision_loss)]
+    let row = widths + 10.0 * labels.len().saturating_sub(1) as f32;
+    ui.allocate_ui_with_layout(
+        egui::vec2(row.min(room), 36.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            for (i, (connector, label)) in connectors.iter().zip(&labels).enumerate() {
+                if crate::widgets::button(ui, label, i == 0, true).clicked() {
+                    cx.requests
+                        .push(Request::AddConnection(connector.provider()));
                 }
             }
-            ui.end_row();
-        }
-    });
+        },
+    );
 }
 
-/// The Cloud overview, and the connections of the Network overview: one
-/// row per account or connection, in the table the details view's
+/// A table of an overview, drawn with the table the details view's
 /// columns come from (`crate::table`, SPEC.md *File list*): the header
 /// band and the rows of the guide, columns that fit their content on
 /// their own, a drag on a divider that resizes, a double-click that fits
 /// again (specs/s3-connection.md 2.2).
 ///
 /// Until the user resizes a column the widths follow the content, so a
-/// connection added later is not cut off; a resize is kept for the tab.
+/// row added later is not cut off; a resize is kept for the tab. `cell`
+/// lays out a cell, `content` says how wide its content is.
+fn fitted_table(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    columns: &[crate::table::Column],
+    rows: usize,
+    cell: &mut dyn FnMut(&mut egui::Ui, usize, usize),
+    content: &dyn Fn(&egui::Ui, usize, usize) -> f32,
+) {
+    let kept: Option<Vec<f32>> = ui.data(|data| data.get_temp(id));
+    let mut widths = kept.unwrap_or_else(|| {
+        (0..columns.len().saturating_sub(1))
+            .map(|col| {
+                let title = text_width(ui, &columns[col].title);
+                fitted_width(
+                    title,
+                    (0..rows)
+                        .map(|row| content(ui, row, col))
+                        .fold(0.0, f32::max),
+                )
+            })
+            .collect()
+    });
+    let before = widths.clone();
+    #[allow(clippy::cast_precision_loss)]
+    let height = crate::table::HEADER
+        + rows as f32 * crate::views::row_height(ui)
+        + ui.spacing().scroll.bar_width;
+    let size = egui::vec2(ui.available_width(), height);
+    ui.allocate_ui(size, |ui| {
+        ui.set_min_size(size);
+        crate::table::show(ui, id, columns, &mut widths, rows, cell, content);
+    });
+    // A drag moves a divider a little in every frame, and a double-click
+    // fits at once: what the user set is kept from the first change on.
+    if widths != before {
+        ui.data_mut(|data| data.insert_temp(id, widths));
+    }
+}
+
+/// The width a column fits itself to: its title or its widest cell,
+/// whichever is wider, with a cell's padding at both sides, and no
+/// narrower than the table lets a column be. The table would widen a
+/// narrower one itself, and that must not read as the user's resize,
+/// which stops the fitting.
+fn fitted_width(title: f32, content: f32) -> f32 {
+    (title.max(content) + 24.0).max(crate::table::MIN)
+}
+
+/// How wide `text` is in the body font.
+fn text_width(ui: &egui::Ui, text: &str) -> f32 {
+    ui.painter()
+        .layout_no_wrap(
+            text.to_owned(),
+            egui::FontId::proportional(crate::theme::TEXT_BODY),
+            egui::Color32::PLACEHOLDER,
+        )
+        .size()
+        .x
+}
+
+/// The width of the utilisation bar in a drive's row.
+const BAR_WIDTH: f32 = 80.0;
+
+/// The drive table of This Machine and Network, in the overviews' table:
+/// the name, where the drive is mounted, its file system, its sizes, the
+/// utilisation bar with its percentage, whether it is removable and, for
+/// one that is, *Eject*.
+fn drive_table(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, entries: &[Entry]) {
+    use crate::table::Column;
+    let columns = [
+        Column::new(t!("overview-column-name")),
+        Column::new(t!("overview-column-mount-point")),
+        Column::new(t!("overview-column-file-system")),
+        Column::right(t!("overview-column-total")),
+        Column::right(t!("overview-column-used")),
+        Column::right(t!("overview-column-free")),
+        Column::new(t!("overview-column-utilisation")),
+        Column::new(t!("overview-column-removable")),
+        Column::new(""),
+    ];
+    let volumes: Vec<Option<Volume>> = entries
+        .iter()
+        .map(|entry| volume_of(cx, entry).cloned())
+        .collect();
+    let eject = format!("{} {}", icons::EJECT, t!("overview-eject"));
+    // The text of a cell, for the columns that are text.
+    let text = |row: usize, col: usize| -> String {
+        let Some(entry) = entries.get(row) else {
+            return String::new();
+        };
+        let Some(v) = volumes.get(row).and_then(Option::as_ref) else {
+            return match col {
+                0 => format!("{} {}", icons::DISK, entry.name),
+                1 => entry.path.to_string(),
+                8 => String::new(),
+                _ => "—".to_owned(),
+            };
+        };
+        match col {
+            0 => format!("{} {}", volume_icon(v.kind), entry.name),
+            1 => v.mount_point.display().to_string(),
+            2 if v.fs_type.is_empty() => "—".to_owned(),
+            2 => v.fs_type.clone(),
+            3 => format::size(v.total),
+            4 => format::size(v.used()),
+            5 => format::size(v.free),
+            6 => percent(v),
+            7 if v.is_removable() => t!("overview-yes"),
+            7 => t!("overview-no"),
+            _ => String::new(),
+        }
+    };
+    let button = 2.0 * ui.spacing().button_padding.x;
+    fitted_table(
+        ui,
+        egui::Id::new(("overview", cx.tab_id)),
+        &columns,
+        entries.len(),
+        &mut |ui, row, col| {
+            let Some(entry) = entries.get(row) else {
+                return;
+            };
+            let volume = volumes.get(row).and_then(Option::as_ref);
+            match (col, volume) {
+                (0, _) => {
+                    let selected = cx.tab.selection.contains(&entry.id);
+                    let response =
+                        ui.add(egui::Button::selectable(selected, text(row, col)).truncate());
+                    row_interaction(cx, entry, &response);
+                }
+                (6, Some(v)) => {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(BAR_WIDTH, 8.0), egui::Sense::hover());
+                    volume_bar(ui, rect, v);
+                    ui.label(text(row, col));
+                }
+                (8, Some(v)) if v.is_removable() => {
+                    if ui.small_button(&eject).clicked() {
+                        cx.requests
+                            .push(Request::Command(Command::Eject(v.mount_point.clone())));
+                    }
+                }
+                _ => {
+                    ui.add(egui::Label::new(text(row, col)).truncate());
+                }
+            }
+        },
+        &|ui, row, col| {
+            let width = text_width(ui, &text(row, col));
+            let removable = volumes
+                .get(row)
+                .and_then(Option::as_ref)
+                .is_some_and(Volume::is_removable);
+            match col {
+                0 => width + button,
+                6 => width + BAR_WIDTH + ui.spacing().item_spacing.x,
+                8 if removable => text_width(ui, &eject) + button,
+                _ => width,
+            }
+        },
+    );
+}
+
+/// The Cloud overview, and the connections of the Network overview: one
+/// row per account or connection, in the overviews' table.
 fn cloud_table(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, entries: &[Entry], glyph: &str) {
     let columns = [
         crate::table::Column::new(t!("overview-column-name")),
@@ -229,72 +433,31 @@ fn cloud_table(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, entries: &[Entry], glyph:
         1 => entry.id.provider.to_string(),
         _ => entry.path.to_string(),
     };
-    let measure = |ui: &egui::Ui, text: String| {
-        ui.painter()
-            .layout_no_wrap(
-                text,
-                egui::FontId::proportional(crate::theme::TEXT_BODY),
-                egui::Color32::PLACEHOLDER,
-            )
-            .size()
-            .x
-    };
-    // A cell's padding at both sides, and the room a selectable row's
-    // button takes around its text.
-    let room = 24.0 + 2.0 * ui.spacing().button_padding.x;
-    let id = egui::Id::new(("overview-accounts", cx.tab_id));
-    let kept: Option<Vec<f32>> = ui.data(|data| data.get_temp(id));
-    let mut widths = kept.clone().unwrap_or_else(|| {
-        (0..columns.len() - 1)
-            .map(|col| {
-                let title = measure(ui, columns[col].title.clone());
-                entries
-                    .iter()
-                    .map(|entry| measure(ui, text(entry, col)))
-                    .fold(title, f32::max)
-                    + room
+    let button = 2.0 * ui.spacing().button_padding.x;
+    fitted_table(
+        ui,
+        egui::Id::new(("overview-accounts", cx.tab_id)),
+        &columns,
+        entries.len(),
+        &mut |ui, row, col| {
+            let Some(entry) = entries.get(row) else {
+                return;
+            };
+            if col == 0 {
+                let selected = cx.tab.selection.contains(&entry.id);
+                let response =
+                    ui.add(egui::Button::selectable(selected, text(entry, col)).truncate());
+                row_interaction(cx, entry, &response);
+            } else {
+                ui.add(egui::Label::new(text(entry, col)).truncate());
+            }
+        },
+        &|ui, row, col| {
+            entries.get(row).map_or(0.0, |entry| {
+                text_width(ui, &text(entry, col)) + if col == 0 { button } else { 0.0 }
             })
-            .collect()
-    });
-    #[allow(clippy::cast_precision_loss)]
-    let height = crate::table::HEADER
-        + entries.len() as f32 * crate::views::row_height(ui)
-        + ui.spacing().scroll.bar_width;
-    let size = egui::vec2(ui.available_width(), height);
-    let before = widths.clone();
-    ui.allocate_ui(size, |ui| {
-        ui.set_min_size(size);
-        crate::table::show(
-            ui,
-            id,
-            &columns,
-            &mut widths,
-            entries.len(),
-            &mut |ui, row, col| {
-                let Some(entry) = entries.get(row) else {
-                    return;
-                };
-                if col == 0 {
-                    let selected = cx.tab.selection.contains(&entry.id);
-                    let response =
-                        ui.add(egui::Button::selectable(selected, text(entry, col)).truncate());
-                    row_interaction(cx, entry, &response);
-                } else {
-                    ui.add(egui::Label::new(text(entry, col)).truncate());
-                }
-            },
-            &|ui, row, col| {
-                entries
-                    .get(row)
-                    .map_or(0.0, |entry| measure(ui, text(entry, col)) + room - 24.0)
-            },
-        );
-    });
-    // A drag moves a divider a little in every frame, and a double-click
-    // fits at once: what the user set is kept from the first change on.
-    if widths != before {
-        ui.data_mut(|data| data.insert_temp(id, widths));
-    }
+        },
+    );
 }
 
 /// Selection, opening and the new-tab shortcuts of an overview row.
@@ -350,6 +513,18 @@ fn row_interaction(cx: &mut PaneCx<'_>, entry: &Entry, response: &egui::Response
 mod tests {
     use super::*;
     use crate::theme::Scheme;
+
+    /// A column of dashes under a short title, in a narrow font, would
+    /// come out under the table's smallest column. The table widened it,
+    /// the overview took that for the user's resize, and the columns
+    /// stopped fitting in their first frame (macOS, tier 2).
+    #[test]
+    fn a_fitted_column_is_never_narrower_than_the_table_s_smallest() {
+        assert!((fitted_width(18.0, 6.0) - crate::table::MIN).abs() < f32::EPSILON);
+        assert!((fitted_width(0.0, 0.0) - crate::table::MIN).abs() < f32::EPSILON);
+        assert!((fitted_width(40.0, 120.0) - 144.0).abs() < f32::EPSILON);
+        assert!((fitted_width(120.0, 40.0) - 144.0).abs() < f32::EPSILON);
+    }
 
     #[test]
     fn the_usage_colour_follows_the_fill_like_the_trash_pill() {
