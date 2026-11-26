@@ -1357,3 +1357,73 @@ fn the_drive_table_s_columns_fit_their_content_and_resize() {
         "dragged from {fitted} to {narrowed}"
     );
 }
+
+/// The columns keep fitting while the user has not resized one: a drive
+/// with a long name that is mounted while the overview is open widens the
+/// Name column, and is not cut. The drive that is there first has nothing
+/// but dashes in its other columns, the narrowest a column gets.
+#[test]
+fn a_drive_mounted_later_widens_the_name_column() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let drive = |name: &str| {
+        let mount = dir.path().join(name);
+        fs::create_dir_all(&mount).unwrap_or_else(|e| panic!("{e}"));
+        platform::Volume {
+            name: name.into(),
+            mount_point: mount,
+            kind: platform::VolumeKind::Fixed,
+            // Nothing wider than a dash in these columns.
+            fs_type: String::new(),
+            device: None,
+            total: None,
+            free: None,
+            read_only: false,
+        }
+    };
+    fake.add_volume(drive("a"));
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: Vec::new(),
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1600.0, 800.0))
+        .with_step_dt(0.05)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        Command::Navigate {
+            pane,
+            to: vfs_rick::Virtual::Machine.location(),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let before = pane_label_left(&harness, "Mount point");
+
+    // A drive with a long name is mounted while the overview is open.
+    let long = "a-drive-with-a-rather-long-name-for-a-column";
+    fake.add_volume(drive(long));
+    assert!(step_until(&mut harness, Duration::from_secs(10), |h| {
+        h.query_all_by_label_contains(long).next().is_some()
+    }));
+    settle(&mut harness);
+    let name = pane_label_left(&harness, "Name");
+    let after = pane_label_left(&harness, "Mount point");
+    let longest = harness
+        .query_all_by_label_contains(long)
+        .map(|node| node.rect())
+        .filter(|rect| rect.left() >= name - 20.0 && rect.left() < after)
+        .map(|rect| rect.right())
+        .fold(0.0, f32::max);
+    assert!(
+        after > before + 100.0,
+        "the Name column stayed at {before}: {after}"
+    );
+    assert!(after >= longest, "{after} cuts the name at {longest}");
+}

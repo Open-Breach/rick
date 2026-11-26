@@ -265,17 +265,17 @@ fn fitted_table(
     cell: &mut dyn FnMut(&mut egui::Ui, usize, usize),
     content: &dyn Fn(&egui::Ui, usize, usize) -> f32,
 ) {
-    // A cell's padding at both sides.
-    const PAD: f32 = 24.0;
     let kept: Option<Vec<f32>> = ui.data(|data| data.get_temp(id));
     let mut widths = kept.unwrap_or_else(|| {
         (0..columns.len().saturating_sub(1))
             .map(|col| {
                 let title = text_width(ui, &columns[col].title);
-                (0..rows)
-                    .map(|row| content(ui, row, col))
-                    .fold(title, f32::max)
-                    + PAD
+                fitted_width(
+                    title,
+                    (0..rows)
+                        .map(|row| content(ui, row, col))
+                        .fold(0.0, f32::max),
+                )
             })
             .collect()
     });
@@ -294,6 +294,15 @@ fn fitted_table(
     if widths != before {
         ui.data_mut(|data| data.insert_temp(id, widths));
     }
+}
+
+/// The width a column fits itself to: its title or its widest cell,
+/// whichever is wider, with a cell's padding at both sides, and no
+/// narrower than the table lets a column be. The table would widen a
+/// narrower one itself, and that must not read as the user's resize,
+/// which stops the fitting.
+fn fitted_width(title: f32, content: f32) -> f32 {
+    (title.max(content) + 24.0).max(crate::table::MIN)
 }
 
 /// How wide `text` is in the body font.
@@ -504,6 +513,18 @@ fn row_interaction(cx: &mut PaneCx<'_>, entry: &Entry, response: &egui::Response
 mod tests {
     use super::*;
     use crate::theme::Scheme;
+
+    /// A column of dashes under a short title, in a narrow font, would
+    /// come out under the table's smallest column. The table widened it,
+    /// the overview took that for the user's resize, and the columns
+    /// stopped fitting in their first frame (macOS, tier 2).
+    #[test]
+    fn a_fitted_column_is_never_narrower_than_the_table_s_smallest() {
+        assert!((fitted_width(18.0, 6.0) - crate::table::MIN).abs() < f32::EPSILON);
+        assert!((fitted_width(0.0, 0.0) - crate::table::MIN).abs() < f32::EPSILON);
+        assert!((fitted_width(40.0, 120.0) - 144.0).abs() < f32::EPSILON);
+        assert!((fitted_width(120.0, 40.0) - 144.0).abs() < f32::EPSILON);
+    }
 
     #[test]
     fn the_usage_colour_follows_the_fill_like_the_trash_pill() {
