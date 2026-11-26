@@ -3,6 +3,11 @@
 //! parts are what the release's extensions register — the README is
 //! checked, not trusted.
 //!
+//! One fixed part comes with a release: the privacy paragraph of section
+//! 9 is asked of a README that describes 0.6.0 or later and refused in
+//! one that describes an earlier release, so the page stays as it is
+//! until the release pull request and cannot miss the paragraph then.
+//!
 //! The README describes the latest release, so its live parts are held
 //! against the code only when the workspace's version is a release
 //! version: between releases, on a `-dev` version, the page stays as the
@@ -154,6 +159,36 @@ fn the_facts_are_read_from_the_registries() {
     assert_eq!(facts.tools, ["Git", "SVN"]);
 }
 
+/// Install (specs/readme.md, *Install*): the Linux block leads with the
+/// package install, and what stands before the archive names no distro
+/// release, only where they are listed; the plugins line ends on the
+/// plugin packages.
+#[test]
+fn linux_leads_with_the_package_install() {
+    let text = read("README.md");
+    let install = readme::block(&text, INSTALL).unwrap_or_else(|e| panic!("{e}"));
+    let (packages, archive) = install
+        .split_once("\n\nOr run it from the archive, with nothing installed: ")
+        .unwrap_or_else(|| panic!("the Linux block has no archive after the package install"));
+    assert!(packages.trim_start().starts_with(
+        "**Linux** · Debian, Ubuntu, Fedora and the distros based on them\n\n```bash\n\
+         curl -fsSL https://get.openbreach.dev/install.sh | sh -s rick\n```\n"
+    ));
+    assert!(
+        packages.ends_with("(https://github.com/Open-Breach/trebuchet/blob/main/docs/install.md)."),
+        "the package install does not end on the link to Trebuchet's docs/install.md"
+    );
+    assert!(
+        !packages.contains(|c: char| c.is_ascii_digit()),
+        "the package install names a release: {packages}"
+    );
+    assert!(archive.contains("\n**macOS** · "));
+    assert!(install.trim_end().ends_with(
+        "A Rick installed from a package gets the rest as packages: `rick-plugin-git`, or \
+         `rick-plugins` for all of them."
+    ));
+}
+
 /// The parts of specs/readme.md, *Structure*, in their order, the fixed
 /// text as the spec quotes it, and everything the page points at in the
 /// repository.
@@ -266,6 +301,22 @@ fn the_readme_has_the_structure_of_its_spec() {
         .any(|(at, _)| text[at + 1..].starts_with(|c: char| c.is_ascii_digit()));
     assert!(!numbered, "README.md names an issue or pull request number");
     assert!(!text.contains("QUESTIONS.md"));
+}
+
+/// The privacy paragraph (specs/readme.md, section 9): in force from the
+/// release that fetches the plugin list by itself, word for word and in
+/// its place, and not in a README that describes a release before it.
+/// The spec that asks for the statement quotes the same words.
+#[test]
+fn the_privacy_paragraph_comes_with_the_release_that_fetches_the_plugin_list() {
+    let spec = read("specs/readme.md");
+    readme::check_privacy(&read("README.md"), &spec).unwrap_or_else(|e| panic!("{e}"));
+    let wording = readme::privacy_wording(&spec).unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        read("specs/system-integration.md").contains(&format!("\n  > {wording}\n")),
+        "specs/system-integration.md §9 does not quote the privacy paragraph of \
+         specs/readme.md, section 9, word for word"
+    );
 }
 
 /// The file types under the six items (specs/readme.md, *File types*): one

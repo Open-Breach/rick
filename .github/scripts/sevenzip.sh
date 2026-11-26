@@ -65,7 +65,16 @@ build_from_source() {
       # and drops -Werror and -Weverything; the two variables are the
       # makefile's own (7zip_gcc.mak, warn_clang_mac.mak).
       make_vars=("CFLAGS_WARN_WALL=-Wall -Wextra" "CFLAGS_WARN=-Wno-poison-system-directories") ;;
-    *) mak=cmpl_gcc.mak ;;
+    *)
+      mak=cmpl_gcc.mak
+      # The same holds for gcc: the makefile's -Werror stops the build at
+      # every warning a newer compiler adds, and the Linux packages are
+      # built with the compiler of each distribution release. gcc 16,
+      # which Fedora 44 and 45 have, reports -Warray-bounds in
+      # ProgressUtils.h, where the gcc of Debian 12 and Ubuntu 24.04
+      # reports nothing. The warnings stay on, they no longer stop the
+      # build.
+      make_vars=("CFLAGS_WARN_WALL=-Wall -Wextra") ;;
   esac
   (cd "$work/CPP/7zip/Bundles/Format7zF" && make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" -f "../../$mak" "${make_vars[@]}" > "$work/build.log" 2>&1) \
     || { tail -50 "$work/build.log" >&2; echo "building 7z.so failed" >&2; exit 1; }

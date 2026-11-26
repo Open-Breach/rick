@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use base64::Engine as _;
@@ -107,16 +108,29 @@ impl Request {
     }
 }
 
-type Files = Arc<Mutex<BTreeMap<String, Vec<u8>>>>;
+/// What the [`Server`] answers a path with.
+#[derive(Debug, Clone)]
+enum Served {
+    /// These bytes.
+    Bytes(Vec<u8>),
+    /// A 302 to this address.
+    Elsewhere(String),
+}
+
+type Files = Arc<Mutex<BTreeMap<String, Served>>>;
 type Requests = Arc<Mutex<Vec<Request>>>;
 
 /// An HTTP server on this machine: it answers a GET for a path it was
-/// given with those bytes and any other with 404, and counts the lot.
+/// given with those bytes, or with the redirect it was given for it, and
+/// any other with 404, and counts the lot. Once it has [fallen
+/// silent](Server::fall_silent) it answers nothing at all.
 #[derive(Debug)]
 pub struct Server {
     address: SocketAddr,
     files: Files,
     requests: Requests,
+    connections: Arc<AtomicUsize>,
+    silent: Arc<AtomicBool>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -140,14 +154,22 @@ impl Server {
             .unwrap_or_else(|error| panic!("the test registry's address: {error}"));
         let files = Files::default();
         let requests = Requests::default();
+        let connections = Arc::new(AtomicUsize::new(0));
+        let silent = Arc::new(AtomicBool::new(false));
         let handle = runtime::handle();
         let task = {
             let (files, requests) = (Arc::clone(&files), Arc::clone(&requests));
+            let (connections, silent) = (Arc::clone(&connections), Arc::clone(&silent));
             let _context = handle.enter();
             let listener = tokio::net::TcpListener::from_std(listener)
                 .unwrap_or_else(|error| panic!("the test registry's listener: {error}"));
             handle.spawn(async move {
                 while let Ok((stream, _)) = listener.accept().await {
+                    connections.fetch_add(1, Ordering::SeqCst);
+                    if silent.load(Ordering::SeqCst) {
+                        // Taken and closed, without a word.
+                        continue;
+                    }
                     let (files, requests) = (Arc::clone(&files), Arc::clone(&requests));
                     runtime::handle().spawn(answer(stream, files, requests));
                 }
@@ -157,8 +179,17 @@ impl Server {
             address,
             files,
             requests,
+            connections,
+            silent,
             task,
         }
+    }
+
+    /// The address the server listens on: a loopback address and its
+    /// port.
+    #[must_use]
+    pub fn address(&self) -> SocketAddr {
+        self.address
     }
 
     /// The address of `path` on this server.
@@ -175,7 +206,19 @@ impl Server {
 
     /// Serves `bytes` at `path` from now on.
     pub fn put(&self, path: &str, bytes: impl Into<Vec<u8>>) {
-        lock(&self.files).insert(path.trim_start_matches('/').to_owned(), bytes.into());
+        lock(&self.files).insert(
+            path.trim_start_matches('/').to_owned(),
+            Served::Bytes(bytes.into()),
+        );
+    }
+
+    /// Answers `path` with a redirect to the address `to` from now on: a
+    /// 302 with `to` as its `Location`, written as given.
+    pub fn redirect(&self, path: &str, to: &str) {
+        lock(&self.files).insert(
+            path.trim_start_matches('/').to_owned(),
+            Served::Elsewhere(to.to_owned()),
+        );
     }
 
     /// Serves `index`, written as `to_string` writes it, at
@@ -191,6 +234,23 @@ impl Server {
     #[must_use]
     pub fn requests(&self) -> Vec<Request> {
         lock(&self.requests).clone()
+    }
+
+    /// How many connections were opened to the server so far, whether or
+    /// not a request came over them. They are counted in the order they
+    /// were opened, so one opened before another that is counted is
+    /// counted too.
+    #[must_use]
+    pub fn connections(&self) -> usize {
+        self.connections.load(Ordering::SeqCst)
+    }
+
+    /// Says nothing from now on: a connection is taken and closed again
+    /// without an answer, as by a machine that is there and serves
+    /// nothing. No request is recorded; [`Server::connections`] still
+    /// counts.
+    pub fn fall_silent(&self) {
+        self.silent.store(true, Ordering::SeqCst);
     }
 
     /// Stops listening: a request from now on is refused, as without a
@@ -234,14 +294,15 @@ async fn answer(mut stream: tokio::net::TcpStream, files: Files, requests: Reque
         .filter_map(|line| line.split_once(':'))
         .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
         .collect();
-    let body = lock(&files).get(&path).cloned();
+    let served = lock(&files).get(&path).cloned();
     lock(&requests).push(Request { path, headers });
-    let (status, body) = match body {
-        Some(body) => ("200 OK", body),
-        None => ("404 Not Found", Vec::new()),
+    let (status, location, body) = match served {
+        Some(Served::Bytes(body)) => ("200 OK", String::new(), body),
+        Some(Served::Elsewhere(to)) => ("302 Found", format!("Location: {to}\r\n"), Vec::new()),
+        None => ("404 Not Found", String::new(), Vec::new()),
     };
     let head = format!(
-        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\n{location}Content-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     if stream.write_all(head.as_bytes()).await.is_ok() {

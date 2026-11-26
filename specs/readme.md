@@ -18,7 +18,7 @@ The README describes the latest release, never the state of `main` or `dev`. It 
 
 ## Structure
 
-The parts below, in this order. Sections 1, 2, 6, 7 and 8 are fixed text; 3, 4 and 5 are regenerated with every release.
+The parts below, in this order. Sections 1, 2, 6, 7, 8 and 9 are fixed text; 3, 4 and 5 are regenerated with every release.
 
 ### Title block
 
@@ -61,7 +61,7 @@ Items 1 and 3 are **live**: they are generated from what the release's bundle re
 1. **Previews** (live). One line with the real number of previewable file types: `Previews <n> file types, listed by kind below.` Every type is then listed by its short name, complete, grouped by kind (see *File types* below). The number and the list are what the previewers of the bundle, the core's and the plugins', declare.
 2. **Interface** (fixed). `Multi-pane, multi-tab view: split panes side by side, drag them around, keep as many tabs as you like.`
 3. **Storage and search** (live). The file systems and storage providers Rick browses, the cloud providers among them, and the platform search it queries on each OS. The lists are what the providers and search connectors of the bundle declare.
-4. **Tool integration** (fixed wording, live names). `Works with the tools you already use, like Git: status badges in the file list and actions in the context menu.` A tool is named only when its plugin ships in the archives and loads.
+4. **Tool integration** (fixed wording, live names). `Works with the tools you already use, like Git: status badges in the file list and actions in the context menu.` A tool is named only when its plugin ships in the archives and loads, or is a separate download in the registry for this release.
 5. **Tarball and AppImage manager** (fixed). `Installs and uninstalls software distributed as tarballs and AppImages, so a tar.gz or AppImage download becomes a managed install instead of a folder or file you forget about.` Marked as Linux only for as long as `ext-installer` is.
 6. **Convenience functions** (fixed). `Small things done right, such as computing a file's hash from the context menu.`
 
@@ -89,9 +89,18 @@ One picture of the release's GUI, taken fresh for every release.
 
 ### 5. Install (regenerated)
 
-Heading `## Install`. Three short blocks, **Linux**, **macOS**, **Windows**. Each has the direct link to the release's archive for every architecture built for that platform (`https://github.com/Open-Breach/rick/releases/download/v<version>/rick-<version>-<platform>.<ext>`) and the real steps to get Rick running, as they are in that release: two or three lines, not the reference. Today that is unpack and run; when an installer or a package arrives the steps change with it.
+Heading `## Install`. Three short blocks, **Linux**, **macOS**, **Windows**. Each has the direct link to the release's archive for every architecture built for that platform (`https://github.com/Open-Breach/rick/releases/download/v<version>/rick-<version>-<platform>.<ext>`) and the real steps to get Rick running, as they are in that release: two or three lines, not the reference.
 
-One line at the end says how plugins arrive: they ship in the archive's `plugins/` folder, and deleting a plugin's folder removes that plugin.
+The **Linux** block leads with the package install and the archive follows:
+
+- The title line: `**Linux** · Debian, Ubuntu, Fedora and the distros based on them`.
+- The line that installs the package, as code: `curl -fsSL https://get.openbreach.dev/install.sh | sh -s rick`.
+- `This adds the Open-Breach repository and installs Rick with apt or dnf; updates then arrive with your system's.` Then the link *Which releases, and the same steps by hand*, to `docs/install.md` in `Open-Breach/trebuchet`. The README names no distro release for the packages: which releases have a repository is written there and nowhere else.
+- `Or run it from the archive, with nothing installed:` and the links to the archives, then the line that unpacks and runs it and the line on what the archive needs.
+
+macOS and Windows are unpack and run; when an installer or a package arrives for them the steps change with it.
+
+One line at the end says how plugins arrive: they ship in the archive's `plugins/` folder, and deleting a plugin's folder removes that plugin. It ends on the packages: ``A Rick installed from a package gets the rest as packages: `rick-plugin-git`, or `rick-plugins` for all of them.``
 
 ### 6. Warning (fixed)
 
@@ -104,6 +113,16 @@ The *Join in* section of the README as it stands, unchanged.
 ### 8. Portal animation (fixed)
 
 Directly after *Join in*, before the closing lines: Rick's portal animation, the looping portal burst (rings with folder and file icons spiralling out) from the design refresh, centred, with alt text that describes it. Serge commits the file himself under `assets/`; the agent never draws, generates or fetches it, and only embeds what is there, in a format GitHub plays inline in a README (animated GIF, WebP, PNG or SVG). If the file is not in `assets/` when the release is cut, the agent leaves this section out and says so under **Needs a decision**.
+
+### 9. Privacy (fixed)
+
+After the portal animation and before the closing lines: one paragraph that says what Rick sends without being asked. It is a line of its own, the first under the rule (`---`) that sets the closing lines off, above the line of links. Verbatim, never reworded:
+
+> Rick has no telemetry and no crash reports. It makes one request you did not start: once a day, and when you open the list of available plugins, it fetches the list of its plugins from get.openbreach.dev, two files, and sends only its version. That address is served through Cloudflare, which sees your IP address as it does for any web request. *Look for plugins and updates online* in Settings → Behaviour turns that off. All other network traffic is the one you start: a remote provider you added, a plugin you install.
+
+- **From 0.6.0.** The paragraph describes the fetch of the plugin list, once a day in the background and when the *Available* list of the Extensions dialogue is opened (`specs/plugin-distribution.md` §6), which 0.6.0 is the first release to make. A README that describes an earlier release does not have it; the release pull request of 0.6.0 adds it, and from then on it stays.
+- **What it claims.** *Sends only its version* is what Rick puts into the two requests: `rick/<version>` as the user agent and nothing else of its own, which a test of the registry client holds. The server still sees what any web request shows, the address it comes from, and that is why the sentence about Cloudflare is there: `get.openbreach.dev` is a Cloudflare R2 bucket behind Cloudflare's network (`docs/spec.md` in `Open-Breach/trebuchet`).
+- **When it stops being true** — Rick makes another request by itself, asks another host, sends more than its version, or the switch moves or is renamed — the pull request that brings the change says so under **Needs a decision** with new wording, and the paragraph changes in the next release pull request. The agent never rewords it on its own.
 
 ### Closing lines
 
@@ -118,9 +137,13 @@ The current README's tour (*See what's what*, *Then put it in order*, *One tool,
 ## Rules for the release
 
 - The README update is part of the release pull request and of nothing else. Between releases the README is not touched, however far `dev` moves.
+- One exception: the Install section may be completed between releases when it describes the latest release as published. A way to install that release which went live after it, such as the packages on `get.openbreach.dev`, is added then and not held back for the next release; it is proven against what is published first, and the generator and the README test change in the same pull request. The package install of 0.6.0 came this way.
 - Regenerated: the version in the status line and the call to action, feature items 1 and 3 with the grouped file types and the tool names of item 4, the animal and the two screenshots, the Install section.
-- Left alone: sections 1, 2, 6, 7 and 8, the closing lines, the status text, and the fixed wording of feature items 2, 4, 5 and 6. A change to any of them is listed in the pull request under **Decisions made**.
+- Left alone: sections 1, 2, 6, 7, 8 and 9, the closing lines, the status text, and the fixed wording of feature items 2, 4, 5 and 6. A change to any of them is listed in the pull request under **Decisions made**.
 - Proposed, not decided: the Coming list, and new wording for the status text when a sentence of it looks no longer true, both under **Needs a decision**.
-- The README is checked, not trusted: a test fails when the live lists of items 1 and 3 differ from what the bundle registers, when a previewed type has no kind, and when the status text is not the spec's word for word; the release workflow fails when the version in the status line is not the tag's.
+- The README is checked, not trusted: a test fails when the live lists of items 1 and 3 differ from what the bundle registers, when a previewed type has no kind, when the status text is not the spec's word for word, and when the privacy paragraph of section 9 is missing from a README that describes 0.6.0 or a later release, stands elsewhere than in its place or is not the spec's word for word; the release workflow fails when the version in the status line is not the tag's.
 - The first release after this revision brings the generator (`crates/tests/src/readme.rs`, `cargo xtask readme`), the README test (`crates/tests/tests/readme.rs`) and the release check to this structure in the same release pull request. Until then the README stays as 0.4.0 left it.
+- **The release pull request of 0.6.0 adds the privacy paragraph** of section 9, by hand, word for word, in its place. It cannot be left out: `cargo xtask readme` writes `v0.6.0` into the status line, and from that commit the README test fails until the paragraph is there. Until then the same test refuses the paragraph, because the README describes a release that makes no such request.
+- **The release pull request of 0.6.0 brings the *Suggest plugins* setting into the README** (`specs/plugin-distribution.md` §8: on the Behaviour page, `[plugins] suggest`). Decided on issue 252, which asked for it in "the README where settings are listed": the README is not touched for it before the release. The structure above has no place that lists settings, so that pull request proposes the place and the words under **Needs a decision**.
+- **Before the tag of 0.6.0 a video and an H.264 clip are played by hand on macOS**, on a real Mac, and the release pull request says that it was done. From 0.6.0 the media previewer's player is a `playbin` and no longer a `playbin3` (pull request 304), and no check plays a video through it on macOS before the tag: tier 2 builds the plugin without GStreamer there, and the release workflow's smoke test runs on the tag, with an MPEG-4 clip, because its macOS runners have no hardware decoder for H.264.
 - When the README cannot be made truthful (a type a previewer declares does not preview, an archive of the release is missing), the agent stops and says so under **Needs a decision**. It does not adjust the text to fit.

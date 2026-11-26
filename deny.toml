@@ -136,10 +136,12 @@ ignore = [
     # time it there. Revisit when `rsa` ships constant-time decryption.
     { id = "RUSTSEC-2023-0071", reason = "rsa's timing side channel; transitive via russh for RSA SSH keys, client-side only" },
     # chrono was declared unmaintained: a notice, not a vulnerability, and
-    # with no release to move to. The date formats of the UI and of six
-    # plugins are written with it, and pdfium-render brings it as well.
-    # Moving to `jiff` or `time` swaps a dependency, which is a task of its
-    # own; until then the notice is ignored, so that the check goes on
-    # reporting everything else (decided by Serge, 2026-11-19).
-    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, not vulnerable; the date formats of the UI and six plugins, and pdfium-render; replacing it is a task of its own" },
+    # with no release to move to. Rick's own crates write their dates with
+    # jiff; chrono stays in the tree through pdfium-render alone, whose
+    # newest release (0.9.5) depends on it unconditionally, for the dates
+    # it stamps on the annotations and form fields it writes, which the
+    # previewers never do. Remove the entry when pdfium-render drops chrono
+    # or makes it optional: its pull request 287 replaces chrono and offers
+    # an optional feature instead, open and unanswered on 2026-11-19.
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, not vulnerable; transitive via pdfium-render alone, which has no release or feature without it; upstream: https://github.com/ajrcarey/pdfium-render/pull/287" },
 ]

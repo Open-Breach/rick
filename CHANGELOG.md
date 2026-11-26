@@ -7,11 +7,16 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-20
+
 Plugins come in two kinds from here on: the ones every install has, and
 the ones that are separate downloads. The Extensions dialogue lists the
 separate ones and installs and updates them from a signed plugin list,
-once that list has its key: the key is not in the source yet, so in every
-build for now the list is off and Rick fetches nothing. The extension API
+which Rick fetches from `get.openbreach.dev` and checks against a key
+that is compiled in. Where the list does not arrive, the *Available*
+list says so in one line and nothing else does. On Linux, Rick is also a
+deb and an rpm, with apt and dnf repositories on `get.openbreach.dev`,
+and every file of a release has a build attestation. The extension API
 is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
 
 ### Changed
@@ -54,9 +59,9 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   folder the plugin's business (`.git`, `.svn`), and `connections`, what
   the plugin adds to *Add…* in the side panel (SSH, S3, Azure Blob,
   Google Cloud Storage). With `previews` they are the plugin's triggers
-  and `plugin.toml` carries all three. Nothing reads the two new lists
-  yet. Every plugin is rebuilt against the new contract, and one built
-  against 22 is refused.
+  and `plugin.toml` carries all three. Rick suggests a plugin by them
+  (below). Every plugin is rebuilt against the new contract, and one
+  built against 22 is refused.
 
 ### Added
 
@@ -84,19 +89,101 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   updated (#268).
 - ***Install from URL…*** beside *Install from file…*: the plugin package
   at an `https://` address is downloaded and then handled exactly as a
-  file is. Nothing is checked (#269).
+  file is. Nothing is checked. Plain `http://` is taken only from this
+  machine, a loopback address or `localhost`, and the same holds for
+  every address a download is redirected to: no plain-HTTP request for a
+  plugin leaves the machine, and an address that is refused is not asked
+  at all. A redirect from another machine to this one is refused as
+  well, whatever the scheme (#269, #274, #279).
 - **A Rick installed from a deb or an rpm** takes its separate plugins
   from its package manager: in place of **Install**, an available plugin
   shows the command, `sudo apt install rick-plugin-git` or `sudo dnf
   install rick-plugin-git`, with a copy button, and Rick downloads none.
   It knows by a file named `package` beside its binary, which the two
   packages install (#269).
+- **Rick says when a newer Rick is out.** The plugin list names the newest
+  release, so nothing is asked for it and nothing is installed by Rick
+  itself. A notice says *Rick 0.7.0 is available*, once for a release,
+  with **Download**, which opens the release page in the browser; the
+  menu button carries a dot and the menu has *Update available* until
+  Rick is that release, and the About dialog has the same line. A Rick
+  installed from a deb or an rpm is told to update through its package
+  manager instead. *Look for plugins and updates online* switches it off
+  with the rest (#281).
+- **Rick says so when a plugin that is not there would serve what you
+  are looking at.** It knows from the plugin list it already holds and
+  from the manifests of the plugins on the disk; it asks nobody for it,
+  and nothing is installed without a click. A plugin of the list that
+  fits this Rick and is not installed is offered with **Install**, one
+  that is installed and switched off with **Enable**, with no plugin
+  list at all. A Rick that has no plugin list yet suggests only those.
+  There are three places (#287):
+  - *The preview pane.* A file whose type a plugin shows, and that only
+    the hex view takes, has a bar at the top of the pane: the plugin's
+    name and what it does, **Install**, **Not now** and **Don't suggest
+    again**. Without the hex view the *No previewer* card reads *plugin
+    available* and has **Install** with the plugin's name after *Open
+    with…* (#288).
+  - *The file list.* A pane that enters a folder holding a plugin's
+    marker, `.git` or `.svn`, hidden or not, has the same bar between
+    its toolbar and its list. One bar a pane, on the local file system
+    only; it goes when the pane leaves the folder. Entering a folder of
+    200,000 entries takes as long as before (#289).
+  - *Adding a connection.* *Add…* of Network and Cloud, and the menu of
+    their headers, list the kinds of connection such plugins would add
+    after the ones that are there, each with the size of its plugin;
+    choosing one installs the plugin. The Cloud section, absent while no
+    cloud plugin is loaded, shows with *Add…* while one is on offer
+    (#291).
+
+  **Not now** silences a plugin until Rick is started again. **Don't
+  suggest again** writes its id to `[plugins] no_suggest` in `rick.toml`,
+  and the Extensions dialogue then says *Not suggested* of it, with
+  **Suggest again**. After **Install** the bar reads *Git is installed.
+  Restart Rick to use it.* with **Restart now**. In a Rick installed
+  from a deb or an rpm, **Install** opens the Extensions dialogue on the
+  plugin, where the command of the package manager stands (#292).
+- ***Suggest plugins*** on the Behaviour page of the settings, under
+  *Look for plugins and updates online*; on by default, `[plugins]
+  suggest` in `rick.toml`. Off, Rick suggests nothing anywhere, and the
+  Cloud section shows only once a cloud plugin is loaded (#287, #292).
+- **Linux packages.** A release makes a deb for each supported Debian
+  and Ubuntu release and an rpm for each supported Fedora release, for
+  x86-64 and arm64, with the plugins every install has, and they go into
+  the apt and dnf repositories on get.openbreach.dev. Rick is installed
+  to `/usr/lib/rick/` with `rick` on the path. The packages and the Linux
+  archive are built by Trebuchet's workflow, each inside the container of
+  its release; the archive is built on the oldest of them, so it needs
+  glibc 2.36 where it needed 2.39. Each package is tested where it is
+  installed, in a container that has its dependencies and nothing else:
+  its plugins load, pdfium opens a PDF and a video plays. A package
+  brings GStreamer's decoder for H.264 with it, so an MP4 plays without
+  installing anything more (#282).
+- **Plugin packages for the deb and the rpm.** The separate plugins of
+  Linux are packages of their own beside `rick`: `rick-plugin-git`,
+  `-svn`, `-zfs`, `-ssh`, `-vfs-s3`, `-vfs-azure`, `-vfs-gcs`,
+  `-preview-office` and `-preview-3d`, and `rick-plugins` for all of
+  them. Each installs its plugin to `/usr/lib/rick/plugins/` and fits the
+  `rick` package of its own version only: the package manager installs
+  the two together, moves them together in an upgrade and refuses a
+  plugin of another version. They are what the command in the Extensions
+  dialogue of a packaged Rick installs (#302).
+- **Build attestations.** Every file of a release has a GitHub build
+  attestation, which says which workflow built it and from which commit:
+  `gh attestation verify <file> --owner Open-Breach --signer-repo
+  Open-Breach/trebuchet` for a Linux file, `gh attestation verify <file>
+  --repo Open-Breach/rick` for a macOS or Windows one. The release
+  workflow runs both on the release while it is still a draft, and
+  publishes it only when they pass (#282).
 - ***Look for plugins and updates online*** on the Behaviour page of the
   settings, on by default; `[registry] check` in `rick.toml`. On, Rick
   fetches the plugin list when the *Available* list is opened and, in the
-  background, at most once a day, after the first frame is drawn. Off, it
-  fetches nothing by itself and shows what it has; **Check now** still
-  asks (#271).
+  background, once a day: one minute after the start when the list it
+  has is more than a day old, and again every 24 hours while it stays
+  open. A check in the background that gets no list says nothing and is
+  tried again 24 hours later, not sooner. The start itself asks nobody.
+  Off, it fetches nothing by itself and shows what it has; **Check now**
+  still asks (#271, #280, #294).
 - **The plugin list and what Rick sends for it.** The list is
   `https://get.openbreach.dev/registry/index.json` with a minisign
   signature beside it. Rick makes one request for each of the two files,
@@ -106,10 +193,13 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
   cached one; a list that does not verify is not used and the last good
   one stays. A build of the list fits when it is for this platform and
   for exactly this release of Rick, so a pre-release Rick is offered
-  nothing. **The key file is empty in the source for now**, and a build
-  without a key reads and fetches nothing: *The plugin list is not set up
-  in this build*. `[registry] url` and `public_key` point a Rick at
-  another list and key, for development (#265).
+  nothing. The key is the registry's own, Trebuchet's
+  `keys/registry.pub`, committed in the source as a file (#294). A Rick
+  without a key, which is a build whose file was emptied or a
+  `public_key` in `rick.toml` that is no key, reads and fetches nothing:
+  *The plugin list is not set up in this build*. `[registry] url` and
+  `public_key` point a Rick at another list and key, for development
+  (#265).
 - `installed.toml` in the per-user plugins folder notes where each plugin
   there came from, the plugin list, a file or an address, with its
   version and the SHA-256 of its package. *Remove* drops the entry
@@ -128,6 +218,26 @@ is 23: a plugin built for 0.5.0 is refused until it is rebuilt.
 - The release page carries the packages and the lists of the four
   platforms beside the archives, and `SHA256SUMS.txt` names them all
   (#260).
+- **The licences of everything a release ships are in the archive as
+  files**, not only in the About dialog. `THIRD-PARTY-LICENSES.md` lists,
+  after the crates, what ships outside Cargo: pdfium, 7-Zip, GStreamer,
+  the Rust standard library, the fonts and the icon font. A `licenses/`
+  folder holds the texts of the libraries built into pdfium and the
+  notices of the Rust standard library, each taken from the build that
+  ships. The About dialog's *Bundled runtimes* gain the Rust standard
+  library (#278).
+
+### Fixed
+
+- A search in subfolders that a new text replaced, or that was cancelled
+  in the operations area, is shown there as *Cancelled* in every case.
+  Where the cancel arrived in the moment the search was working through
+  matches it had ready, the search ended as *Done* (#285).
+- A search cancelled in the operations area ends quietly in its pane: the
+  list keeps the matches it has, the footer no longer says *listing…* and
+  nothing is reported, since a cancel is not a failure. Before, the
+  footer went on saying *listing…* for as long as the pane stayed where
+  it was, and the window never went idle (#285).
 
 ## [0.5.0] - 2026-11-15
 
@@ -1749,7 +1859,8 @@ text, code, images and PDF, and Git, on Linux, macOS and Windows.
   in the middle of a write can no longer read a truncated file and lose
   the pinned folders (#14).
 
-[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Open-Breach/rick/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Open-Breach/rick/releases/tag/v0.5.0
 [0.4.1]: https://github.com/Open-Breach/rick/releases/tag/v0.4.1
 [0.4.0]: https://github.com/Open-Breach/rick/releases/tag/v0.4.0

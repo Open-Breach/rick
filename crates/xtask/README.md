@@ -7,7 +7,10 @@ workspace with its examples and lays out `target/<profile>/bundle/`
 (QUESTIONS.md 84): the
 `rick` binary, the kernel dylibs `types`, `runtime` and `ext` and the
 `libstd` they need beside it, pdfium when the PDF previewer's `library`
-setting (`preview-pdf.toml` in the config directory) names it, and
+setting (`preview-pdf.toml` in the config directory) names it,
+`licenses/` with the licence texts those two bring with them (the texts
+a pdfium build carries beside its library into `licenses/pdfium/`, the
+standard library's notices from the toolchain into `licenses/rust/`), and
 `plugins/<id>/plugin.toml` with the library for every plugin crate (an
 `ext-*` member built as a `cdylib`), the GStreamer runtime into the media
 plugin's folder `plugins/preview-media/` on macOS and Windows when

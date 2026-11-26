@@ -27,7 +27,7 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 sha2 = { workspace = true }
 # The archive is read by this crate itself, so the plugin does not depend
 # on the archive provider (specs/ext-installer.md "Plugin architecture").

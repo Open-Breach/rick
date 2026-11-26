@@ -19,9 +19,17 @@
 //!   due.
 //! - [`Index::offer`] is the rule of what fits: a build is for one
 //!   platform and one release of Rick, compared as whole strings.
+//! - [`Index::newer_than`] is the update notice for Rick itself: the
+//!   index names the newest release, and no request of its own is made
+//!   for it.
 //! - [`download`] fetches a package to a file and holds it against the
 //!   size and the SHA-256 the index names; a package that is another one
 //!   is deleted.
+//! - Every one of these requests is `https://`, or plain `http://` to
+//!   this machine: [`is_package_address`] is the rule, and an address
+//!   that fails it — the first or one a redirect names — is never
+//!   connected to. No plain-HTTP request leaves the machine, and no
+//!   other machine sends a request on to this one.
 //!
 //! Nothing here decides *when* to ask or whether the user allows it: that
 //! is the application's, with the switch of the settings.
@@ -59,12 +67,14 @@ mod tests;
 
 use std::path::PathBuf;
 
-pub use cache::{CACHE_DIR, CHECK_EVERY, Cache, Cached, INDEX_FILE, SIGNATURE_FILE, due, refresh};
+pub use cache::{
+    CACHE_DIR, CHECK_EVERY, Cache, Cached, INDEX_FILE, SIGNATURE_FILE, due, due_after, refresh,
+};
 pub use download::{Downloaded, Expected, download, is_package_address, package_name};
 pub use fetch::{Fetched, fetch, user_agent};
 pub use index::{
-    Build, Connection, Index, Meta, Offer, Offered, Plugin, SCHEMA, Triggers, is_pre_release,
-    platform, platform_name,
+    Build, Connection, Index, Latest, Meta, Offer, Offered, Plugin, SCHEMA, Triggers,
+    is_pre_release, platform, platform_name,
 };
 pub use key::Key;
 pub use source::{INDEX_URL, Source};
@@ -84,6 +94,25 @@ pub enum Error {
     /// an index has.
     #[error("the plugin list could not be fetched: {0}")]
     Fetch(String),
+    /// An address that is not asked, and was not: anything but
+    /// `https://`, and plain `http://` to another machine than this one.
+    /// No request was made to it.
+    #[error("{url} was not requested: it is not an https:// address")]
+    Refused {
+        /// The address.
+        url: String,
+        /// Whether it is one a request was sent on to, rather than the
+        /// one it started from.
+        redirected: bool,
+    },
+    /// An address of this machine that another machine sent a request on
+    /// to. Such a redirect is not followed, whatever the scheme, and no
+    /// request was made to the address.
+    #[error("{url} was not requested: another machine sent the request on to this one")]
+    Inward {
+        /// The address on this machine.
+        url: String,
+    },
     /// The signature is missing, is no minisign signature, or is not the
     /// key's signature of these bytes.
     #[error("the plugin list could not be verified")]

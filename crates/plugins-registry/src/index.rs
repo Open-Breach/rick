@@ -35,7 +35,45 @@ struct Apps {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 #[serde(default)]
 struct App {
+    /// The newest release. An entry that is not one is none: the plugin
+    /// list does not stand or fall with it.
+    #[serde(deserialize_with = "latest_or_none")]
+    latest: Option<Latest>,
     plugins: Vec<Plugin>,
+}
+
+/// The newest release of an application, as the index names it under
+/// `apps.<app>.latest`: the publisher writes it on every release
+/// (`docs/spec.md` 7.6 in Open-Breach/trebuchet).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(default)]
+pub struct Latest {
+    /// Its version, `0.7.0`.
+    pub version: String,
+    /// The address of its release page.
+    pub url: String,
+}
+
+impl Latest {
+    /// The address of the release's page when it is one to open in a
+    /// browser: `https://` with a host. Whatever else the entry may
+    /// hold is not handed to the system to open.
+    #[must_use]
+    pub fn page(&self) -> Option<&str> {
+        let url = reqwest::Url::parse(&self.url).ok()?;
+        let named = url.host_str().is_some_and(|host| !host.is_empty());
+        (url.scheme() == "https" && named).then_some(self.url.as_str())
+    }
+}
+
+/// `latest` as far as it can be read: an object with a version, or none.
+fn latest_or_none<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Latest>, D::Error> {
+    let entry = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(entry
+        .and_then(|entry| serde_json::from_value::<Latest>(entry).ok())
+        .filter(|latest| !latest.version.is_empty()))
 }
 
 /// One plugin of the registry. Name, description and `meta` are those of
@@ -231,6 +269,26 @@ impl Index {
     #[must_use]
     pub fn plugin(&self, id: &str) -> Option<&Plugin> {
         self.plugins().iter().find(|plugin| plugin.id == id)
+    }
+
+    /// The newest release of Rick, when the index names one.
+    #[must_use]
+    pub fn latest(&self) -> Option<&Latest> {
+        self.apps.rick.latest.as_ref()
+    }
+
+    /// The release of Rick that is newer than a Rick of version `rick`,
+    /// when the index names one: `latest` with a version above `rick`,
+    /// both read as versions. None when either is no version, and none
+    /// where a pre-release is on either side: a pre-release Rick is told
+    /// of nothing, and a pre-release is never announced as the newest.
+    #[must_use]
+    pub fn newer_than(&self, rick: &str) -> Option<&Latest> {
+        let latest = self.latest()?;
+        if is_pre_release(rick) || is_pre_release(&latest.version) {
+            return None;
+        }
+        (parsed(&latest.version)? > parsed(rick)?).then_some(latest)
     }
 
     /// The release of Rick the registry's oldest build was made with.

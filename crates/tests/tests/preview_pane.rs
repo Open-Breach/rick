@@ -1422,13 +1422,23 @@ fn a_file_no_previewer_claims_shows_the_centred_card_with_open_with_alone() {
         previewers(),
     );
     // A disabled plugin in the plugins directory whose manifest claims
-    // `.abc`, as the binary would have reported it.
+    // `.abc`, as the binary would have reported it: `[plugins] disabled`
+    // names it.
+    harness.state_mut().app_mut().handle(
+        app::Command::Settings(model::SettingsChange::Plugin {
+            id: "preview-abc".to_owned(),
+            enabled: false,
+        }),
+        &mut Vec::new(),
+    );
     harness.state_mut().app_mut().set_plugins(vec![app::Plugin {
         id: "preview-abc".to_owned(),
         name: "ABC preview".to_owned(),
         version: "0.2.0".to_owned(),
         points: ext::Points::PREVIEWER,
         previews: vec!["abc".to_owned()],
+        markers: Vec::new(),
+        connections: Vec::new(),
         status: app::PluginStatus::Disabled,
         path: dir.path().join("plugins").join("preview-abc"),
         description: String::new(),
@@ -1443,9 +1453,10 @@ fn a_file_no_previewer_claims_shows_the_centred_card_with_open_with_alone() {
         .previews()
         .get(pane)
         .unwrap_or_else(|| panic!("slot"));
+    assert!(slot.placeholder().is_some(), "the centred card");
     assert_eq!(
-        slot.placeholder().map(|p| p.plugin.clone()),
-        Some(None),
+        harness.state().app().preview_suggestion(pane),
+        None,
         "no plugin claims .bin"
     );
     assert!(!slot.has_frame(), "no hex dump, no frame at all");
@@ -1499,9 +1510,14 @@ fn a_file_no_previewer_claims_shows_the_centred_card_with_open_with_alone() {
         .previews()
         .get(pane)
         .unwrap_or_else(|| panic!("slot"));
+    assert!(slot.placeholder().is_some(), "the centred card");
     assert_eq!(
-        slot.placeholder().map(|p| p.plugin.clone()),
-        Some(Some("preview-abc".to_owned())),
+        harness
+            .state()
+            .app()
+            .preview_suggestion(pane)
+            .map(|s| (s.id, s.remedy)),
+        Some(("preview-abc".to_owned(), app::Remedy::Enable)),
         "the disabled plugin claims .abc"
     );
     for _ in 0..3 {
@@ -1513,6 +1529,36 @@ fn a_file_no_previewer_claims_shows_the_centred_card_with_open_with_alone() {
             .next()
             .is_some()
     );
+    // The action row gains the plugin's button after *Open with…*
+    // (specs/plugin-distribution.md §8), and no bar stands over a card.
+    let with = harness.get_by_label("Open with…").rect();
+    let enable = harness.get_by_label("Enable ABC preview").rect();
+    assert!(
+        enable.left() > with.right() && (enable.center().y - with.center().y).abs() < 1.0,
+        "{enable:?} after {with:?}"
+    );
+    assert_eq!(harness.state().preview_rects().suggestion, None);
+
+    // **Enable** takes the plugin off `[plugins] disabled`; it waits for
+    // the next start, and the card no longer offers it.
+    harness.get_by_label("Enable ABC preview").click();
+    for _ in 0..3 {
+        harness.step();
+    }
+    assert_eq!(
+        harness.state().app().model().settings.plugins.disabled,
+        [] as [&str; 0]
+    );
+    assert!(harness.query_by_label("Enable ABC preview").is_none());
+    // The card says that the plugin waits for the next start, and has
+    // **Restart now** where **Enable** stood.
+    assert!(
+        harness
+            .query_all_by_label_contains("plugin enabled, restart Rick to use it")
+            .next()
+            .is_some()
+    );
+    harness.get_by_label("Restart now");
 }
 
 /// Issue 149, item 7: with the hex view loaded, a file nothing else

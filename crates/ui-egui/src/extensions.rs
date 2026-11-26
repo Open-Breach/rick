@@ -65,7 +65,7 @@ const LABEL: f32 = 96.0;
 /// A row of the info card.
 const INFO_ROW: f32 = 39.0;
 /// The attention dot.
-const DOT: f32 = 8.0;
+const DOT: f32 = widgets::ATTENTION_DOT;
 /// The strip at the foot of the *Available* list: the list's date, or why
 /// the last check gave none, and *Check now*.
 const STRIP: f32 = 52.0;
@@ -268,6 +268,8 @@ enum Ask {
     Show(Tab),
     ChooseAvailable(String),
     InstallAvailable(String),
+    /// **Suggest again** on a plugin whose suggestions were silenced.
+    SuggestAgain(String),
     UpdateAll,
     CheckNow,
     Restart,
@@ -299,6 +301,16 @@ impl ExtensionsDialog {
     #[must_use]
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// Opens the dialogue on the plugin `id` of the *Available* list:
+    /// **Install** of a suggestion on a Rick a package manager installed,
+    /// where the details show the command.
+    pub fn open_available(&mut self, id: String) {
+        self.open = true;
+        self.filter.clear();
+        self.tab = Tab::Available;
+        self.chosen_available = Some(id);
     }
 
     /// A plugin package was unpacked into `path`: its row, under
@@ -437,6 +449,9 @@ impl ExtensionsDialog {
             Some(Ask::ChooseAvailable(id)) => self.chosen_available = Some(id),
             Some(Ask::InstallAvailable(id)) => {
                 requests.push(Request::Command(Command::InstallAvailable(id)));
+            }
+            Some(Ask::SuggestAgain(id)) => {
+                requests.push(Request::Command(Command::SuggestAgain(id)));
             }
             Some(Ask::UpdateAll) => requests.push(Request::Command(Command::UpdateAll)),
             Some(Ask::CheckNow) => {
@@ -1117,15 +1132,12 @@ fn row(
     );
     right -= 32.0 + 10.0;
     if attention(app, plugin).is_some() {
-        let dot = Rect::from_center_size(pos2(right - DOT / 2.0, inner.center().y), vec2(DOT, DOT));
-        ui.painter()
-            .circle_filled(dot.center(), DOT / 2.0, scheme.status_warning);
-        let needs = t!("extensions-needs-attention");
-        ui.interact(dot, ui.id().with(("dot", &plugin.path)), Sense::hover())
-            .on_hover_text(&needs)
-            .widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Label, true, needs.clone())
-            });
+        widgets::attention_dot(
+            ui,
+            pos2(right - DOT / 2.0, inner.center().y),
+            ui.id().with(("dot", &plugin.path)),
+            &t!("extensions-needs-attention"),
+        );
         right -= DOT + 10.0;
     }
     if waits_for_restart(app, plugin) {
@@ -1352,6 +1364,7 @@ fn available_details(
                     .selectable(false),
                 );
             }
+            not_suggested(ui, app, &plugin.id, asked);
             let mut rows = vec![InfoRow::text(t!("extensions-contributes"), offers(plugin))];
             match packaging {
                 // The package manager installs it: the command, and
@@ -1364,6 +1377,33 @@ fn available_details(
             }
             info_rows(ui, &rows, asked);
         });
+}
+
+/// *Not suggested* with **Suggest again**, in the details of a plugin
+/// whose suggestions were silenced (specs/plugin-distribution.md §8): by
+/// **Don't suggest again**, or by **Not now** until Rick is started
+/// again. **Suggest again** takes both back. Nothing for a plugin that
+/// is suggested as any other.
+fn not_suggested(ui: &mut egui::Ui, app: &App, id: &str, asked: &mut Option<Ask>) {
+    if !app.suggestion_silenced(id) {
+        return;
+    }
+    let scheme = theme::scheme(ui);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(t!("extensions-not-suggested"))
+                    .size(TEXT_BODY)
+                    .color(scheme.text_secondary),
+            )
+            .selectable(false),
+        );
+        let again = t!("extensions-suggest-again");
+        if widgets::card_button(ui, None, &again, ButtonKind::Secondary).clicked() {
+            *asked = Some(Ask::SuggestAgain(id.to_owned()));
+        }
+    });
 }
 
 /// The head of an available plugin's details: the icon tile, the name,
@@ -1478,6 +1518,11 @@ fn details(
                     .wrap()
                     .selectable(false),
                 );
+            }
+            // A plugin that is switched off is suggested by what it is
+            // for, unless that was silenced.
+            if !enabled(app, plugin) {
+                not_suggested(ui, app, &plugin.id, asked);
             }
             update_or_attention(ui, app, plugin, update, asked);
             info_card(ui, app, plugin, asked);

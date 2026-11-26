@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use app::Command;
-use chrono::{DateTime, Local};
 use ext::{Timeline, t};
 use model::{PaneId, TimelineState};
 use types::Location;
@@ -157,14 +156,12 @@ pub fn focused(ctx: &egui::Context, pane: PaneId) -> bool {
 
 /// A point's time as the bar reads it: *Tue 4 Nov, 02:00*.
 fn short(time: SystemTime) -> String {
-    let time: DateTime<Local> = time.into();
-    time.format("%a %-d %b, %H:%M").to_string()
+    crate::format::local_time(time, "%a %-d %b, %H:%M")
 }
 
 /// A point's time in its tooltip: *Tue 4 Nov 2026, 02:00*.
 fn long(time: SystemTime) -> String {
-    let time: DateTime<Local> = time.into();
-    time.format("%a %-d %b %Y, %H:%M").to_string()
+    crate::format::local_time(time, "%a %-d %b %Y, %H:%M")
 }
 
 /// What the bar shows this frame.

@@ -84,6 +84,7 @@ pub mod plugins;
 mod registry;
 mod session;
 pub mod settings;
+mod suggest;
 mod timeline;
 
 pub use command::{
@@ -99,10 +100,12 @@ pub use ops::hash;
 pub use ops::{PermissionRequest, Recursion};
 pub use places::{PLACES_FILE, defaults as default_places, virtual_icon};
 pub use registry::{
-    Available, CACHE_DIR, Offering, PluginRegistry, RegistryCommand, RegistryProblem, Update,
+    Available, CACHE_DIR, Offering, PluginRegistry, REGISTRY_AFTER_START, RegistryCommand,
+    RegistryProblem, RickUpdate, Update,
 };
 pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
 pub use settings::SETTINGS_FILE;
+pub use suggest::{ConnectionKind, Pending, Remedy, SuggestedConnection, Suggestion};
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -164,6 +167,12 @@ pub struct Plugin {
     /// The file name extensions its previewers claim, as its manifest
     /// lists them, lower case without the dot.
     pub previews: Vec<String>,
+    /// The names of an entry directly inside a folder that make the folder
+    /// its business, as its manifest lists them: `.git`.
+    pub markers: Vec<String>,
+    /// The kinds of connection it adds to *Add…* in the side panel, as its
+    /// manifest lists them.
+    pub connections: Vec<ConnectionKind>,
     /// Loaded, disabled or refused.
     pub status: PluginStatus,
     /// The plugin's directory.
@@ -251,6 +260,9 @@ enum Msg {
         result: Result<Box<dyn PreviewDoc>, Error>,
         /// The previewer that was asked.
         previewer: ExtId,
+        /// The previewer is the one of last resort: no other claims the
+        /// file.
+        last_resort: bool,
         /// The bytes served and the file's size, when the previewer got a
         /// prefix of a remote file.
         prefix: Option<(u64, Option<u64>)>,
@@ -365,9 +377,11 @@ enum Msg {
     /// announced last.
     RegistryDone {
         fetched: Option<Result<plugins_registry::Cached, plugins_registry::Error>>,
-        start: bool,
-        announced: Option<String>,
+        command: RegistryCommand,
+        announced: registry::Announced,
     },
+    /// The timer of the plugin list's background check has run out.
+    RegistryDue,
     /// A job started waiting for its volume, or stopped.
     Schedule,
     /// The mounted volumes were enumerated.
@@ -643,6 +657,10 @@ struct PreviewJob {
     full: Entry,
     generation: u64,
     cancel: CancelToken,
+    /// No loaded previewer claims the file but the one of last resort,
+    /// or none at all: a plugin that is not there may be suggested for
+    /// it ([`App::preview_suggestion`]).
+    unclaimed: bool,
 }
 
 /// What a pane's listing was started for; a different key means relist.
@@ -855,6 +873,8 @@ pub struct App {
     /// `installed.toml`: where the plugins of the per-user plugins folder
     /// came from.
     installed: plugins::Record,
+    /// What the user said of the suggestions in this run.
+    suggestions: suggest::Suggestions,
 }
 
 impl App {
@@ -1197,6 +1217,7 @@ impl App {
             integration: integration::IntegrationRun::default(),
             plugin_registry,
             installed,
+            suggestions: suggest::Suggestions::default(),
         };
         app.watch_settings();
         if seeded {
@@ -1262,6 +1283,7 @@ impl App {
     /// Records the plugins the host found, for the Extensions dialogue.
     pub fn set_plugins(&mut self, plugins: Vec<Plugin>) {
         self.plugins = plugins;
+        self.suggest_markers_changed();
     }
 
     /// Unpacks a plugin package into the per-user plugins folder as a job
@@ -1390,33 +1412,6 @@ impl App {
     #[must_use]
     pub fn missing_library(&self, id: &str) -> Option<&str> {
         self.missing_libraries.get(id).map(String::as_str)
-    }
-
-    /// The id of a disabled plugin in the plugins directory whose manifest
-    /// says its previewers claim files named like `name` (by any suffix
-    /// after a dot, so `a.tar.gz` finds a plugin that claims `tar.gz` or
-    /// `gz`): the answer to *Plugin available* in the preview pane's
-    /// placeholder, from the manifests alone (SPEC.md, Preview, *No
-    /// previewer*).
-    #[must_use]
-    pub fn disabled_plugin_for(&self, name: &str) -> Option<String> {
-        let lower = name.to_ascii_lowercase();
-        let suffixes: Vec<&str> = lower
-            .char_indices()
-            .filter(|(_, c)| *c == '.')
-            .map(|(i, _)| &lower[i + 1..])
-            .filter(|s| !s.is_empty())
-            .collect();
-        self.plugins
-            .iter()
-            .filter(|plugin| plugin.status == PluginStatus::Disabled)
-            .find(|plugin| {
-                plugin
-                    .previews
-                    .iter()
-                    .any(|claimed| suffixes.iter().any(|s| claimed.eq_ignore_ascii_case(s)))
-            })
-            .map(|plugin| plugin.id.clone())
     }
 
     /// The values of the settings extensions declared
@@ -2007,6 +2002,7 @@ impl App {
             }
             Command::CancelJob(id) => {
                 self.jobs.cancel(id);
+                self.end_cancelled_listings(events);
             }
             Command::PauseJob(id) => {
                 if self.jobs.pause(id) {
@@ -2088,6 +2084,9 @@ impl App {
             Command::RemovePlugin(path) => self.remove_plugin(path),
             Command::InstallAvailable(id) => self.install_available(&id),
             Command::UpdateAll => self.update_all(),
+            Command::SuggestNotNow(id) => self.suggest_not_now(id),
+            Command::SuggestNever(id) => self.suggest_never(id),
+            Command::SuggestAgain(id) => self.suggest_again(id),
             Command::InstallPluginFrom(url) => self.install_from_address(&url, events),
             Command::PreviewWith { pane, previewer } => {
                 if let Some(job) = self.preview.get(&pane) {
@@ -2541,6 +2540,9 @@ impl App {
                             }
                         }
                     }
+                    // A cancelled listing has not seen every root: the rows
+                    // stay as they are.
+                    drained(&job.cancel)?;
                     tx.send(match which {
                         Virtual::Network => Msg::Network(provider_rows(entries)),
                         _ => Msg::Cloud(entries),
@@ -2997,15 +2999,20 @@ impl App {
                             break;
                         }
                     }
-                    Ok(())
+                    drained(&job.cancel)
                 }
                 .await;
-                tx.send(Msg::TreeDone {
-                    pane,
-                    generation,
-                    folder,
-                    result: result.as_ref().copied().map_err(Error::replicate),
-                });
+                // Whoever cancelled this listing collapsed the folder or
+                // lists it again: its end says nothing about the folder, as
+                // nothing is said when the runner sees the cancel first.
+                if !job.cancel.is_cancelled() {
+                    tx.send(Msg::TreeDone {
+                        pane,
+                        generation,
+                        folder,
+                        result: result.as_ref().copied().map_err(Error::replicate),
+                    });
+                }
                 result
             });
         self.internal.insert(handle.id);
@@ -3917,6 +3924,7 @@ impl App {
         }
         // Search results never reconcile: the walk streams in afresh.
         let reconcile = reconcile && key.search.is_none();
+        self.suggest_listing(pane, &key, reconcile);
         if !reconcile {
             self.model.clear_listing(pane);
         }
@@ -4008,7 +4016,7 @@ impl App {
                             break;
                         }
                     }
-                    Ok(())
+                    drained(&job.cancel)
                 }
                 .await;
                 tx.send(Msg::ListDone {
@@ -4134,7 +4142,7 @@ impl App {
                             break;
                         }
                     }
-                    Ok(())
+                    drained(&job.cancel)
                 }
                 .await;
                 tx.send(Msg::ListDone {
@@ -4230,7 +4238,7 @@ impl App {
                             break;
                         }
                     }
-                    Ok(())
+                    drained(&job.cancel)
                 }
                 .await;
                 tx.send(Msg::ListDone {
@@ -4350,7 +4358,7 @@ impl App {
                                 break;
                             }
                         }
-                        Ok(())
+                        drained(&job.cancel)
                     }
                     .await;
                     tx.send(Msg::IndexDone {
@@ -4536,11 +4544,18 @@ impl App {
                 if live.generation != generation {
                     return;
                 }
+                // A listing the user cancelled has ended: the pane keeps
+                // the rows it has, and those still on their way are not
+                // added.
+                if live.cancel.is_cancelled() {
+                    return;
+                }
                 if let Some(buffer) = &mut live.buffer {
                     buffer.extend(batch);
                     return;
                 }
                 self.model.listing_batch(pane, batch.clone());
+                self.suggest_listed(pane, &batch);
                 self.decorate(pane, &batch, events);
                 events.push(Event::Listed {
                     pane,
@@ -4645,16 +4660,18 @@ impl App {
                 generation,
                 result,
                 previewer,
+                last_resort,
                 prefix,
             } => {
-                if self
+                let Some(job) = self
                     .preview
-                    .get(&pane)
-                    .is_none_or(|job| job.generation != generation)
-                {
+                    .get_mut(&pane)
+                    .filter(|job| job.generation == generation)
+                else {
                     return;
-                }
+                };
                 let opened = result.is_ok();
+                job.unclaimed = last_resort && opened;
                 if let Ok(doc) = &result {
                     // What the Extensions dialogue calls needing attention.
                     match doc.content() {
@@ -4710,15 +4727,11 @@ impl App {
             } => {
                 if let Some(job) = self
                     .preview
-                    .get(&pane)
+                    .get_mut(&pane)
                     .filter(|job| job.generation == generation)
                 {
-                    let plugin = self.disabled_plugin_for(&job.full.name);
-                    events.push(Event::PreviewNone {
-                        pane,
-                        plugin,
-                        permissions,
-                    });
+                    job.unclaimed = true;
+                    events.push(Event::PreviewNone { pane, permissions });
                 }
             }
             Msg::PreviewEmpty {
@@ -4790,9 +4803,10 @@ impl App {
             Msg::RegistryChecking => self.registry_checking(),
             Msg::RegistryDone {
                 fetched,
-                start,
+                command,
                 announced,
-            } => self.registry_done(fetched, start, announced.as_deref(), events),
+            } => self.registry_done(fetched, command, announced, events),
+            Msg::RegistryDue => self.registry_command(RegistryCommand::Daily),
             Msg::PluginInstalled(Err(text))
             | Msg::PluginRemoved {
                 result: Err(text), ..
@@ -5256,6 +5270,7 @@ impl App {
                 full: entry,
                 generation,
                 cancel: CancelToken::new(),
+                unclaimed: false,
             },
         );
     }
@@ -5327,8 +5342,26 @@ impl App {
                 full: job_entry,
                 generation,
                 cancel: handle.cancel,
+                unclaimed: false,
             },
         );
+    }
+
+    /// Ends the listings whose job was just cancelled, as cancelled. The
+    /// job itself usually says nothing more: the runner drops its future
+    /// when it sees the cancel, and with it the `ListDone` its pane waits
+    /// for. Left to that, the pane's footer went on saying *listing…* and
+    /// the application stayed busy.
+    fn end_cancelled_listings(&mut self, events: &mut Vec<Event>) {
+        let cancelled: Vec<(PaneId, u64)> = self
+            .live
+            .iter()
+            .filter(|(_, live)| !live.complete && live.cancel.is_cancelled())
+            .map(|(pane, live)| (*pane, live.generation))
+            .collect();
+        for (pane, generation) in cancelled {
+            self.list_done(pane, generation, &Err(Error::Cancelled), events);
+        }
     }
 
     fn list_done(
@@ -5342,6 +5375,18 @@ impl App {
             return;
         };
         if live.generation != generation {
+            return;
+        }
+        // A listing the user cancelled did not fail: it ends where it is,
+        // the pane keeps the rows it has and nothing is said. It is one
+        // whose own token is cancelled, which only cancelling its job
+        // does while the pane still shows it. A provider that answers
+        // `Cancelled` with the token untouched, as `ext-ssh` does for a
+        // dismissed password prompt, has failed to list, and that keeps
+        // its banner.
+        let cancelled = matches!(result, Err(Error::Cancelled)) && live.cancel.is_cancelled();
+        if cancelled && live.complete {
+            // Told a second time, by the job after the cancel itself.
             return;
         }
         let location = live.key.location.clone();
@@ -5379,6 +5424,7 @@ impl App {
                     result
                         .as_ref()
                         .err()
+                        .filter(|_| !cancelled)
                         .map(|error| format!("{location} could not be listed: {error}")),
                 );
             }
@@ -5387,6 +5433,7 @@ impl App {
             Some(entries) if result.is_ok() => {
                 let before = self.selected_ids(pane);
                 self.model.replace_listing(pane, entries.clone());
+                self.suggest_relisted(pane, &entries);
                 let after = self.selected_ids(pane);
                 if before != after {
                     events.push(Event::SelectionChanged { pane, ids: after });
@@ -5426,8 +5473,22 @@ impl App {
             }
             _ => {}
         }
-        // Tree view: the expanded folders list their children again, swapped
-        // in at once where they were listed before.
+        // Tree view: the expanded folders list their children again. Not
+        // after a cancel, which starts nothing.
+        if !cancelled {
+            self.list_expanded_again(pane);
+        }
+        events.push(Event::Listed {
+            pane,
+            batch,
+            done: true,
+        });
+    }
+
+    /// Lists the children of the pane's expanded folders again, swapped in
+    /// at once where they were listed before; a folder whose children are
+    /// being listed is left to that.
+    fn list_expanded_again(&mut self, pane: PaneId) {
         let expanded = self.model.tree_expanded(pane);
         for (folder, location) in expanded {
             let listed = self
@@ -5442,11 +5503,6 @@ impl App {
                 self.list_child(pane, folder, location, listed);
             }
         }
-        events.push(Event::Listed {
-            pane,
-            batch,
-            done: true,
-        });
     }
 
     fn change(&mut self, pane: PaneId, generation: u64, change: FsChange, events: &mut Vec<Event>) {
@@ -5457,6 +5513,7 @@ impl App {
             return;
         }
         let before = self.selected_ids(pane);
+        self.suggest_change(pane, &change);
         if self.model.apply_change(pane, change.clone()) {
             let after = self.selected_ids(pane);
             if before != after {
@@ -5811,6 +5868,24 @@ fn below_ignored(root: &VPath, path: &VPath, names: &[String]) -> bool {
     let rest = path.strip_prefix(root).unwrap_or(path);
     rest.split(|b| matches!(b, b'/' | b'\\'))
         .any(|part| names.iter().any(|name| name.as_bytes() == part))
+}
+
+/// How a job ends that has drained a stream: cancelled when its token is,
+/// done otherwise.
+///
+/// A stream ends when its token is cancelled, and it may end quietly, with
+/// `None` and no error (`Provider::list` and `SearchIndex::query` in
+/// SPEC.md, *Core types and extension traits*). The end of the stream is
+/// then not the end of the work. The job runner cannot say so for the job:
+/// it looks at the token before it polls, so a cancel that lands inside the
+/// poll in which the stream ends is one it never sees, and the job's `Ok`
+/// would be recorded as Done.
+fn drained(cancel: &CancelToken) -> Result<(), Error> {
+    if cancel.is_cancelled() {
+        Err(Error::Cancelled)
+    } else {
+        Ok(())
+    }
 }
 
 /// The search indexes the title-row search box queries: every registered
@@ -6205,6 +6280,10 @@ impl PreviewRun {
             });
             return Ok(());
         };
+        // The hex view takes what no other previewer recognises: a plugin
+        // that is not there may then be suggested for the file. A
+        // previewer that was asked for by name was chosen, not left over.
+        let last_resort = with.is_none() && previewer.score(&entry, &sniff) <= ext::FALLBACK_SCORE;
         let mut prefix = None;
         let result = if remote && previewer.reads() == Reads::Prefix {
             let limit = REMOTE_PREFIX_CHUNK * (u64::from(more) + 1);
@@ -6245,6 +6324,7 @@ impl PreviewRun {
             generation,
             result,
             previewer: previewer.id(),
+            last_resort,
             prefix,
         });
         Ok(())
@@ -6634,6 +6714,7 @@ impl Drop for App {
     fn drop(&mut self) {
         self.settings_watch.cancel();
         self.volumes_watch.cancel();
+        self.plugin_registry.stop();
         for live in self.live.values() {
             live.cancel.cancel();
             for child in live.children.values() {

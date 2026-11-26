@@ -103,7 +103,7 @@ None. The plugin has no settings.
 
 ## Dependencies
 
-`chrono` for snapshot dates and the default name, `futures` and `tokio` (`fs`, `sync`) for the streamed listings, `thiserror`, `tracing`; at run time the `zfs` command line and, for elevation, `pkexec`. No C dependencies in the plugin file.
+`jiff` for snapshot dates and the default name, `futures` and `tokio` (`fs`, `sync`) for the streamed listings, `thiserror`, `tracing`; at run time the `zfs` command line and, for elevation, `pkexec`. No C dependencies in the plugin file.
 
 ## Acceptance
 

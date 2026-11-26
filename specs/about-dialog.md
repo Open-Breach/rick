@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The About dialog tells the user what they are running, where it came from and who made it, and satisfies the attribution duties of the licences Rick ships under: Apache-2.0 and MIT notices for the crates, the BSD notice for pdfium, the LGPL notices for GStreamer and 7-Zip, the font licences for the shipped fonts.
+The About dialog tells the user what they are running, where it came from and who made it, and satisfies the attribution duties of the licences Rick ships under: Apache-2.0 and MIT notices for the crates and for the Rust standard library, the BSD notice for pdfium, the LGPL notices for GStreamer and 7-Zip, the font licences for the shipped fonts.
 
 Design reference: Figma, section "About dialog". This text is binding where it and the frames disagree on behaviour; the frames are binding for layout, spacing and colour.
 
@@ -10,6 +10,7 @@ Design reference: Figma, section "About dialog". This text is binding where it a
 
 - Opened from the app menu, About Rick. A modal dialog in the settings window's chrome: `dialog/bg`, 14 px radius, close button top right; 520 pt wide, height from content.
 - Hero, centred: the app symbol (`assets/icons/svg/rick-symbol.svg`) at 96 pt; "Rick" 26 pt medium; tagline "a god-like file manager" 14 pt in `text/secondary`; the version in a pill on `bg/selected-soft`; one monospace build line, 12 pt in `text/secondary`: `<short commit> · <OS> <arch> · plugin ABI <n> · built <YYYY-MM-DD>`. Commit, target and date are build-time environment values from `crates/rick/build.rs`; the ABI number is `ext::API_VERSION`. Nothing is read from git at runtime.
+- Update line, under the build line and above the buttons, only while the plugin list names a release of Rick newer than the one that runs (`specs/plugin-distribution.md` §6; `specs/gui-title-row.md`, *Menu*): *Rick 0.7.0 is available* in 13 pt `text/primary`, centred, and beside it **Download** as a link, which opens the release page in the system browser. On a Rick a package manager installed the line reads *Rick 0.7.0 is available. Update it through your package manager.* and has no link. The line is read from the plugin list Rick holds; the dialog asks nobody for it.
 - Buttons under the hero: Copy details and What's new.
   - Copy details copies plain text: name and version; the build line; the toolchain (`RICK_TOOLCHAIN`); the OS and desktop (Linux: distribution and `XDG_CURRENT_DESKTOP`; macOS and Windows: the OS version); the loaded plugins, one `id version status` line each. `rick --version` prints the same text.
   - What's new shows the running version's section of `CHANGELOG.md` (embedded at build time) in a read-only text view inside the dialog; a `-dev` build shows the Unreleased section.
@@ -22,7 +23,7 @@ Design reference: Figma, section "About dialog". This text is binding where it a
 
 - Reached from the Licence card; the header has a back button (returns to the About page), the title, and the close button. 520 × 640 pt, the list scrolls.
 - Tools row: a search field filtering by component name, and a dropdown filtering by licence type (All licences plus one entry per licence id in the data).
-- Sections: Bundled runtimes first — everything shipped outside Cargo: pdfium, GStreamer (bundled in the macOS and Windows archives), 7-Zip, the shipped fonts — listed by hand in `about/bundled.toml` with name, version, licence id, copyright, URL and licence text; then Rust crates, alphabetical, from the generated file.
+- Sections: Bundled runtimes first — everything shipped outside Cargo: pdfium, GStreamer (bundled in the macOS and Windows archives), 7-Zip, the Rust standard library (`libstd`, beside the binary), the shipped fonts — listed by hand in `about/bundled.toml` with name, version, licence id, copyright, URL and licence text; then Rust crates, alphabetical, from the generated file. The libraries built into pdfium are not listed: their licence texts ship as files, in `licenses/pdfium/` beside the binary, copied from the pdfium build the release carries.
 - Row: name (medium), version (mono, `text/secondary`), licence pill (`trash/low-bg` / `trash/low-text`), chevron. Clicking a row expands it in place on `bg/selected-soft`: copyright holder, repository link, and the full licence text in a mono box on `bg/card`. One row is open at a time; clicking the open row closes it.
 - Footer: "Generated at build time from Cargo.lock by cargo-about · N components, M licence types", and Export…, which writes the whole list — bundled runtimes and crates, each with its licence text — as one plain-text file through the save dialog.
 - Plugins loaded from outside `plugins/` contribute their own entries from a `licenses.json` beside the plugin file (same shape as the generated file), shown under the plugin's name as a third section; no file, no section.
@@ -41,4 +42,4 @@ All visible text goes through `locales/en.ftl` and `locales/de.ftl`. Licence tex
 
 ## Out of scope
 
-Licence text translation, a donate link, update checks (Version 0.3), signing and notarisation.
+Licence text translation, a donate link, an in-app installer for updates, signing and notarisation.

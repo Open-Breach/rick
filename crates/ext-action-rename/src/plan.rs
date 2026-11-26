@@ -5,7 +5,6 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::time::SystemTime;
 
-use chrono::{DateTime, Local};
 use types::Entry;
 
 /// How the names change.
@@ -128,10 +127,9 @@ fn split(name: &str, is_dir: bool) -> (&str, &str) {
 
 /// `{date}` for an entry: its modification date, local time.
 fn date_of(time: Option<SystemTime>) -> String {
-    time.map_or_default(|t| {
-        let local: DateTime<Local> = t.into();
-        local.format("%Y-%m-%d").to_string()
-    })
+    time.and_then(|t| jiff::Zoned::try_from(t).ok())
+        .and_then(|local| jiff::fmt::strtime::format("%Y-%m-%d", &local).ok())
+        .unwrap_or_default()
 }
 
 /// Fills the pattern's placeholders.

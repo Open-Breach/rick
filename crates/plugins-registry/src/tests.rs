@@ -329,8 +329,8 @@ fn the_source_is_this_build_s_unless_rick_toml_says_otherwise() {
     let other = Signer::new(2).public_key();
     let compiled = format!("untrusted comment: minisign public key\n{key}\n");
 
-    // The committed file is empty or a key, and this build reads the
-    // registry exactly when it is a key.
+    // The committed file is the registry's key, and this build reads the
+    // registry with it.
     let committed = include_str!("../keys/registry.pub");
     let own = Source::new(None, None);
     assert_eq!(own.url, INDEX_URL);
@@ -339,7 +339,7 @@ fn the_source_is_this_build_s_unless_rick_toml_says_otherwise() {
         own.key,
         Key::parse(committed).unwrap_or_else(|e| panic!("{e}"))
     );
-    assert_eq!(own.key.is_some(), !committed.trim().is_empty());
+    assert!(own.key.is_some(), "this build has the registry on");
     assert_eq!(own.host(), "get.openbreach.dev");
     assert_eq!(
         own.signature_url(),
@@ -381,6 +381,70 @@ fn the_source_is_this_build_s_unless_rick_toml_says_otherwise() {
     let broken = Source::with_compiled(&compiled, None, Some("not a key"));
     assert_eq!(broken.key, None);
     assert!(broken.custom);
+}
+
+/// Trebuchet's `keys/registry.pub` as it is on `main` of
+/// Open-Breach/trebuchet, read at its commit `38164ff`: the SHA-256 of the
+/// file, which `sha256sum keys/registry.pub` prints there.
+const TREBUCHET_KEY_SHA256: &str =
+    "e5d6bf252f53b832f3c874081b2d3e354b565104c6b2540db2b476a735da27dc";
+/// The id minisign gave that key: the last word of the file's first line,
+/// and what a signature names its key by.
+const TREBUCHET_KEY_ID: &str = "197B77080066F36E";
+
+/// The key compiled into Rick is a minisign public key, and it is
+/// Trebuchet's file byte for byte.
+///
+/// Nothing is asked for the comparison: the test holds what Trebuchet's
+/// file was when it was copied, its SHA-256 and the key's id, and the
+/// committed file must hash to the one and carry the other. A file that
+/// was edited here, or copied from elsewhere, fails. What the test cannot
+/// see is a key Trebuchet replaces later: that is a new file there, a new
+/// hash here and a release of Rick (Trebuchet's spec, 7.5).
+#[test]
+fn the_key_compiled_in_is_a_minisign_public_key_and_trebuchet_s_file() {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    let committed = include_str!("../keys/registry.pub");
+
+    // A `.pub` file as `minisign -G` writes it: the comment that names
+    // the key's id, then one line of base64.
+    let mut lines = committed.lines();
+    assert_eq!(
+        lines.next(),
+        Some(format!("untrusted comment: minisign public key {TREBUCHET_KEY_ID}").as_str())
+    );
+    let line = lines.next().unwrap_or_else(|| panic!("no key line"));
+    assert_eq!(lines.next(), None, "two lines and no more");
+    // The line is the algorithm, Ed25519, the eight bytes of the key's
+    // id and the 32 bytes of the key; the id is the comment's.
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(line)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(raw.len(), 2 + 8 + 32);
+    assert_eq!(&raw[..2], b"Ed");
+    let mut id = [0u8; 8];
+    id.copy_from_slice(&raw[2..10]);
+    assert_eq!(format!("{:016X}", u64::from_le_bytes(id)), TREBUCHET_KEY_ID);
+
+    // The client reads it as its key, and it is the key of this build.
+    let key = Key::parse(committed).unwrap_or_else(|e| panic!("{e}"));
+    assert!(key.is_some());
+    assert_eq!(Source::new(None, None).key, key);
+    // A signature of another key is not this key's.
+    let (other, bytes) = (Signer::new(1), b"an index");
+    assert!(matches!(
+        key.unwrap_or_else(|| panic!("no key"))
+            .verify(bytes, &other.sign(bytes)),
+        Err(Error::Unverified)
+    ));
+
+    // Trebuchet's file, byte for byte.
+    assert_eq!(
+        hex::encode(sha2::Sha256::digest(committed.as_bytes())),
+        TREBUCHET_KEY_SHA256
+    );
 }
 
 #[test]
@@ -541,6 +605,113 @@ fn an_index_is_read_leniently_and_only_as_far_as_rick_s_entry() {
     }
 }
 
+/// An index whose entry for Rick names `latest` and no plugin.
+fn with_latest(latest: &serde_json::Value) -> Index {
+    parsed(&json!({ "schema": 1, "apps": { "rick": { "latest": latest } } }))
+}
+
+#[test]
+fn the_index_names_the_newest_release_of_rick() {
+    // `good` names 0.6.0, as the publisher writes it on every release.
+    let index = parsed(&good());
+    let latest = index.latest().unwrap_or_else(|| panic!("latest"));
+    assert_eq!(latest.version, "0.6.0");
+    assert_eq!(latest.url, "https://example.invalid/v0.6.0");
+
+    // Newer than the Rick that asks, and only then.
+    for (rick, newer) in [
+        ("0.5.0", true),
+        ("0.5.9", true),
+        ("0.6.0", false),
+        ("0.6.1", false),
+        ("0.10.0", false),
+        ("1.0.0", false),
+        // A pre-release Rick is told of nothing, not even of its own
+        // release; what is no version is not compared.
+        ("0.6.0-rc1", false),
+        ("0.5.0-dev", false),
+        ("six", false),
+        ("", false),
+    ] {
+        assert_eq!(index.newer_than(rick).is_some(), newer, "{rick}");
+    }
+    assert_eq!(
+        index
+            .newer_than("0.5.0")
+            .map(|latest| latest.version.as_str()),
+        Some("0.6.0")
+    );
+    // Versions are compared as versions, not as text.
+    let ten = with_latest(&json!({ "version": "0.10.0", "url": "https://example.org/r" }));
+    assert!(ten.newer_than("0.9.0").is_some());
+    assert!(ten.newer_than("0.10.0").is_none());
+
+    // A pre-release is never announced as the newest, and what is no
+    // version announces nothing.
+    for version in ["0.7.0-rc1", "0.7.0-beta.2", "newest", "7"] {
+        let index = with_latest(&json!({ "version": version, "url": "https://example.org/r" }));
+        assert_eq!(index.newer_than("0.6.0"), None, "{version}");
+    }
+}
+
+#[test]
+fn an_entry_for_the_newest_release_that_is_none_costs_the_plugin_list_nothing() {
+    for entry in [
+        json!(null),
+        json!("0.7.0"),
+        json!(7),
+        json!([]),
+        json!({}),
+        json!({ "url": "https://example.org/r" }),
+        json!({ "version": 7 }),
+        json!({ "version": "" }),
+    ] {
+        let index = parsed(&json!({
+            "schema": 1,
+            "apps": { "rick": { "latest": entry, "plugins": [{ "id": "git" }] } },
+        }));
+        assert_eq!(index.latest(), None, "{entry}");
+        assert_eq!(index.newer_than("0.1.0"), None, "{entry}");
+        assert!(index.plugin("git").is_some(), "{entry}");
+    }
+    // No entry at all, and no Rick at all.
+    assert_eq!(parsed(&json!({ "schema": 1 })).latest(), None);
+    // A version without an address is a release all the same.
+    let bare = with_latest(&json!({ "version": "0.7.0" }));
+    assert!(bare.newer_than("0.6.0").is_some());
+    assert_eq!(bare.latest().and_then(Latest::page), None);
+}
+
+#[test]
+fn only_an_https_address_is_a_release_page_to_open() {
+    let page = |url: &str| {
+        let latest = Latest {
+            version: "0.7.0".to_owned(),
+            url: url.to_owned(),
+        };
+        latest.page().map(str::to_owned)
+    };
+    for good in [
+        "https://github.com/Open-Breach/rick/releases/tag/v0.7.0",
+        "https://get.openbreach.dev/rick/0.7.0/",
+    ] {
+        assert_eq!(page(good).as_deref(), Some(good));
+    }
+    for bad in [
+        "",
+        "…",
+        "http://github.com/Open-Breach/rick/releases/tag/v0.7.0",
+        "http://127.0.0.1:8123/release",
+        "file:///etc/passwd",
+        "rick://open?path=/tmp",
+        "javascript:alert(1)",
+        "github.com/Open-Breach/rick",
+        "https://",
+    ] {
+        assert_eq!(page(bad), None, "{bad}");
+    }
+}
+
 #[test]
 fn the_platforms_are_named_as_the_release_archives_are() {
     assert_eq!(platform_name("linux", "x86_64"), "linux-x64");
@@ -570,6 +741,12 @@ fn the_background_check_is_due_once_a_day() {
     assert!(due(Some(ago(24 * 30)), now));
     // A cached file dated after now is no reason to wait.
     assert!(due(Some(now + Duration::from_secs(3600)), now));
+    // The same rule for a check at another interval.
+    let hour = Duration::from_hours(1);
+    assert!(due_after(None, now, hour));
+    assert!(!due_after(Some(now - Duration::from_mins(59)), now, hour));
+    assert!(due_after(Some(now - hour), now, hour));
+    assert_eq!(CHECK_EVERY, Duration::from_hours(24));
 }
 
 /// The SHA-256 of `bytes`, as the index writes it.
@@ -677,23 +854,314 @@ fn a_package_address_is_https_or_this_machine() {
         "https://example.org/plugin.rkp",
         "  https://get.openbreach.dev/plugins/rick/0.6.0/git-0.6.0-linux-x64.rkp ",
         "https://example.org:8443/download?file=plugin",
+        "https://192.168.1.10/plugin.rkp",
+        // Plain HTTP to this machine: the loopback addresses, however
+        // they are spelt, and the one name.
         "http://127.0.0.1:8123/plugin.rkp",
-        "http://localhost/plugin.rkp",
+        "http://127.8.9.10/plugin.rkp",
+        "http://127.1:8123/plugin.rkp",
+        "http://0x7f.0.0.1/plugin.rkp",
+        "http://2130706433/plugin.rkp",
         "http://[::1]:9000/plugin.rkp",
+        "http://[0:0:0:0:0:0:0:1]/plugin.rkp",
+        "http://localhost/plugin.rkp",
+        "HTTP://LOCALHOST:8123/plugin.rkp",
     ] {
         assert!(is_package_address(good), "{good}");
     }
     for bad in [
         "",
         "plugin.rkp",
-        "http://example.org/plugin.rkp",
-        "http://192.168.1.10/plugin.rkp",
         "ftp://example.org/plugin.rkp",
         "file:///tmp/plugin.rkp",
         "https://",
+        // Plain HTTP to another machine, near or far.
+        "http://example.org/plugin.rkp",
+        "http://192.168.1.10/plugin.rkp",
+        "http://10.0.0.1/plugin.rkp",
+        "http://169.254.1.1/plugin.rkp",
+        "http://[fe80::1]/plugin.rkp",
+        "http://128.0.0.1/plugin.rkp",
+        // Every address, which is not the loopback one.
+        "http://0.0.0.0/plugin.rkp",
+        "http://[::]/plugin.rkp",
+        // An IPv4 address inside an IPv6 one is not taken apart.
+        "http://[::ffff:127.0.0.1]/plugin.rkp",
+        // No name but `localhost`, whatever it resolves to or looks like.
+        "http://localhost./plugin.rkp",
+        "http://sub.localhost/plugin.rkp",
+        "http://localhost.example.org/plugin.rkp",
+        "http://127.0.0.1.example.org/plugin.rkp",
+        "http://localtest.me/plugin.rkp",
+        // The host is what follows the last `@`, not what stands before.
+        "http://127.0.0.1@example.org/plugin.rkp",
+        "http://localhost:80@example.org/plugin.rkp",
+        "http://example.org#@127.0.0.1/plugin.rkp",
     ] {
         assert!(!is_package_address(bad), "{bad}");
     }
+}
+
+/// A name for another machine, which no resolver is asked for: the
+/// clients of [`elsewhere`] take it for the test's own server.
+const ELSEWHERE: &str = "plugins.example";
+
+/// Clients for which [`ELSEWHERE`] is `server`: a request to that name,
+/// should one be made, arrives there and is counted. With the address of
+/// `path` under that name.
+fn elsewhere(server: &Server, path: &str) -> (crate::fetch::Clients, String) {
+    let clients = crate::fetch::Clients::resolving("0.6.0", ELSEWHERE, server.address())
+        .unwrap_or_else(|e| panic!("{e}"));
+    let port = server.address().port();
+    (clients, format!("http://{ELSEWHERE}:{port}/{path}"))
+}
+
+#[test]
+fn plain_http_to_another_machine_is_refused_before_any_connection() {
+    runtime::block_on(async {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let server = Server::start();
+        server.put("plugins/git.rkp", vec![7u8; 1000]);
+        let (clients, remote) = elsewhere(&server, "plugins/git.rkp");
+        let to = dir.path().join("git.rkp");
+
+        // The name does lead somewhere: asked past the rule, the package
+        // is there, over one connection.
+        let past = clients.local.get(&remote).send().await;
+        assert_eq!(past.map(|answer| answer.status().as_u16()).ok(), Some(200));
+        assert_eq!(server.connections(), 1);
+        assert_eq!(server.requests().len(), 1);
+
+        // Through the door it is not asked: refused as the address it
+        // is, with no file.
+        let refused =
+            crate::download::download_with(&clients, &remote, &to, None, &mut |_| {}).await;
+        assert!(
+            matches!(
+                &refused,
+                Err(Error::Refused { url, redirected: false }) if *url == remote
+            ),
+            "{refused:?}"
+        );
+        assert!(!to.exists());
+
+        // Neither is the index, nor its signature.
+        let source = Source {
+            url: remote.clone(),
+            key: Source::named(None, Some(&Signer::new(1).public_key())).key,
+            custom: true,
+        };
+        assert!(source.key.is_some());
+        let refused = clients.get(&source.url).await;
+        assert!(matches!(refused, Err(Error::Refused { .. })), "{refused:?}");
+        let refused = fetch(&source, "0.6.0").await;
+        assert!(matches!(refused, Err(Error::Refused { .. })), "{refused:?}");
+
+        // A connection opened later is counted after every one before
+        // it: there was none in between, and no request.
+        let after = clients.local.get(server.url("after")).send().await;
+        assert_eq!(after.map(|answer| answer.status().as_u16()).ok(), Some(404));
+        assert_eq!(server.connections(), 2, "the two the test opened itself");
+        let paths: Vec<String> = server.requests().into_iter().map(|r| r.path).collect();
+        assert_eq!(paths, ["plugins/git.rkp", "after"]);
+    });
+}
+
+#[test]
+fn a_redirect_to_plain_http_on_another_machine_is_refused() {
+    runtime::block_on(async {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let server = Server::start();
+        let package = vec![7u8; 1000];
+        server.put("plugins/git.rkp", package.clone());
+        let (clients, remote) = elsewhere(&server, "plugins/git.rkp");
+        // Straight to the other machine, and by way of this one.
+        server.redirect("moved.rkp", &remote);
+        server.redirect("moved-twice.rkp", "/moved.rkp");
+        let to = dir.path().join("git.rkp");
+
+        for (start, asked) in [
+            ("moved.rkp", vec!["moved.rkp"]),
+            ("moved-twice.rkp", vec!["moved-twice.rkp", "moved.rkp"]),
+        ] {
+            let before = server.requests().len();
+            let refused = crate::download::download_with(
+                &clients,
+                &server.url(start),
+                &to,
+                None,
+                &mut |_| {},
+            )
+            .await;
+            assert!(
+                matches!(
+                    &refused,
+                    Err(Error::Refused { url, redirected: true }) if *url == remote
+                ),
+                "{start}: {refused:?}"
+            );
+            assert!(!to.exists(), "{start}: no file");
+            // Only this machine was asked, and the package never.
+            let paths: Vec<String> = server.requests()[before..]
+                .iter()
+                .map(|r| r.path.clone())
+                .collect();
+            assert_eq!(paths, asked, "{start}");
+        }
+        // As many connections as requests: none was opened and left.
+        let after = clients.local.get(server.url("after")).send().await;
+        assert!(after.is_ok());
+        assert_eq!(server.connections(), 4);
+        assert_eq!(server.requests().len(), 4);
+
+        // The same redirect, asked past the rule, does arrive: it is the
+        // rule that stopped it, not the server.
+        let past = clients.local.get(&remote).send().await;
+        assert_eq!(past.map(|answer| answer.status().as_u16()).ok(), Some(200));
+    });
+}
+
+/// The decision the redirect loop makes for each address it is sent on
+/// to, asked directly. A server of the test's own cannot stand for
+/// "another machine" here: the only addresses elsewhere the client asks
+/// at all are `https://`, and the tests have no TLS server. The loop
+/// itself is run by the tests around this one.
+#[test]
+fn another_machine_does_not_send_a_request_on_to_this_one() {
+    use crate::fetch::{Way, onward};
+    let url = |text: &str| reqwest::Url::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+
+    // From elsewhere to this machine: refused, whatever the scheme, and
+    // however this machine is written.
+    for (from, to) in [
+        ("https://example.org/a.rkp", "http://127.0.0.1:8123/a.rkp"),
+        ("https://example.org/a.rkp", "https://127.0.0.1:8443/a.rkp"),
+        ("https://example.org/a.rkp", "http://localhost/a.rkp"),
+        ("https://example.org/a.rkp", "https://localhost/a.rkp"),
+        ("https://example.org/a.rkp", "http://[::1]:9000/a.rkp"),
+        ("https://example.org/a.rkp", "https://[::1]/a.rkp"),
+        ("https://example.org/a.rkp", "https://127.8.9.10/a.rkp"),
+        ("https://192.168.1.10/a.rkp", "http://127.1/a.rkp"),
+        (
+            "https://get.openbreach.dev/registry/index.json",
+            "http://localhost:8123/registry/index.json",
+        ),
+    ] {
+        let refused = onward(&url(from), &url(to));
+        assert!(
+            matches!(&refused, Err(Error::Inward { url: named }) if *named == url(to).as_str()),
+            "{from} to {to}: {refused:?}"
+        );
+    }
+
+    // From this machine to this machine: followed, by the client of the
+    // address's scheme.
+    for (from, to, way) in [
+        (
+            "http://127.0.0.1:8123/a",
+            "http://127.0.0.1:9000/b",
+            Way::Local,
+        ),
+        (
+            "http://127.0.0.1:8123/a",
+            "http://localhost:8123/b",
+            Way::Local,
+        ),
+        ("http://localhost/a", "http://[::1]/b", Way::Local),
+        (
+            "http://127.0.0.1/a",
+            "https://localhost:8443/b",
+            Way::Secure,
+        ),
+        ("https://localhost:8443/a", "http://127.0.0.1/b", Way::Local),
+        // Outward, and from elsewhere to elsewhere: `https://` as ever.
+        ("http://127.0.0.1/a", "https://example.org/b", Way::Secure),
+        (
+            "https://example.org/a",
+            "https://cdn.example.org/b",
+            Way::Secure,
+        ),
+    ] {
+        let taken = onward(&url(from), &url(to));
+        assert_eq!(taken.as_ref().ok(), Some(&way), "{from} to {to}: {taken:?}");
+    }
+
+    // Plain HTTP elsewhere stays what it was, from wherever.
+    for (from, to) in [
+        ("http://127.0.0.1/a", "http://example.org/b"),
+        ("https://example.org/a", "http://cdn.example.org/b"),
+        ("https://example.org/a", "ftp://example.org/b"),
+    ] {
+        let refused = onward(&url(from), &url(to));
+        assert!(
+            matches!(
+                &refused,
+                Err(Error::Refused { url: named, redirected: true }) if *named == url(to).as_str()
+            ),
+            "{from} to {to}: {refused:?}"
+        );
+    }
+}
+
+#[test]
+fn a_redirect_within_the_rule_is_followed() {
+    runtime::block_on(async {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let server = Server::start();
+        let package = vec![7u8; 1000];
+        server.put("plugins/git.rkp", package.clone());
+        let port = server.address().port();
+        // By a path, by the whole address, and by the name of this
+        // machine, which is the loopback address without a lookup.
+        server.redirect("by-path.rkp", "/plugins/git.rkp");
+        server.redirect("by-address.rkp", &server.url("plugins/git.rkp"));
+        server.redirect(
+            "by-name.rkp",
+            &format!("http://localhost:{port}/plugins/git.rkp"),
+        );
+        server.redirect("in-a-row.rkp", "by-address.rkp");
+        let to = dir.path().join("git.rkp");
+        for start in [
+            "by-path.rkp",
+            "by-address.rkp",
+            "by-name.rkp",
+            "in-a-row.rkp",
+        ] {
+            let arrived = download(&server.url(start), &to, "0.6.0", None, &mut |_| {})
+                .await
+                .unwrap_or_else(|e| panic!("{start}: {e}"));
+            assert_eq!(arrived.size, 1000, "{start}");
+            assert_eq!(std::fs::read(&to).ok(), Some(package.clone()), "{start}");
+        }
+        for request in server.requests() {
+            assert_eq!(request.header("user-agent"), Some("rick/0.6.0"));
+            assert_eq!(request.header("referer"), None, "{}", request.path);
+        }
+
+        // A redirect that leads back to itself ends, as a failed fetch.
+        server.redirect("round.rkp", "/round.rkp");
+        let before = server.requests().len();
+        let to = dir.path().join("none.rkp");
+        let failed = download(&server.url("round.rkp"), &to, "0.6.0", None, &mut |_| {}).await;
+        assert!(matches!(failed, Err(Error::Fetch(_))), "{failed:?}");
+        assert_eq!(server.requests().len() - before, 11);
+        assert!(!to.exists());
+
+        // One to what is no address at all is refused like any other.
+        server.redirect("odd.rkp", "ftp://example.org/git.rkp");
+        let refused = download(&server.url("odd.rkp"), &to, "0.6.0", None, &mut |_| {}).await;
+        assert!(
+            matches!(
+                refused,
+                Err(Error::Refused {
+                    redirected: true,
+                    ..
+                })
+            ),
+            "{refused:?}"
+        );
+        assert!(!to.exists());
+    });
 }
 
 #[test]

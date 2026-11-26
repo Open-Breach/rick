@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use ext::{Capabilities, ConnectionFieldKind, Registry};
 use platform::Fake;
@@ -45,7 +46,9 @@ fn json_answers_parse() {
     .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(page.prefixes, ["2026/raw/"]);
     assert_eq!(page.objects[1].size, 1234);
-    assert!(page.objects[1].modified.is_some());
+    // 2026-11-08T03:29:15.198Z, to the millisecond.
+    let modified = SystemTime::UNIX_EPOCH + Duration::from_millis(1_794_108_555_198);
+    assert_eq!(page.objects[1].modified, Some(modified));
     assert_eq!(page.next.as_deref(), Some("tok"));
     let entries = GcsProvider::page_entries("proj", "photos", "2026/", page, true);
     let names: Vec<(String, EntryKind)> = entries

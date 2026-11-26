@@ -6,7 +6,7 @@ use sha2::{Digest as _, Sha256};
 use tokio::io::AsyncWriteExt as _;
 
 use crate::Error;
-use crate::fetch::{client, failed};
+use crate::fetch::{Clients, failed, way};
 
 /// What a package must come out as: the size and the SHA-256 the index
 /// names for its build.
@@ -27,26 +27,15 @@ pub struct Downloaded {
     pub sha256: String,
 }
 
-/// Whether `url` is an address a package may be downloaded from on the
-/// user's word alone, as *Install from URL…* does: `https://` with a
-/// host. Plain `http://` is taken for this machine only — `localhost` and
-/// the loopback addresses — where nothing travels.
+/// Whether `url` is an address a package is downloaded from, as *Install
+/// from URL…* asks before it starts anything: `https://` with a host, any
+/// host, or plain `http://` to this machine — a loopback address or the
+/// name `localhost` — where nothing travels. It is the rule every request
+/// of this crate is held to, and [`download`] holds each address a
+/// redirect names to it again.
 #[must_use]
 pub fn is_package_address(url: &str) -> bool {
-    let Ok(url) = reqwest::Url::parse(url.trim()) else {
-        return false;
-    };
-    match (url.scheme(), url.host_str()) {
-        ("https", Some(host)) => !host.is_empty(),
-        ("http", Some(host)) => {
-            host == "localhost"
-                || host
-                    .trim_matches(['[', ']'])
-                    .parse::<std::net::IpAddr>()
-                    .is_ok_and(|address| address.is_loopback())
-        }
-        _ => false,
-    }
+    reqwest::Url::parse(url.trim()).is_ok_and(|url| way(&url).is_some())
 }
 
 /// The name of the file `url` names, for the package it is downloaded
@@ -101,11 +90,18 @@ impl Drop for Partial {
 /// is deleted. Without it nothing is checked, and what arrived is
 /// reported. No file is left behind unless the download succeeds.
 ///
+/// `url` and every address the download is sent on to must be one
+/// [`is_package_address`] takes; one that is not is never asked, whatever
+/// address the download started from.
+///
 /// # Errors
 ///
-/// [`Error::Fetch`] when the package does not arrive, [`Error::Mismatch`]
-/// when it is not what `expected` describes, and the I/O error of the
-/// file.
+/// [`Error::Refused`] for an address that is not asked and
+/// [`Error::Inward`] for a redirect from another machine to this one,
+/// before any request to it; [`Error::Fetch`] when the package does not
+/// arrive,
+/// [`Error::Mismatch`] when it is not what `expected` describes, and the
+/// I/O error of the file.
 pub async fn download(
     url: &str,
     to: &Path,
@@ -113,12 +109,22 @@ pub async fn download(
     expected: Option<Expected<'_>>,
     progress: &mut (dyn FnMut(u64) + Send),
 ) -> Result<Downloaded, Error> {
+    download_with(&Clients::new(rick, None)?, url, to, expected, progress).await
+}
+
+/// [`download`] through `clients`.
+pub(crate) async fn download_with(
+    clients: &Clients,
+    url: &str,
+    to: &Path,
+    expected: Option<Expected<'_>>,
+    progress: &mut (dyn FnMut(u64) + Send),
+) -> Result<Downloaded, Error> {
     let io = |source: std::io::Error| Error::Io {
         path: to.to_owned(),
         source,
     };
-    let client = client(rick, None)?;
-    let mut response = client.get(url).send().await.map_err(failed)?;
+    let mut response = clients.get(url).await?;
     let status = response.status();
     if !status.is_success() {
         return Err(Error::Fetch(format!("{url}: HTTP {}", status.as_u16())));

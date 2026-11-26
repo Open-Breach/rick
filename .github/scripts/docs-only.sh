@@ -3,8 +3,10 @@
 # `code=false` to the step's outputs when every changed file is
 # documentation, `code=true` otherwise. Documentation is Markdown anywhere
 # and docs/, except BENCHMARKS.md, whose tables a unit test in crates/tests
-# checks, and README.md with specs/readme.md, which the test `readme` there
-# holds against each other and against the code. On `code=false` the
+# checks, README.md with specs/readme.md, which the test `readme` there
+# holds against each other and against the code, and
+# specs/system-integration.md, whose quote of the README's privacy
+# paragraph the same test holds against specs/readme.md. On `code=false` the
 # workflows skip their build jobs while the tier's gate job still reports
 # success, so a docs-only pull request is green without a build and never
 # waits for a check that cannot come.
@@ -49,7 +51,7 @@ fi
 
 # Everything that is not documentation, and the Markdown a test reads.
 code="$(grep -v -E '^docs/|(^|/)[^/]*\.md$' <<<"$files" | grep -v '^$' || true)"
-for tested in BENCHMARKS.md README.md specs/readme.md; do
+for tested in BENCHMARKS.md README.md specs/readme.md specs/system-integration.md; do
   if grep -qx "$tested" <<<"$files"; then
     code="$tested${code:+$'\n'$code}"
   fi

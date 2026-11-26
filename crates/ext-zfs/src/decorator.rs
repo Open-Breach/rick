@@ -41,9 +41,10 @@ pub struct ZfsDecorator {
 
 /// A date in local time, as the panel shows it.
 fn date(at: SystemTime) -> String {
-    chrono::DateTime::<chrono::Local>::from(at)
-        .format("%Y-%m-%d %H:%M")
-        .to_string()
+    jiff::Zoned::try_from(at)
+        .ok()
+        .and_then(|at| jiff::fmt::strtime::format("%Y-%m-%d %H:%M", &at).ok())
+        .unwrap_or_default()
 }
 
 impl ZfsDecorator {

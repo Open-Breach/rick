@@ -1,10 +1,11 @@
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use ext::{Capabilities, ConnectionFieldKind, Registry};
 use platform::Fake;
 use types::{EntryKind, Location};
 
-use super::client::{Unsigned, parse_containers, parse_page};
+use super::client::{Unsigned, ms_date, parse_containers, parse_page};
 use super::*;
 
 /// The plugin's English strings, which a registry loads when the extension
@@ -106,7 +107,10 @@ fn listings_parse() {
     assert_eq!(page.prefixes, ["2026/raw/"]);
     assert_eq!(page.blobs.len(), 2);
     assert_eq!(page.blobs[1].size, 1234);
-    assert!(page.blobs[1].modified.is_some());
+    // Sun, 08 Nov 2026 03:29:15 GMT, to the second.
+    let modified = SystemTime::UNIX_EPOCH + Duration::from_secs(1_794_108_555);
+    assert_eq!(page.blobs[1].modified, Some(modified));
+    assert_eq!(ms_date(modified), "Sun, 08 Nov 2026 03:29:15 GMT");
     assert_eq!(page.next.as_deref(), Some("2!abc"));
     let entries = AzureProvider::page_entries("work", "photos", "2026/", page, true);
     let names: Vec<(String, EntryKind)> = entries
@@ -126,7 +130,7 @@ fn listings_parse() {
     .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(containers.len(), 1);
     assert_eq!(containers[0].name, "photos");
-    assert!(containers[0].modified.is_some());
+    assert_eq!(containers[0].modified, Some(modified));
     assert_eq!(next, None);
 }
 

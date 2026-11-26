@@ -1,5 +1,7 @@
 //! One tab's content: toolbar with path bar, the file view, and the foot
-//! with the status line and the filter.
+//! with the status line and the filter. Between the toolbar and the view
+//! stand, when there is a reason for them, the time slider, the bar that
+//! suggests a plugin for the folder, and a banner.
 
 use ext::t;
 use std::collections::{BTreeMap, BTreeSet};
@@ -57,6 +59,7 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         .frame(egui::Frame::NONE)
         .show(ui, |ui| toolbar(ui, cx));
     crate::timeline_bar::show(ui, cx);
+    suggestion_bar(ui, cx);
     if cx.tab.failure.is_some() {
         egui::Panel::top(egui::Id::new(("failure", cx.tab_id)))
             .show_separator_line(true)
@@ -73,6 +76,51 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         .frame(egui::Frame::NONE)
         .show(ui, |ui| foot(ui, cx));
     egui::CentralPanel::no_frame().show(ui, |ui| views::show(ui, cx));
+}
+
+/// The suggestion bar (specs/plugin-distribution.md §8, *The file list*):
+/// between the toolbar and the list of a pane whose folder holds an entry
+/// that is a plugin's marker, while that plugin is not there. One bar a
+/// pane; it goes when the pane leaves the folder.
+///
+/// After **Install** or **Enable** the plugin is no longer suggested, and
+/// the bar that offered it reads *Git is installed. Restart Rick to use
+/// it.* with **Restart now**, until the pane leaves the folder.
+fn suggestion_bar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    use crate::suggestion::{self, Place, Shown};
+    cx.tab_ui.suggestion = None;
+    let offer = cx.app.folder_suggestion(cx.pane);
+    // What the bar offered in this folder, and what it says of it now.
+    let before = cx
+        .tab_ui
+        .suggested
+        .take()
+        .filter(|(location, _)| *location == cx.tab.location)
+        .map(|(_, shown)| shown);
+    let (shown, after) = match (&offer, before) {
+        (Some(offer), _) => (Shown::of(offer), None),
+        (None, Some(shown)) => match shown.after(cx.app) {
+            Some(text) => (shown, Some(text)),
+            None => return,
+        },
+        (None, None) => return,
+    };
+    egui::Panel::top(egui::Id::new(("suggestion", cx.tab_id)))
+        .show_separator_line(false)
+        .frame(egui::Frame::NONE)
+        .show(ui, |ui| {
+            let id = egui::Id::new(("suggestion-bar", cx.tab_id));
+            let (rect, answer) = match (&offer, &after) {
+                (Some(offer), _) => suggestion::bar(ui, id, offer),
+                (None, Some(text)) => suggestion::note(ui, id, text),
+                (None, None) => return,
+            };
+            cx.tab_ui.suggestion = Some(rect);
+            if let Some(answer) = answer {
+                cx.requests.push(answer.request(&shown.id, Place::Pane));
+            }
+        });
+    cx.tab_ui.suggested = Some((cx.tab.location.clone(), shown));
 }
 
 /// The banner over a list that could not be read: why, and *Retry*, which

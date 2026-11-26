@@ -374,6 +374,7 @@ fn connection_lost(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, lost: &model::Connect
     let actions = [Action {
         glyph: None,
         label: t!("retry"),
+        disabled: false,
     }];
     let card = Card {
         glyph: crate::icons::CLOUD,

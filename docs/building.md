@@ -25,11 +25,51 @@ Release archives are built for Linux (x64 and arm64), macOS (Apple silicon) and 
 - a `plugins/` folder with one folder per plugin of the **default set**: the trash and archive providers (the 7-Zip library for disk images beside the archive plugin, with its licence), the archive, markup, hex and icon previewers, the subdirectory search and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo on Linux), the compress, compare, console and bulk-rename actions and the tarball installer, and on Linux the media previewer, which uses the system GStreamer;
 - on Windows, the Visual C++ runtime beside `rick.exe`;
 - on Linux, the desktop entry and the icons in the XDG layout under `share/`; on macOS all of it inside `Rick.app`;
-- the license, the README, the changelog and the third-party licenses.
+- the license, the README, the changelog and the third-party licenses: `THIRD-PARTY-LICENSES.md` lists the crates and, after them, what ships outside Cargo (pdfium, 7-Zip, GStreamer, the Rust standard library, the fonts and the icon font);
+- a `licenses/` folder with the texts two of those bring with them: `licenses/pdfium/`, pdfium's licence and those of the libraries built into it, and `licenses/rust/COPYRIGHT-library.html`, the notices of the Rust standard library and of the crates it is built from.
 
-`SHA256SUMS.txt` on the release page has the checksums of the archives, the packages and the lists below. The Linux builds need glibc 2.39 or later (Ubuntu 24.04). Intel Macs are not covered yet.
+Every file on the release page has a GitHub build attestation: a record, signed by GitHub, of the workflow that built the file and the commit it was built from. The Linux files, the packages and archives and the Linux plugin packages, are built and attested by Trebuchet's workflow; the macOS and Windows files and `SHA256SUMS.txt` by Rick's release workflow. To check a file with the GitHub CLI:
+
+```bash
+gh attestation verify rick_0.6.0_debian-13_amd64.deb --owner Open-Breach --signer-repo Open-Breach/trebuchet   # a Linux file
+gh attestation verify rick-0.6.0-macos-arm64.zip --repo Open-Breach/rick                                      # a macOS or Windows file
+```
+
+The release workflow runs both lines itself, on a Linux package and on the macOS and the Windows archive, and checks that a file changed by one byte does not verify. It does so while the release is still a draft, and publishes only when that check has passed: where it fails, the draft stays a draft and nothing is public. The check is `.github/scripts/verify-attestations.py`. It ends in one of three ways: *verified*; *not verified*, which is a file that does not verify or a changed file that does; and *could not check*, which is `gh` failing without an answer, say for want of a connection, after a few tries. Only *verified* publishes, and a changed file counts as refused only when `gh` says there is no attestation for its checksum. An attestation proves where a file comes from, not that it is safe.
+
+`SHA256SUMS.txt` on the release page has the checksums of the archives, the packages and the lists below. The Linux archives need glibc 2.36 or later (Debian 12, Ubuntu 24.04): they are built on the oldest distribution release the packages are made for. Each deb and rpm is built on its own release. Intel Macs are not covered yet.
 
 The archives are not signed or notarised yet: macOS may refuse an app downloaded through a browser until you allow it under System Settings → Privacy & Security, or clear the quarantine flag with `xattr -dr com.apple.quarantine <folder>/Rick.app`; Windows SmartScreen may warn the first time.
+
+## Linux packages
+
+A release also makes a deb for each supported Debian and Ubuntu release and an rpm for each supported Fedora release, for x64 and arm64. They are built by Trebuchet's reusable workflow `linux-packages.yml` ([Open-Breach/trebuchet](https://github.com/Open-Breach/trebuchet), `docs/linux-packages.md`), which the release workflow calls. That workflow owns the list of releases; for each one it runs `.github/scripts/linux-package.sh` inside that release's container, packages the result with the metadata in `crates/rick/Cargo.toml`, installs the package in a fresh container and runs `rick --version` there. One build per architecture is also the Linux archive, with the plugin packages that fit it.
+
+In that fresh container the workflow also runs `.github/scripts/linux-smoke.sh`, Rick's own part of the test, after the package is installed and once more for the unpacked archive:
+
+- every plugin of the package loads, and no other plugin is in it;
+- pdfium, from beside the binary, opens a PDF and renders a page;
+- the media previewer plays two videos through the system's GStreamer, one in Motion JPEG and one in H.264;
+- where the build is also the archive, each of its plugin packages is unpacked into the per-user folder and loads from there.
+
+Last, Trebuchet's test installs the `rick-plugin-<id>` packages of the same build on top of the `rick` package, one alone and the rest through `rick-plugins`, and runs the script a third time: every plugin of the platform, the default set and the nine separate ones, then loads from beside the binary, with nothing in the per-user folder.
+
+The container has the package's dependencies and nothing of the build, so a library missing from the dependency list fails the release there. The test programs it runs, `pdfium_check` and `preview_check`, and the two videos come from the same build, as one tar file in the workflow's folder for the smoke test, `TREBUCHET_SMOKE_FILES`. That folder goes from a build to its own smoke test and no further: nothing in it is attested or reaches a release. Two things a container cannot show: a window, with the libraries the user interface loads for X11, Wayland, Vulkan and EGL when it opens one, and sound. And one thing Ubuntu's container images leave out: they install nothing under `/usr/share/doc` but the `copyright` files, so for `THIRD-PARTY-LICENSES.md` the test there asks the package's list of files and not the disk.
+
+What a package installs:
+
+- `/usr/lib/rick/`: the binary with everything beside it, as in an archive: the shared libraries, `plugins/` with the default set, `third-party.json`, `licenses/` with the texts pdfium and the standard library bring, and `package`, a file holding `deb` or `rpm`, which tells Rick that its separate plugins come from the package manager;
+- `/usr/bin/rick`: a script that starts the binary there;
+- `/usr/share/applications/rick.desktop` and the icons under `/usr/share/icons/hicolor/`;
+- the licence: `/usr/share/doc/rick/copyright` and `THIRD-PARTY-LICENSES.md` beside it in a deb, both under `/usr/share/licenses/rick/` in an rpm.
+
+The call names the release tag, so Trebuchet's workflow attests the Linux files and attaches them to the release, as a draft where the tag has no release yet. Rick's release job then adds the other platforms' files and the checksums to that same draft and gives it its name and notes. The order from there is verify, then publish: the `verify` job checks the draft's files, and only after it the `publish` job makes a plain tag's release public. A pre-release and a dry run stay drafts. Last, for a published release, the workflow tells Trebuchet's publisher. The token for that, the secret `TREBUCHET_DISPATCH_TOKEN`, is looked for at the very start of a real release run, which stops there, before anything is built, if it is not set.
+
+A package names every package it depends on, per distribution, in the workflow's call. Among them is a decoder for H.264, so that an MP4 plays with the package alone: `gstreamer1.0-libav` on Debian and Ubuntu, and on Fedora `gstreamer1-plugin-openh264` with `gstreamer1-plugins-bad-free`, whose parser that decoder needs. Fedora's plug-in is in Fedora's own repositories; the codec library it loads comes from Cisco's OpenH264 repository, which Fedora has switched on by default. Where someone has switched it off, Fedora installs a stand-in for the library and Rick says the plug-in for H.264 is missing. The packaging tools' own search for the libraries a binary links is off: Rick's binaries link the kernel libraries and the standard library that sit beside them, and that search does not get past them.
+
+The nine separate plugins of Linux are packages of their own, from the same build: `rick-plugin-git`, `-svn`, `-zfs`, `-ssh`, `-vfs-s3`, `-vfs-azure`, `-vfs-gcs`, `-preview-office` and `-preview-3d`, and `rick-plugins`, which depends on all of them. The call names them (`plugins` and `plugins-dir`; Trebuchet's `docs/linux-packages.md`, *Plugins as packages*), and `linux-package.sh` leaves each plugin's folder, taken out of the bundle, in `target/release/plugin-packages/<id>/`. A plugin package installs that folder to `/usr/lib/rick/plugins/<id>/` and depends on the `rick` package of exactly its own version, since a plugin loads only in the build it was made with: `apt install rick-plugin-git` brings the matching `rick`, an upgrade moves the two together, and the package manager refuses a plugin of another version. This is how a Rick from a deb or an rpm gets its separate plugins; the Extensions dialogue shows it the command and downloads nothing (specs/plugin-distribution.md §7, *A packaged Rick*).
+
+After a published release the workflow tells Trebuchet's publisher, which puts the packages into the apt and dnf repositories on `get.openbreach.dev`.
 
 ## The separate plugins and their packages
 
@@ -45,9 +85,21 @@ ls target/release/packages/
 
 Which plugins are separate is said by each plugin's crate, under `[package.metadata.rick]` in its `Cargo.toml`. The same bundle gives the same bytes. A development build needs none of this: the bundle has every plugin.
 
+## Checking a registry
+
+`registry_check`, an example of the `app` crate, reads a plugin list the way Rick does, without a window: it makes the application on a config directory whose `rick.toml` names an index and the key it is signed with, sends it *Check now*, and prints what the *Available* view would show, or the line the view says where the list is refused. With `--install` it sends the install of every plugin on offer, the job behind the **Install** button: each package is downloaded, held against the size and the SHA-256 the list names, and unpacked into the per-user plugins folder of that config directory.
+
+```
+cargo run -p app --example registry_check -- <config dir> [--install] [--rick <version>]
+```
+
+It knows only the key its `rick.toml` names, like every application that is not the released binary. It is for a registry of a test's own: an index that Trebuchet's publisher scripts wrote for a build's packages and `plugins-<platform>.json`, signed with a throwaway key and served on this machine. That is how the two halves are checked against each other before anything is published.
+
 ## The README
 
 `README.md` describes the latest release and is brought up to date in the release pull request only (specs/readme.md). `cargo xtask readme` does it: it writes the version, the Features list and the Install section from what the extensions register, and renders the two screenshots of `docs/screenshots/` afresh (it needs a wgpu adapter; a software one such as lavapipe will do). `cargo test --workspace` fails when the README of a release version is not what that command writes.
+
+One part of the release pull request of 0.6.0 is written by hand: the privacy paragraph of specs/readme.md, section 9, word for word, as the first line under the rule above the closing links. The same test asks for it as soon as the status line names 0.6.0, and refuses it before. The same pull request brings the *Suggest plugins* setting into the README (specs/readme.md, *Rules for the release*).
 
 ## Writing a plugin
 

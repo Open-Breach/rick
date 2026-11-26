@@ -289,7 +289,7 @@ pub struct Slot {
     /// read so far and the file's size.
     download: Option<(u64, Option<u64>)>,
     /// No previewer claims the file: the pane shows the File info card,
-    /// centred, and this says whether a disabled plugin would claim it.
+    /// centred.
     placeholder: Option<Placeholder>,
     /// The previewer that opened the document, by its extension's id: what
     /// the File info card's pin is remembered under.
@@ -362,6 +362,12 @@ impl Slot {
         self.text = None;
         self.content_state = content::State::default();
         self.doc = Some(doc);
+    }
+
+    /// The entry the slot is about: the one the pane's preview follows.
+    #[must_use]
+    pub fn entry(&self) -> Option<EntryId> {
+        self.entry
     }
 
     /// The prefix the document shows of a remote file, as the bytes served
@@ -878,16 +884,9 @@ impl Previews {
     }
 
     /// No previewer claims `pane`'s selection, about `entry`: the pane
-    /// shows the File info card, centred; `plugin` names a disabled plugin
-    /// that would claim it, when there is one, and `permissions` is the
-    /// file's mode string and `owner:group`, where they could be read.
-    pub fn none(
-        &mut self,
-        pane: PaneId,
-        plugin: Option<String>,
-        permissions: Option<String>,
-        entry: Option<EntryId>,
-    ) {
+    /// shows the File info card, centred; `permissions` is the file's
+    /// mode string and `owner:group`, where they could be read.
+    pub fn none(&mut self, pane: PaneId, permissions: Option<String>, entry: Option<EntryId>) {
         let slot = self.slot(pane);
         if slot.entry != entry {
             slot.reset(entry);
@@ -899,7 +898,6 @@ impl Previews {
         slot.download = None;
         slot.placeholder = Some(Placeholder {
             empty: false,
-            plugin,
             permissions,
         });
     }
@@ -907,7 +905,7 @@ impl Previews {
     /// `pane`'s selection is an empty file, which no previewer is given:
     /// the pane shows the File info card with *Move to trash*.
     pub fn empty(&mut self, pane: PaneId, permissions: Option<String>, entry: Option<EntryId>) {
-        self.none(pane, None, permissions, entry);
+        self.none(pane, permissions, entry);
         if let Some(placeholder) = &mut self.slot(pane).placeholder {
             placeholder.empty = true;
         }
@@ -1168,6 +1166,14 @@ pub struct Around<'a> {
     /// The widths remembered for the columns of a previewer's table, by
     /// the previewer's id.
     pub columns: &'a std::collections::BTreeMap<String, Vec<u16>>,
+    /// The plugin that is not there and would show the file, when one is
+    /// suggested (specs/plugin-distribution.md §8): the *No previewer*
+    /// card says *plugin available* and has its button.
+    pub suggestion: Option<&'a app::Suggestion>,
+    /// The plugin the card offered, by its id, once it was installed or
+    /// switched on and waits for the next start: the card says so and
+    /// has **Restart now**.
+    pub installed: Option<(&'a str, app::Pending)>,
 }
 
 /// `read` of `total` in the unit `total` is written in, `7.7 of 18.4 MiB`;
@@ -1254,10 +1260,6 @@ pub struct Placeholder {
     /// The file is empty (SPEC.md *An empty file*): the head reads *This
     /// file is empty* and the card's button is *Move to trash*.
     pub empty: bool,
-    /// A disabled previewer plugin whose manifest claims the file's type,
-    /// by id: the card's head reads *plugin available*; `None` reads *no
-    /// previewer for .bin*.
-    pub plugin: Option<String>,
     /// The file's mode string and `owner:group`, where they could be read.
     pub permissions: Option<String>,
 }
@@ -1305,6 +1307,13 @@ fn file_rows(entry: &Entry, home: &std::path::Path, dates: format::Dates) -> Vec
 /// *Permissions*; and **Open with…**, its one button. With the hex view
 /// loaded no file comes here: it takes what nothing else recognises.
 ///
+/// Where a plugin that is not there would show the file
+/// (specs/plugin-distribution.md §8), the head reads *plugin available*
+/// in that place and the action row gains **Install 3D Models** after
+/// *Open with…* — **Enable 3D Models** for a plugin that is on the disk
+/// and disabled. After either, the head reads *plugin installed, restart
+/// Rick to use it* and the button is **Restart now**.
+///
 /// An empty file has the same card (SPEC.md *An empty file*), whatever
 /// previewers are loaded: its head reads *This file is empty*, and its
 /// one button is **Move to trash**, a secondary one.
@@ -1320,11 +1329,16 @@ fn no_previewer_card(
         .rsplit_once('.')
         .filter(|(stem, ext)| !stem.is_empty() && !ext.is_empty())
         .map(|(_, ext)| ext.to_lowercase());
-    let why = match (&placeholder.plugin, extension) {
+    // An empty file is given to no previewer, and so to no plugin's.
+    let suggestion = around.suggestion.filter(|_| !placeholder.empty);
+    let installed = around.installed.filter(|_| !placeholder.empty);
+    let why = match (suggestion, installed, extension) {
         _ if placeholder.empty => t!("preview-file-empty"),
-        (Some(_), _) => t!("preview-plugin-available"),
-        (None, Some(ext)) => t!("preview-no-previewer-for", extension = ext),
-        (None, None) => t!("preview-no-previewer-for-type"),
+        (Some(_), _, _) => t!("preview-plugin-available"),
+        (None, Some((_, app::Pending::Installed)), _) => t!("preview-plugin-installed"),
+        (None, Some((_, app::Pending::Enabled)), _) => t!("preview-plugin-enabled"),
+        (None, None, Some(ext)) => t!("preview-no-previewer-for", extension = ext),
+        (None, None, None) => t!("preview-no-previewer-for-type"),
     };
     // An empty file is not called binary for having no text in it.
     let line = format!("{}  ·  {why}", type_and_size(entry, !placeholder.empty));
@@ -1339,6 +1353,7 @@ fn no_previewer_card(
             Action {
                 glyph: Some(icons::TRASH),
                 label: t!("action-move-to-trash"),
+                disabled: false,
             },
             PreviewAct::Trash,
         )
@@ -1347,12 +1362,32 @@ fn no_previewer_card(
             Action {
                 glyph: Some(icons::FOLDER_OPEN),
                 label: t!("preview-open-with"),
+                disabled: false,
             },
             PreviewAct::OpenWith,
         )
     };
-    let actions = [action];
-    let acts = [act];
+    let mut actions = vec![action];
+    let mut acts = vec![act];
+    if let Some(suggestion) = suggestion {
+        let (glyph, label, answer, enabled) = crate::suggestion::card_action(suggestion);
+        actions.push(Action {
+            glyph: Some(glyph),
+            label,
+            disabled: !enabled,
+        });
+        acts.push(PreviewAct::Suggestion(answer, suggestion.id.clone()));
+    } else if let Some((id, _)) = installed {
+        actions.push(Action {
+            glyph: None,
+            label: t!("extensions-restart-now"),
+            disabled: false,
+        });
+        acts.push(PreviewAct::Suggestion(
+            crate::suggestion::Answer::Restart,
+            id.to_owned(),
+        ));
+    }
     let card = Card {
         glyph: icons::for_entry(entry),
         name: &entry.name,
@@ -1409,12 +1444,14 @@ fn missing_card(
         actions.push(Action {
             glyph: Some(icons::INSTALL),
             label: t!("preview-download", name = missing.name.as_str()),
+            disabled: false,
         });
         acts.push(PreviewAct::Download(missing.install.clone()));
     }
     actions.push(Action {
         glyph: Some(icons::FOLDER_OPEN),
         label: t!("preview-browse"),
+        disabled: false,
     });
     acts.push(PreviewAct::Browse {
         setting: missing.setting,
@@ -1423,6 +1460,7 @@ fn missing_card(
     actions.push(Action {
         glyph: None,
         label: t!("preview-retry"),
+        disabled: false,
     });
     acts.push(PreviewAct::Retry);
     let card = Card {
@@ -1454,6 +1492,7 @@ fn error_card(
     let actions = [Action {
         glyph: None,
         label: t!("preview-retry"),
+        disabled: false,
     }];
     let card = Card {
         glyph: icons::for_entry(entry),
@@ -1483,6 +1522,10 @@ pub enum PreviewAct {
     OpenWith,
     /// Run *Move to trash* on the file: the empty file's one button.
     Trash,
+    /// **Install** or **Enable** on the card of a file a plugin that is
+    /// not there would show, or **Restart now** after either: what was
+    /// asked, and the plugin's id.
+    Suggestion(crate::suggestion::Answer, String),
     /// Open this address, a library's download page, in the browser.
     Download(String),
     /// Show this folder in the system file manager, making it first when
@@ -1571,11 +1614,13 @@ fn capped_card(
     let mut actions = vec![Action {
         glyph: Some(icons::INSTALL),
         label: t!("preview-preview-this-file"),
+        disabled: false,
     }];
     if let Some(source) = source {
         actions.push(Action {
             glyph: None,
             label: t!("preview-always-preview-on", source = source.as_str()),
+            disabled: false,
         });
     }
     let card = Card {

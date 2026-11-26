@@ -19,7 +19,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 types = { workspace = true }
 ext = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true, features = ["fs", "sync"] }
 thiserror = { workspace = true }
