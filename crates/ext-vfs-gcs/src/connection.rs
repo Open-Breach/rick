@@ -7,10 +7,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use ext::Text;
 use ext::platform::Platform;
 use ext::{
-    Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, Connector, async_trait,
-    secret_key,
+    Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, ConnectionTest,
+    ConnectionTestForm, Connector, async_trait, secret_key,
 };
-use types::{Error, ProviderId};
+use types::{CancelToken, Error, ProviderId};
 
 use crate::PROVIDER_ID;
 use crate::auth::ServiceAccount;
@@ -199,5 +199,29 @@ impl Connector for GcsConnections {
     fn is_connected(&self, name: &str) -> bool {
         self.conn(name)
             .is_ok_and(|conn| conn.client.try_lock().is_ok_and(|slot| slot.is_some()))
+    }
+
+    fn checks(&self) -> Vec<String> {
+        crate::check::labels().into()
+    }
+
+    /// The three checks of specs/s3-connection.md 3.2 on the form's
+    /// values. The key is the one typed; in *Edit…*, left empty, it is the
+    /// keychain's, read and never written. A connection may have no key.
+    async fn test(&self, form: &ConnectionTestForm<'_>, cancel: &CancelToken) -> ConnectionTest {
+        let typed = form.get(field::KEY);
+        let key = match (typed.is_empty(), form.name) {
+            (false, _) => Ok(Some(typed.to_owned())),
+            (true, Some(name)) => {
+                let platform = Arc::clone(&self.platform);
+                let key = secret_key(PROVIDER_ID, name, field::KEY);
+                ext::runtime::handle()
+                    .spawn_blocking(move || platform.get_secret(&key))
+                    .await
+                    .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))))
+            }
+            (true, None) => Ok(None),
+        };
+        crate::check::run(form, key, ext::CHECK_TIMEOUT, cancel).await
     }
 }

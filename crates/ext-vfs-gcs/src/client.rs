@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use bytes::Bytes;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
-use reqwest::{Method, StatusCode, Url};
+use reqwest::{Method, Url};
 use serde::Deserialize;
 use tokio::io::AsyncRead;
 use tracing::debug;
@@ -49,16 +49,13 @@ impl std::fmt::Display for GcsError {
 impl std::error::Error for GcsError {}
 
 /// The kernel error for a failed request.
-fn failed(status: StatusCode, body: &str) -> Error {
-    match status {
-        StatusCode::NOT_FOUND => Error::NotFound,
-        StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED => Error::PermissionDenied,
+fn failed(said: GcsError) -> Error {
+    match said.status {
+        404 => Error::NotFound,
+        401 | 403 => Error::PermissionDenied,
         _ => Error::Extension {
             ext: ID,
-            source: Box::new(GcsError {
-                status: status.as_u16(),
-                message: error_message(body),
-            }),
+            source: Box::new(said),
         },
     }
 }
@@ -352,8 +349,42 @@ impl GcsClient {
         headers: &[(&str, &str)],
         body: Option<Bytes>,
     ) -> Result<reqwest::Response, Error> {
+        let token = self.bearer().await?;
+        self.exchange(method, url, headers, body, token)
+            .await?
+            .map_err(failed)
+    }
+
+    /// Whether the project's buckets can be listed, for the connection
+    /// test: one `buckets.list` asking for a single name, with the bearer
+    /// token when `signed` and without any otherwise. `Err` is a request
+    /// that got no answer, or a token that could not be had; the inner
+    /// error is the service's own refusal, as sent.
+    pub(crate) async fn probe(&self, signed: bool) -> Result<Result<(), GcsError>, Error> {
+        let token = if signed { self.bearer().await? } else { None };
+        let query = [("project", self.project.as_str()), ("maxResults", "1")];
+        let url = self.url("/storage/v1/b", &query);
+        let answer = self.exchange(Method::GET, url, &[], None, token).await?;
+        Ok(answer.map(|_| ()))
+    }
+
+    /// Whether the client signs its requests: it has a service account.
+    pub(crate) fn signs(&self) -> bool {
+        self.account.is_some()
+    }
+
+    /// Sends one request. `Err` is a request that got no answer; the
+    /// inner error is what the service said about one it refused.
+    async fn exchange(
+        &self,
+        method: Method,
+        url: Url,
+        headers: &[(&str, &str)],
+        body: Option<Bytes>,
+        token: Option<String>,
+    ) -> Result<Result<reqwest::Response, GcsError>, Error> {
         let mut request = self.http.request(method.clone(), url.clone());
-        if let Some(token) = self.bearer().await? {
+        if let Some(token) = token {
             request = request.bearer_auth(token);
         }
         for (k, v) in headers {
@@ -368,10 +399,13 @@ impl GcsClient {
         let response = request.send().await.map_err(transport)?;
         let status = response.status();
         if status.is_success() {
-            return Ok(response);
+            return Ok(Ok(response));
         }
         let body = response.text().await.unwrap_or_default();
-        Err(failed(status, &body))
+        Ok(Err(GcsError {
+            status: status.as_u16(),
+            message: error_message(&body),
+        }))
     }
 
     async fn text(
@@ -627,7 +661,10 @@ impl GcsClient {
             return Ok(());
         }
         let text = response.text().await.unwrap_or_default();
-        Err(failed(status, &text))
+        Err(failed(GcsError {
+            status: status.as_u16(),
+            message: error_message(&text),
+        }))
     }
 
     /// Abandons a resumable upload; a service without the call is no

@@ -986,3 +986,245 @@ fn against_a_store_list_upload_download_move_across_containers_and_delete_round_
         assert!(!containers.contains(&container_a) && !containers.contains(&container_b));
     });
 }
+
+/// The well-known key of the storage emulator: base64, and no secret.
+const DEV_KEY: &str =
+    "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
+
+/// The outcomes and details of a connection test on `endpoint` with the
+/// account key `key` typed.
+fn tested(
+    endpoint: &str,
+    key: &str,
+    limit: Duration,
+    cancel: &types::CancelToken,
+) -> (bool, Vec<(ext::CheckOutcome, String)>) {
+    english();
+    let values = std::collections::BTreeMap::from([
+        ("endpoint".to_owned(), endpoint.to_owned()),
+        ("account".to_owned(), "devstoreaccount1".to_owned()),
+        ("key".to_owned(), key.to_owned()),
+    ]);
+    let form = ext::ConnectionTestForm {
+        name: None,
+        values: &values,
+    };
+    assert!(
+        !format!("{form:?}").contains(key),
+        "the key is in the form's text"
+    );
+    let result = runtime::block_on(super::check::run(&form, Ok(key.to_owned()), limit, cancel));
+    let labels: Vec<&str> = result.checks.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        [
+            "The host is reachable",
+            "The credentials are accepted",
+            "The account's containers can be listed"
+        ]
+    );
+    (
+        result.good,
+        result
+            .checks
+            .into_iter()
+            .map(|c| (c.outcome, c.detail))
+            .collect(),
+    )
+}
+
+fn test_of(endpoint: &str) -> (bool, Vec<(ext::CheckOutcome, String)>) {
+    tested(
+        endpoint,
+        DEV_KEY,
+        Duration::from_secs(10),
+        &types::CancelToken::new(),
+    )
+}
+
+fn outcomes(lines: &[(ext::CheckOutcome, String)]) -> Vec<ext::CheckOutcome> {
+    lines.iter().map(|(outcome, _)| *outcome).collect()
+}
+
+/// specs/s3-connection.md 3.6: a good test for Azure Blob. It only reads:
+/// one `GET` that lists a single container.
+#[test]
+fn a_connection_test_that_lists_the_containers_is_good_and_only_reads() {
+    use ext::CheckOutcome::Passed;
+    let (endpoint, seen) = recording_server(|_, _| {
+        (
+            "200 OK",
+            r#"<?xml version="1.0" encoding="utf-8"?><EnumerationResults><Containers/><NextMarker/></EnumerationResults>"#,
+        )
+    });
+    let (good, lines) = test_of(&endpoint);
+    assert!(good, "{lines:?}");
+    assert_eq!(outcomes(&lines), [Passed, Passed, Passed]);
+    let seen = seen
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].method, "GET");
+    assert!(seen[0].target.contains("comp=list"), "{}", seen[0].target);
+    assert!(
+        seen[0].target.contains("maxresults=1"),
+        "{}",
+        seen[0].target
+    );
+}
+
+/// 3.6: a test that is not good, each outcome of each check. A wrong key
+/// fails the credentials with the service's code and the listing is not
+/// run; a key the service knows but does not let list fails the third; a
+/// host that cannot be reached, a key that is no key and a host that does
+/// not answer in time fail the first.
+#[test]
+fn a_connection_test_that_is_not_good_says_which_check_and_why() {
+    use ext::CheckOutcome::{Failed, NotRun, Passed};
+    let (endpoint, _) = recording_server(|_, _| {
+        (
+            "403 Forbidden",
+            r#"<?xml version="1.0" encoding="utf-8"?><Error><Code>AuthenticationFailed</Code><Message>Server failed to authenticate the request.</Message></Error>"#,
+        )
+    });
+    let (good, lines) = test_of(&endpoint);
+    assert!(!good);
+    assert_eq!(outcomes(&lines), [Passed, Failed, NotRun]);
+    assert!(lines[1].1.contains("AuthenticationFailed"), "{lines:?}");
+    assert!(lines[1].1.contains("failed to authenticate"), "{lines:?}");
+
+    let (endpoint, _) = recording_server(|_, _| {
+        (
+            "403 Forbidden",
+            r#"<?xml version="1.0" encoding="utf-8"?><Error><Code>AuthorizationFailure</Code><Message>This request is not authorized to perform this operation.</Message></Error>"#,
+        )
+    });
+    let (good, lines) = test_of(&endpoint);
+    assert!(!good);
+    assert_eq!(outcomes(&lines), [Passed, Passed, Failed]);
+    assert!(lines[2].1.contains("AuthorizationFailure"), "{lines:?}");
+
+    // A port that was free a moment ago and has no listener.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("{e}"));
+    let refusing = format!(
+        "http://{}",
+        listener.local_addr().unwrap_or_else(|e| panic!("{e}"))
+    );
+    drop(listener);
+    let (good, lines) = test_of(&refusing);
+    assert!(!good);
+    assert_eq!(outcomes(&lines), [Failed, NotRun, NotRun]);
+    assert_ne!(lines[0].1, "");
+
+    let (good, lines) = tested(
+        &refusing,
+        "not base64!",
+        Duration::from_secs(10),
+        &types::CancelToken::new(),
+    );
+    assert!(!good);
+    assert_eq!(outcomes(&lines), [Failed, NotRun, NotRun]);
+    assert!(lines[0].1.contains("base64"), "{lines:?}");
+}
+
+/// specs/s3-connection.md 3.5: the check gives up after its limit, and a
+/// cancelled test ends at once with nothing run.
+#[test]
+fn a_connection_test_gives_up_after_its_limit_and_can_be_cancelled() {
+    use ext::CheckOutcome::{Failed, NotRun};
+    let (endpoint, _) = recording_server(|_, _| {
+        std::thread::sleep(Duration::from_secs(3));
+        ("200 OK", "")
+    });
+    let started = std::time::Instant::now();
+    let (good, lines) = tested(
+        &endpoint,
+        DEV_KEY,
+        Duration::from_millis(200),
+        &types::CancelToken::new(),
+    );
+    assert!(!good);
+    assert_eq!(outcomes(&lines), [Failed, NotRun, NotRun]);
+    assert!(lines[0].1.contains("No answer within"), "{lines:?}");
+    assert!(started.elapsed() < Duration::from_secs(2));
+
+    let cancel = types::CancelToken::new();
+    let later = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        later.cancel();
+    });
+    let started = std::time::Instant::now();
+    let (good, lines) = tested(&endpoint, DEV_KEY, Duration::from_secs(10), &cancel);
+    assert!(!good);
+    assert_eq!(outcomes(&lines), [NotRun, NotRun, NotRun]);
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+/// 3.1 through the connector: in *Edit…* a key left empty is the
+/// keychain's; *Add* without a key says so.
+#[test]
+fn the_connector_tests_with_the_typed_key_or_the_keychain_s() {
+    use ext::Connector as _;
+    use platform::Secrets as _;
+    english();
+    let (endpoint, _) = recording_server(|_, _| {
+        (
+            "200 OK",
+            r#"<?xml version="1.0" encoding="utf-8"?><EnumerationResults><Containers/><NextMarker/></EnumerationResults>"#,
+        )
+    });
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let conns = AzureConnections::new(fake.clone());
+    fake.store_secret(&ext::secret_key(PROVIDER_ID, "saved", "key"), DEV_KEY)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(conns.checks().len(), 3);
+    let run = |name: Option<&str>, key: &str| {
+        let mut values = std::collections::BTreeMap::from([
+            ("endpoint".to_owned(), endpoint.clone()),
+            ("account".to_owned(), "devstoreaccount1".to_owned()),
+        ]);
+        if !key.is_empty() {
+            values.insert("key".to_owned(), key.to_owned());
+        }
+        let form = ext::ConnectionTestForm {
+            name,
+            values: &values,
+        };
+        runtime::block_on(conns.test(&form, &types::CancelToken::new()))
+    };
+    assert!(run(Some("saved"), "").good);
+    assert!(run(None, DEV_KEY).good);
+    let missing = run(None, "");
+    assert!(!missing.good);
+    assert!(
+        missing.checks[0].detail.contains("account key is missing"),
+        "{missing:?}"
+    );
+    assert!(!run(Some("nobody"), "").good);
+    assert_eq!(fake.secrets().len(), 1, "the test stored nothing");
+}
+
+/// Against the emulator the round trip uses (Azurite in CI): the right
+/// key is a good test, a wrong key is not.
+#[test]
+fn against_a_store_the_connection_test_is_good_and_a_wrong_key_is_not() {
+    let Ok(endpoint) = std::env::var("RICK_AZURE_ENDPOINT") else {
+        eprintln!("RICK_AZURE_ENDPOINT is not set: no blob store to test against; skipped");
+        assert!(
+            std::env::var_os("RICK_REQUIRE_CONTAINERS").is_none(),
+            "RICK_REQUIRE_CONTAINERS is set but RICK_AZURE_ENDPOINT is not"
+        );
+        return;
+    };
+    let key = std::env::var("RICK_AZURE_KEY").unwrap_or_else(|_| DEV_KEY.to_owned());
+    let limit = Duration::from_secs(10);
+    let (good, lines) = tested(&endpoint, &key, limit, &types::CancelToken::new());
+    assert!(good, "{lines:?}");
+    // Base64 of another key: the service knows the account and refuses.
+    let wrong =
+        "AAAAvdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
+    let (good, lines) = tested(&endpoint, wrong, limit, &types::CancelToken::new());
+    assert!(!good, "{lines:?}");
+    assert_eq!(lines[0].0, ext::CheckOutcome::Passed, "{lines:?}");
+}

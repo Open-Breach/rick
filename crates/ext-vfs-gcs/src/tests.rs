@@ -512,3 +512,318 @@ fn a_refused_connection_is_a_lost_connection() {
     let error = super::client::transport(failure);
     assert!(error.is_unreachable(), "{error}");
 }
+
+/// A local stand-in for the service and its token endpoint: `answer`
+/// takes the method, the target and whether the request carried a bearer
+/// token, and gives the status and the body. Returns the endpoint and the
+/// requests seen, as `METHOD target`. No real account.
+fn fake_service(
+    answer: fn(&str, &str, bool) -> (u16, &'static str),
+) -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("{e}"));
+    let endpoint = format!(
+        "http://{}",
+        listener.local_addr().unwrap_or_else(|e| panic!("{e}"))
+    );
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = Arc::clone(&seen);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let log = Arc::clone(&log);
+            std::thread::spawn(move || {
+                let Ok(clone) = stream.try_clone() else {
+                    return;
+                };
+                let mut reader = BufReader::new(clone);
+                let mut request = String::new();
+                if reader.read_line(&mut request).is_err() {
+                    return;
+                }
+                let (mut length, mut bearer) = (0usize, false);
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 0) && line != "\r\n" {
+                    let lower = line.to_ascii_lowercase();
+                    if let Some(value) = lower.strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    bearer |= lower.starts_with("authorization: bearer ");
+                    line.clear();
+                }
+                let mut body = vec![0u8; length];
+                let _ = reader.read_exact(&mut body);
+                let mut parts = request.split_whitespace();
+                let method = parts.next().unwrap_or_default().to_owned();
+                let target = parts.next().unwrap_or_default().to_owned();
+                log.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(format!("{method} {target}"));
+                let (status, body) = answer(&method, &target, bearer);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            });
+        }
+    });
+    (endpoint, seen)
+}
+
+/// A service account key whose token endpoint is `endpoint`'s `/token`,
+/// signed with the key generated for the tests.
+fn test_key(endpoint: &str) -> String {
+    format!(
+        r#"{{"type":"service_account","client_email":"rick@example.iam.gserviceaccount.com","private_key":{},"token_uri":"{endpoint}/token"}}"#,
+        serde_json::to_string(include_str!("../fixtures/test-key.pem")).unwrap_or_default()
+    )
+}
+
+const TOKEN: &str = r#"{"access_token":"ya29.test","expires_in":3600,"token_type":"Bearer"}"#;
+const BUCKETS: &str = r#"{"kind":"storage#buckets","items":[]}"#;
+const UNAUTHENTICATED: &str = r#"{"error":{"code":401,"message":"Anonymous caller does not have storage.buckets.list access."}}"#;
+
+/// The outcomes and details of a connection test on `endpoint` with the
+/// key as typed; an empty key is a connection without one.
+fn tested(
+    endpoint: &str,
+    key: &str,
+    limit: Duration,
+    cancel: &types::CancelToken,
+) -> (bool, Vec<(ext::CheckOutcome, String)>) {
+    ext::i18n::add_bundled("en", include_str!("../locales/en.ftl"));
+    let values = std::collections::BTreeMap::from([
+        ("endpoint".to_owned(), endpoint.to_owned()),
+        ("project".to_owned(), "rick-test".to_owned()),
+    ]);
+    let form = ext::ConnectionTestForm {
+        name: None,
+        values: &values,
+    };
+    let key = (!key.is_empty()).then(|| key.to_owned());
+    let result = runtime::block_on(super::check::run(&form, Ok(key), limit, cancel));
+    let labels: Vec<&str> = result.checks.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        [
+            "The host is reachable",
+            "The credentials are accepted",
+            "The project's buckets can be listed"
+        ]
+    );
+    (
+        result.good,
+        result
+            .checks
+            .into_iter()
+            .map(|c| (c.outcome, c.detail))
+            .collect(),
+    )
+}
+
+fn test_of(endpoint: &str, key: &str) -> (bool, Vec<(ext::CheckOutcome, String)>) {
+    tested(
+        endpoint,
+        key,
+        Duration::from_secs(10),
+        &types::CancelToken::new(),
+    )
+}
+
+fn outcomes(lines: &[(ext::CheckOutcome, String)]) -> Vec<ext::CheckOutcome> {
+    lines.iter().map(|(outcome, _)| *outcome).collect()
+}
+
+/// specs/s3-connection.md 3.6: a good test for Google Cloud Storage, with
+/// a service account and, as an emulator takes it, without a key. It only
+/// reads: the listings are `GET`s, and the one `POST` is the sign-in.
+#[test]
+fn a_connection_test_that_lists_the_buckets_is_good_and_only_reads() {
+    use ext::CheckOutcome::Passed;
+    let (endpoint, seen) = fake_service(|method, target, bearer| match (method, bearer) {
+        ("POST", _) if target == "/token" => (200, TOKEN),
+        ("GET", true) => (200, BUCKETS),
+        _ => (401, UNAUTHENTICATED),
+    });
+    let (good, lines) = test_of(&endpoint, &test_key(&endpoint));
+    assert!(good, "{lines:?}");
+    assert_eq!(outcomes(&lines), [Passed, Passed, Passed]);
+    let seen = seen
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert_eq!(seen.len(), 3, "{seen:?}");
+    assert!(seen[0].starts_with("GET /storage/v1/b?"), "{seen:?}");
+    assert!(seen[0].contains("maxResults=1"), "{seen:?}");
+    assert_eq!(seen[1], "POST /token");
+    assert_eq!(seen[2], seen[0]);
+
+    let (open, seen) = fake_service(|_, _, _| (200, BUCKETS));
+    let (good, lines) = test_of(&open, "");
+    assert!(good, "{lines:?}");
+    let seen = seen
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+}
+
+/// 3.6: a test that is not good, each outcome of each check.
+#[test]
+fn a_connection_test_that_is_not_good_says_which_check_and_why() {
+    use ext::CheckOutcome::{Failed, NotRun, Passed};
+    // The token endpoint refuses the key.
+    let (endpoint, _) = fake_service(|method, _, _| match method {
+        "POST" => (
+            400,
+            r#"{"error":"invalid_grant","error_description":"Invalid JWT Signature."}"#,
+        ),
+        _ => (401, UNAUTHENTICATED),
+    });
+    let (good, lines) = test_of(&endpoint, &test_key(&endpoint));
+    assert!(!good);
+    assert_eq!(outcomes(&lines), [Passed, Failed, NotRun]);
+    assert!(lines[1].1.contains("invalid_grant"), "{lines:?}");
+
+    // The service does not take the token.
+    let (endpoint, _) = fake_service(|method, _, _| match method {
+        "POST" => (200, TOKEN),
+        _ => (
+            401,
+            r#"{"error":{"code":401,"message":"Invalid Credentials"}}"#,
+        ),
+    });
+    let (good, lines) = test_of(&endpoint, &test_key(&endpoint));
+    assert!(!good);
+    assert_eq!(outcomes(&lines), [Passed, Failed, NotRun]);
+    assert!(lines[1].1.contains("Invalid Credentials"), "{lines:?}");
+    assert!(lines[1].1.contains("401"), "{lines:?}");
+
+    // The account is known and may not list the project's buckets.
+    let (endpoint, _) = fake_service(|method, _, bearer| match (method, bearer) {
+        ("POST", _) => (200, TOKEN),
+        (_, true) => (
+            403,
+            r#"{"error":{"code":403,"message":"rick@example does not have storage.buckets.list access to the Google Cloud project."}}"#,
+        ),
+        _ => (401, UNAUTHENTICATED),
+    });
+    let (good, lines) = test_of(&endpoint, &test_key(&endpoint));
+    assert!(!good);
+    assert_eq!(outcomes(&lines), [Passed, Passed, Failed]);
+    assert!(lines[2].1.contains("storage.buckets.list"), "{lines:?}");
+    assert!(lines[2].1.contains("403"), "{lines:?}");
+
+    // No key where the service wants one, a key that is no key, and a key
+    // file that is not there.
+    let (good, lines) = test_of(&endpoint, "");
+    assert!(!good);
+    assert_eq!(outcomes(&lines), [Passed, Failed, NotRun]);
+    assert!(lines[1].1.contains("Anonymous caller"), "{lines:?}");
+    let (_, lines) = test_of(&endpoint, "{\"type\": \"nothing\"}");
+    assert_eq!(outcomes(&lines), [Passed, Failed, NotRun]);
+    let (_, lines) = test_of(&endpoint, "/nowhere/rick-key.json");
+    assert_eq!(outcomes(&lines), [Passed, Failed, NotRun]);
+    assert!(lines[1].1.contains("/nowhere/rick-key.json"), "{lines:?}");
+
+    // A host that cannot be reached.
+    let (good, lines) = test_of(&format!("http://{}", refusing_address()), "");
+    assert!(!good);
+    assert_eq!(outcomes(&lines), [Failed, NotRun, NotRun]);
+    assert_ne!(lines[0].1, "");
+}
+
+/// specs/s3-connection.md 3.5: a check gives up after its limit, and a
+/// cancelled test ends at once with nothing run.
+#[test]
+fn a_connection_test_gives_up_after_its_limit_and_can_be_cancelled() {
+    use ext::CheckOutcome::{Failed, NotRun};
+    let (endpoint, _) = fake_service(|_, _, _| {
+        std::thread::sleep(Duration::from_secs(3));
+        (200, BUCKETS)
+    });
+    let started = std::time::Instant::now();
+    let (good, lines) = tested(
+        &endpoint,
+        "",
+        Duration::from_millis(200),
+        &types::CancelToken::new(),
+    );
+    assert!(!good);
+    assert_eq!(outcomes(&lines), [Failed, NotRun, NotRun]);
+    assert!(lines[0].1.contains("No answer within"), "{lines:?}");
+    assert!(started.elapsed() < Duration::from_secs(2));
+
+    let cancel = types::CancelToken::new();
+    let later = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        later.cancel();
+    });
+    let started = std::time::Instant::now();
+    let (good, lines) = tested(&endpoint, "", Duration::from_secs(10), &cancel);
+    assert!(!good);
+    assert_eq!(outcomes(&lines), [NotRun, NotRun, NotRun]);
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+/// 3.1 through the connector: in *Edit…* a key left empty is the
+/// keychain's, and the test stores nothing.
+#[test]
+fn the_connector_tests_with_the_typed_key_or_the_keychain_s() {
+    use ext::Connector as _;
+    use platform::Secrets as _;
+    ext::i18n::add_bundled("en", include_str!("../locales/en.ftl"));
+    let (endpoint, _) = fake_service(|method, _, bearer| match (method, bearer) {
+        ("POST", _) => (200, TOKEN),
+        ("GET", true) => (200, BUCKETS),
+        _ => (401, UNAUTHENTICATED),
+    });
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let conns = GcsConnections::new(fake.clone());
+    fake.store_secret(
+        &ext::secret_key(PROVIDER_ID, "saved", "key"),
+        &test_key(&endpoint),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(conns.checks().len(), 3);
+    let run = |name: Option<&str>, key: &str| {
+        let mut values = std::collections::BTreeMap::from([
+            ("endpoint".to_owned(), endpoint.clone()),
+            ("project".to_owned(), "rick-test".to_owned()),
+        ]);
+        if !key.is_empty() {
+            values.insert("key".to_owned(), key.to_owned());
+        }
+        let form = ext::ConnectionTestForm {
+            name,
+            values: &values,
+        };
+        assert!(!format!("{form:?}").contains("PRIVATE KEY"));
+        runtime::block_on(conns.test(&form, &types::CancelToken::new()))
+    };
+    assert!(run(Some("saved"), "").good);
+    assert!(run(None, &test_key(&endpoint)).good);
+    // Add without a key: the service wants one here.
+    assert!(!run(None, "").good);
+    assert_eq!(fake.secrets().len(), 1, "the test stored nothing");
+}
+
+/// Against the emulator the round trip uses (fake-gcs-server in CI): the
+/// test is good, and a host that is not there is not.
+#[test]
+fn against_a_store_the_connection_test_is_good() {
+    let Ok(endpoint) = std::env::var("RICK_GCS_ENDPOINT") else {
+        eprintln!("RICK_GCS_ENDPOINT is not set: no object store to test against; skipped");
+        assert!(
+            std::env::var_os("RICK_REQUIRE_CONTAINERS").is_none(),
+            "RICK_REQUIRE_CONTAINERS is set but RICK_GCS_ENDPOINT is not"
+        );
+        return;
+    };
+    let (good, lines) = test_of(&endpoint, "");
+    assert!(good, "{lines:?}");
+    let (good, lines) = test_of(&format!("http://{}", refusing_address()), "");
+    assert!(!good, "{lines:?}");
+}
