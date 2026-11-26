@@ -717,7 +717,11 @@ fn pasting_an_r2_bucket_address_fills_the_s3_dialogue() {
     ));
     harness.step();
     harness.step();
-    assert!(harness.query_by_label("Cloudflare R2").is_some());
+    assert!(
+        harness.query_by_label("Cloudflare R2").is_some(),
+        "clicked {endpoint:?}: {}",
+        dialogue_state(&harness)
+    );
     assert!(harness.query_by_label("Amazon S3").is_none());
     assert!(
         shows(&harness, "https://abc123.r2.cloudflarestorage.com"),
@@ -847,6 +851,35 @@ fn scoped_s3_service() -> String {
     format!("http://127.0.0.1:{port}")
 }
 
+/// What the open connection dialogue holds, for an assertion's message:
+/// the name, the fields (none of the tests' values is a real secret), the
+/// refusal and where the test stands; and where the pointer is.
+fn dialogue_state(harness: &Harness<'_, RickUi>) -> String {
+    let pointer = harness.ctx.input(|i| i.pointer.latest_pos());
+    harness
+        .state()
+        .side_panel_state()
+        .connection
+        .as_ref()
+        .map_or_else(
+            || format!("no dialogue; pointer {pointer:?}"),
+            |dialog| {
+                let values: Vec<String> = dialog
+                    .values
+                    .iter()
+                    .map(|(field, value)| format!("{}={value:?}", field.key))
+                    .collect();
+                format!(
+                    "name={:?} {} error={:?} test={:?} pointer={pointer:?}",
+                    dialog.name,
+                    values.join(" "),
+                    dialog.error,
+                    dialog.test
+                )
+            },
+        )
+}
+
 /// Pastes `text` over what the field of the row `label` holds.
 fn fill_field(harness: &mut Harness<'_, RickUi>, label: &str, text: &str) {
     // The dialogue moves when a row comes or goes: let it rest.
@@ -912,9 +945,10 @@ fn s3_dialogue(dir: &Path, buckets: &str) -> (Harness<'static, RickUi>, Arc<Fake
 
 /// *Add* was clicked: steps until the test that is not good holds the save.
 fn held(harness: &mut Harness<'_, RickUi>) {
-    assert!(step_until(harness, Duration::from_secs(10), |h| {
+    let held = step_until(harness, Duration::from_secs(10), |h| {
         shows(h, "Save anyway")
-    }));
+    });
+    assert!(held, "{}", dialogue_state(harness));
     assert!(shows(harness, "The test did not pass"));
 }
 
