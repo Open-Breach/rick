@@ -210,28 +210,91 @@ fn drive_table(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, entries: &[Entry]) {
 }
 
 /// The Cloud overview, and the connections of the Network overview: one
-/// row per account or connection.
+/// row per account or connection, in the table the details view's
+/// columns come from (`crate::table`, SPEC.md *File list*): the header
+/// band and the rows of the guide, columns that fit their content on
+/// their own, a drag on a divider that resizes, a double-click that fits
+/// again (specs/s3-connection.md 2.2).
+///
+/// Until the user resizes a column the widths follow the content, so a
+/// connection added later is not cut off; a resize is kept for the tab.
 fn cloud_table(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, entries: &[Entry], glyph: &str) {
-    let grid = egui::Grid::new(("overview-accounts", cx.tab_id))
-        .striped(true)
-        .num_columns(3)
-        .spacing(egui::vec2(16.0, 6.0));
-    grid.show(ui, |ui| {
-        for title in ["Name", "Provider", "Path"] {
-            head(ui, title);
-        }
-        ui.end_row();
-        for entry in entries {
-            let selected = cx.tab.selection.contains(&entry.id);
-            let response = ui.add(
-                egui::Button::selectable(selected, format!("{glyph} {}", entry.name)).truncate(),
-            );
-            row_interaction(cx, entry, &response);
-            ui.label(entry.id.provider.to_string());
-            ui.label(entry.path.to_string());
-            ui.end_row();
-        }
+    let columns = [
+        crate::table::Column::new(t!("overview-column-name")),
+        crate::table::Column::new(t!("overview-column-provider")),
+        crate::table::Column::new(t!("overview-column-path")),
+    ];
+    let text = |entry: &Entry, col: usize| match col {
+        0 => format!("{glyph} {}", entry.name),
+        1 => entry.id.provider.to_string(),
+        _ => entry.path.to_string(),
+    };
+    let measure = |ui: &egui::Ui, text: String| {
+        ui.painter()
+            .layout_no_wrap(
+                text,
+                egui::FontId::proportional(crate::theme::TEXT_BODY),
+                egui::Color32::PLACEHOLDER,
+            )
+            .size()
+            .x
+    };
+    // A cell's padding at both sides, and the room a selectable row's
+    // button takes around its text.
+    let room = 24.0 + 2.0 * ui.spacing().button_padding.x;
+    let id = egui::Id::new(("overview-accounts", cx.tab_id));
+    let kept: Option<Vec<f32>> = ui.data(|data| data.get_temp(id));
+    let mut widths = kept.clone().unwrap_or_else(|| {
+        (0..columns.len() - 1)
+            .map(|col| {
+                let title = measure(ui, columns[col].title.clone());
+                entries
+                    .iter()
+                    .map(|entry| measure(ui, text(entry, col)))
+                    .fold(title, f32::max)
+                    + room
+            })
+            .collect()
     });
+    #[allow(clippy::cast_precision_loss)]
+    let height = crate::table::HEADER
+        + entries.len() as f32 * crate::views::row_height(ui)
+        + ui.spacing().scroll.bar_width;
+    let size = egui::vec2(ui.available_width(), height);
+    let before = widths.clone();
+    ui.allocate_ui(size, |ui| {
+        ui.set_min_size(size);
+        crate::table::show(
+            ui,
+            id,
+            &columns,
+            &mut widths,
+            entries.len(),
+            &mut |ui, row, col| {
+                let Some(entry) = entries.get(row) else {
+                    return;
+                };
+                if col == 0 {
+                    let selected = cx.tab.selection.contains(&entry.id);
+                    let response =
+                        ui.add(egui::Button::selectable(selected, text(entry, col)).truncate());
+                    row_interaction(cx, entry, &response);
+                } else {
+                    ui.add(egui::Label::new(text(entry, col)).truncate());
+                }
+            },
+            &|ui, row, col| {
+                entries
+                    .get(row)
+                    .map_or(0.0, |entry| measure(ui, text(entry, col)) + room - 24.0)
+            },
+        );
+    });
+    // A drag moves a divider a little in every frame, and a double-click
+    // fits at once: what the user set is kept from the first change on.
+    if widths != before {
+        ui.data_mut(|data| data.insert_temp(id, widths));
+    }
 }
 
 /// Selection, opening and the new-tab shortcuts of an overview row.

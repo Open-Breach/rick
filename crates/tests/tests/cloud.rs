@@ -1027,3 +1027,134 @@ fn escape_closes_the_connection_dialogue() {
     assert!(!shows(&harness, "Add S3 connection"), "Escape left it open");
     assert_eq!(saved_connections(&harness), 0);
 }
+
+/// The left edge of the label `text` in the focused pane, right of the
+/// side panel.
+fn pane_label_left(harness: &Harness<'_, RickUi>, text: &str) -> f32 {
+    let pane = harness.state().app().model().focused;
+    let pane_left = harness
+        .state()
+        .pane_rects()
+        .into_iter()
+        .find(|(p, _)| *p == pane)
+        .map_or(400.0, |(_, r)| r.left());
+    harness
+        .query_all_by_label(text)
+        .map(|node| node.rect())
+        .find(|rect| rect.left() >= pane_left)
+        .unwrap_or_else(|| panic!("{text} in the pane"))
+        .left()
+}
+
+/// Issue 311, `specs/s3-connection.md` 2.3: the columns of the Cloud
+/// overview fit themselves to their content, a drag on a divider resizes,
+/// and a double-click fits again, as in the details view.
+#[test]
+fn the_cloud_overview_s_columns_fit_their_content_resize_and_fit_again() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![Arc::new(ext_vfs_s3::S3Extension::new())],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1400.0, 800.0))
+        .with_step_dt(0.05)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let long = "a-connection-with-a-rather-long-name-for-a-column";
+    for name in ["short", long] {
+        harness.state_mut().app_mut().handle(
+            Command::AddConnection {
+                provider: ProviderId("s3"),
+                name: name.into(),
+                values: vec![
+                    ("endpoint".into(), "http://127.0.0.1:1".into()),
+                    ("access_key".into(), "key".into()),
+                    ("secret_key".into(), "secret".into()),
+                    ("buckets".into(), "packages".into()),
+                ],
+            },
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+    }
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        Command::Navigate {
+            pane,
+            to: vfs_rick::Virtual::Cloud.location(),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+
+    // The titles are there, and the Name column is as wide as its longest
+    // name: the next column starts right of it, and no further than a
+    // cell's padding and the button's away.
+    let name = pane_label_left(&harness, "Name");
+    let fitted = pane_label_left(&harness, "Provider");
+    let path = pane_label_left(&harness, "Path");
+    assert!(name < fitted && fitted < path);
+    let longest = harness
+        .query_all_by_label_contains(long)
+        .map(|node| node.rect())
+        .filter(|rect| rect.left() >= name - 20.0 && rect.left() < fitted)
+        .map(|rect| rect.right())
+        .fold(0.0, f32::max);
+    assert!(longest > 0.0, "the long name's row");
+    assert!(fitted >= longest, "{fitted} cuts the name at {longest}");
+    assert!(fitted - longest < 60.0, "{fitted} is far from {longest}");
+
+    // A drag on the divider between Name and Provider resizes.
+    let header_y = harness
+        .query_all_by_label("Provider")
+        .map(|node| node.rect())
+        .find(|rect| rect.left() >= name)
+        .map_or(0.0, |rect| rect.center().y);
+    let divider = egui::pos2(fitted - 12.0, header_y);
+    let button = |harness: &mut Harness<'_, RickUi>, pos, pressed| {
+        harness.event(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.step();
+    };
+    harness.event(egui::Event::PointerMoved(divider));
+    harness.step();
+    button(&mut harness, divider, true);
+    let target = divider + egui::vec2(-120.0, 0.0);
+    for step in 1..=4u8 {
+        let at = divider + egui::vec2(-30.0 * f32::from(step), 0.0);
+        harness.event(egui::Event::PointerMoved(at));
+        harness.step();
+    }
+    button(&mut harness, target, false);
+    settle(&mut harness);
+    let narrowed = pane_label_left(&harness, "Provider");
+    assert!(
+        (narrowed - (fitted - 120.0)).abs() < 4.0,
+        "dragged from {fitted} to {narrowed}"
+    );
+
+    // A double-click on it fits the column to its content again.
+    let divider = egui::pos2(narrowed - 12.0, header_y);
+    harness.event(egui::Event::PointerMoved(divider));
+    harness.step();
+    for _ in 0..2 {
+        button(&mut harness, divider, true);
+        button(&mut harness, divider, false);
+    }
+    settle(&mut harness);
+    let again = pane_label_left(&harness, "Provider");
+    assert!(
+        (again - fitted).abs() < 4.0,
+        "fitted again at {again}, was {fitted}"
+    );
+}
