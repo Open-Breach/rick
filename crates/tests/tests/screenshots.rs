@@ -7220,3 +7220,60 @@ fn screenshots_of_the_connection_test() {
         }
     }
 }
+
+/// Issue 311: the Cloud overview at `rick://cloud` and the connections of
+/// the Network overview, which share its table, in light and dark.
+#[test]
+#[ignore = "renders screenshots; run with --ignored on a machine with a GPU adapter"]
+fn screenshots_of_the_connection_overviews() {
+    type Make = fn() -> Arc<dyn ext::Extension>;
+    let overviews: [(&str, &str, Make, &str, vfs_rick::Virtual); 2] = [
+        (
+            "cloud",
+            "s3",
+            || Arc::new(ext_vfs_s3::S3Extension::new()),
+            "endpoint",
+            vfs_rick::Virtual::Cloud,
+        ),
+        (
+            "network",
+            "ssh",
+            || Arc::new(ext_ssh::SshExtension::new()),
+            "host",
+            vfs_rick::Virtual::Network,
+        ),
+    ];
+    for (name, provider, make, field, overview) in overviews {
+        for theme in [Theme::Light, Theme::Dark] {
+            let look = look(theme, Density::Comfortable);
+            let (mut harness, _dir) = connection_shell(make(), theme, Density::Comfortable);
+            for connection in ["acme-prod", "backups", "media-archive-2026"] {
+                harness.state_mut().app_mut().handle(
+                    app::Command::AddConnection {
+                        provider: types::ProviderId::intern(provider),
+                        name: connection.into(),
+                        values: vec![
+                            (field.to_owned(), "127.0.0.1".to_owned()),
+                            ("access_key".to_owned(), "0123456789abcdef".to_owned()),
+                            ("secret_key".to_owned(), "not-a-real-secret".to_owned()),
+                            ("buckets".to_owned(), "packages".to_owned()),
+                        ],
+                    },
+                    &mut Vec::new(),
+                );
+                settle(&mut harness);
+            }
+            let pane = harness.state().app().model().focused;
+            harness.state_mut().app_mut().handle(
+                app::Command::Navigate {
+                    pane,
+                    to: overview.location(),
+                },
+                &mut Vec::new(),
+            );
+            settle(&mut harness);
+            hold_still(&mut harness, 4);
+            shoot(&mut harness, &format!("overview-{name}-{look}"));
+        }
+    }
+}
