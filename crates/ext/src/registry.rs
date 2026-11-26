@@ -200,8 +200,15 @@ use crate::search::SearchIndex;
 /// the plugin's business, and `connections`, the
 /// [`ConnectionSpec`](crate::ConnectionSpec)s of what it adds to *Add…* in
 /// the side panel; with `previews` they are the plugin's triggers, and
-/// `plugin.toml` carries all three.
-pub const API_VERSION: u32 = 23;
+/// `plugin.toml` carries all three; 24 a connection dialogue can react
+/// while the user types (#309, specs/s3-connection.md *Extension point*):
+/// [`Connector`] gained `react`, defaulted, which is
+/// handed the form as a [`ConnectionForm`](crate::ConnectionForm) when the
+/// dialogue opens, after each edit and before it saves, and answers with a
+/// [`ConnectionReaction`](crate::ConnectionReaction): values to fill where
+/// the user has not typed, the user's input rewritten into the fields it
+/// belongs to, and a short note by a field.
+pub const API_VERSION: u32 = 24;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares

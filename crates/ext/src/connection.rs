@@ -15,6 +15,18 @@
 //! reads a secret through `platform::Secrets` when it needs one, never
 //! from a file.
 //!
+//! The dialogue is one generic form, and a connector can make it react
+//! (API 24): after each edit the dialogue hands [`Connector::react`] the
+//! form as it stands, a [`ConnectionForm`] that also says whether the user
+//! is still typing, and applies the
+//! [`ConnectionReaction`] that comes back. A reaction can *fill* fields,
+//! which only takes on a field the user has not edited by hand; *rewrite*
+//! fields, for input the user gave in another shape (an address pasted
+//! whole, of which one field keeps a part and another the rest); and put a
+//! short *note* by a field, such as what the connector recognised. A
+//! connector that does not override `react` has a form that stays as
+//! typed.
+//!
 //! # Worked example
 //!
 //! A connector whose provider knows one field and holds no session.
@@ -79,8 +91,85 @@
 //! });
 //! let _ = Arc::new(demo);
 //! ```
+//!
+//! # Worked example: a form that reacts
+//!
+//! A connector that knows the port of a host it recognises: it fills the
+//! port, says by the host what it saw, and takes a port typed onto the
+//! host (`example.org:8443`) into the port field.
+//!
+//! ```
+//! use std::collections::{BTreeMap, BTreeSet};
+//!
+//! use ext::{
+//!     Connection, ConnectionForm, ConnectionReaction, ConnectionSchema, Connector, Text,
+//!     async_trait,
+//! };
+//! use types::{Error, ProviderId};
+//!
+//! struct Demo;
+//!
+//! #[async_trait]
+//! impl Connector for Demo {
+//!     fn provider(&self) -> ProviderId {
+//!         ProviderId("demo")
+//!     }
+//!     fn schema(&self) -> ConnectionSchema {
+//!         ConnectionSchema { title: Text("demo"), fields: Vec::new() }
+//!     }
+//!     fn update(&self, _connections: Vec<Connection>) {}
+//!     async fn connect(&self, _name: &str) -> Result<(), Error> {
+//!         Ok(())
+//!     }
+//!     fn disconnect(&self, _name: &str) {}
+//!     fn is_connected(&self, _name: &str) -> bool {
+//!         false
+//!     }
+//!
+//!     fn react(&self, form: &ConnectionForm<'_>) -> ConnectionReaction {
+//!         let mut reaction = ConnectionReaction::default();
+//!         let host = form.get("host");
+//!         // Input in another shape: the port typed onto the host, taken
+//!         // apart once the user has finished with the field.
+//!         if let Some((name, port)) = host.split_once(':').filter(|_| form.settled) {
+//!             reaction.rewrite.push(("host", name.to_owned()));
+//!             reaction.rewrite.push(("port", port.to_owned()));
+//!             return reaction;
+//!         }
+//!         if host.ends_with(".example.org") {
+//!             // Taken only while the user has not typed a port.
+//!             reaction.fill.push(("port", "8443".to_owned()));
+//!             // A real connector words this with `t!`.
+//!             reaction.notes.push(("host", "Example Cloud".to_owned()));
+//!         }
+//!         reaction
+//!     }
+//! }
+//!
+//! let mut values = BTreeMap::from([("host".to_owned(), "eu.example.org".to_owned())]);
+//! let edited = BTreeSet::from(["host".to_owned()]);
+//! let react = |values: &BTreeMap<String, String>, edited: &BTreeSet<String>| {
+//!     Demo.react(&ConnectionForm { values, edited, changed: Some("host"), settled: true })
+//! };
+//! let reaction = react(&values, &edited);
+//! assert_eq!(reaction.fill, [("port", "8443".to_owned())]);
+//! assert_eq!(reaction.notes, [("host", "Example Cloud".to_owned())]);
+//!
+//! // The dialogue applies it: a fill only where the user has not typed.
+//! assert_eq!(reaction.apply(&mut values, &edited), ["port"]);
+//! assert_eq!(values["port"], "8443");
+//! let typed = BTreeSet::from(["host".to_owned(), "port".to_owned()]);
+//! values.insert("port".to_owned(), "22".to_owned());
+//! assert!(react(&values, &typed).apply(&mut values, &typed).is_empty());
+//! assert_eq!(values["port"], "22");
+//!
+//! // A port typed onto the host is the user's own input, taken always.
+//! values.insert("host".to_owned(), "eu.example.org:9000".to_owned());
+//! assert_eq!(react(&values, &typed).apply(&mut values, &typed), ["host", "port"]);
+//! assert_eq!(values["port"], "9000");
+//! ```
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
 use types::{Error, ProviderId};
@@ -241,6 +330,90 @@ impl Connection {
     }
 }
 
+/// The form of a connection dialogue as it stands, handed to
+/// [`Connector::react`] when the dialogue opens and after each edit.
+#[derive(Debug, Clone, Copy)]
+pub struct ConnectionForm<'a> {
+    /// The fields by [`ConnectionField::key`] with their values as typed;
+    /// a `Bool` holds `true` or `false`. The fields of
+    /// [`ConnectionFieldKind::Secret`] are not in it: a secret reaches no
+    /// reaction.
+    pub values: &'a BTreeMap<String, String>,
+    /// The keys of the fields the user edited by hand, in this dialogue or,
+    /// in *Edit…*, when the connection was saved. A reaction's `fill`
+    /// leaves them alone.
+    pub edited: &'a BTreeSet<String>,
+    /// The field the user just edited; `None` when the dialogue opens and
+    /// when it is about to save.
+    pub changed: Option<&'a str>,
+    /// Whether the input is whole: `false` while the user is typing in
+    /// `changed`, `true` once the text was pasted, the field was left, a
+    /// box was ticked or an option picked, and when the dialogue opens or
+    /// is about to save. A `rewrite` belongs to whole input: taking a
+    /// half-typed address apart would move the text under the cursor.
+    pub settled: bool,
+}
+
+impl ConnectionForm<'_> {
+    /// The value of the field `key`, trimmed; empty when it has none.
+    #[must_use]
+    pub fn get(&self, key: &str) -> &str {
+        self.values.get(key).map_or("", |value| value.trim())
+    }
+
+    /// Whether the user edited the field `key` by hand.
+    #[must_use]
+    pub fn is_edited(&self, key: &str) -> bool {
+        self.edited.contains(key)
+    }
+}
+
+/// What a connector does to its dialogue after an edit: the answer of
+/// [`Connector::react`]. Empty, the default, leaves the form as typed.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ConnectionReaction {
+    /// Values the connector settles, by field key: what it knows from the
+    /// other fields (the region of a recognised host). The dialogue takes
+    /// one only for a field the user has not edited by hand, and the field
+    /// stays unedited, so a later reaction can settle it again.
+    pub fill: Vec<(&'static str, String)>,
+    /// The user's own input in the shape the fields want, by field key: an
+    /// address pasted whole, of which one field keeps a part and another
+    /// the rest. The dialogue takes these whatever the field's state, and
+    /// the fields count as edited by hand from then on.
+    pub rewrite: Vec<(&'static str, String)>,
+    /// A short note by a field, by field key, already worded in the
+    /// user's language (`t!`): what the connector recognised. The notes of
+    /// one reaction replace those of the one before.
+    pub notes: Vec<(&'static str, String)>,
+}
+
+impl ConnectionReaction {
+    /// Applies the reaction to a form's values as the dialogue does, and
+    /// returns the keys whose value changed: every `rewrite`, then each
+    /// `fill` whose field is not in `edited`. A key of no field is taken
+    /// as it comes; the dialogue ignores it.
+    pub fn apply(
+        &self,
+        values: &mut BTreeMap<String, String>,
+        edited: &BTreeSet<String>,
+    ) -> Vec<&'static str> {
+        let mut changed = Vec::new();
+        let rewritten = |key: &str| self.rewrite.iter().any(|(k, _)| *k == key);
+        let fills = self
+            .fill
+            .iter()
+            .filter(|(key, _)| !edited.contains(*key) && !rewritten(key));
+        for (key, value) in self.rewrite.iter().chain(fills) {
+            if values.get(*key) != Some(value) {
+                values.insert((*key).to_owned(), value.clone());
+                changed.push(*key);
+            }
+        }
+        changed
+    }
+}
+
 /// The keychain key of the secret field `field` of connection
 /// `connection` of `provider`: `s3/work/secret_key`.
 #[must_use]
@@ -284,4 +457,16 @@ pub trait Connector: Send + Sync + 'static {
 
     /// Whether `name` has an open session, or a verified client, right now.
     fn is_connected(&self, name: &str) -> bool;
+
+    /// What the dialogue does after an edit: asked when it opens, each
+    /// time the user changes a field, when a field typed in is left and
+    /// before the dialogue saves, with the form as it stands. The
+    /// default reacts to nothing, and the form stays as typed.
+    ///
+    /// It runs on the interface's thread between two frames: it reads the
+    /// form and answers, and does no I/O.
+    fn react(&self, form: &ConnectionForm<'_>) -> ConnectionReaction {
+        let _ = form;
+        ConnectionReaction::default()
+    }
 }

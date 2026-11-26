@@ -25,15 +25,15 @@
 //! in a new tab.
 
 use ext::t;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use std::sync::Arc;
 
 use app::{App, Command, ConnectionOp, Remedy, SuggestedConnection};
 use ext::{
-    ActionCtx, ActionGroup, Availability, ConnectionField, ConnectionFieldKind, ConnectionSection,
-    Connector, Invocation, Level,
+    ActionCtx, ActionGroup, Availability, ConnectionField, ConnectionFieldKind, ConnectionForm,
+    ConnectionSection, Connector, Invocation, Level,
 };
 use model::{PaneId, Place, Section, SidePanel, SidePanelChange, Volume, VolumeKind, WindowId};
 use types::{Entry, Location, ProviderId};
@@ -245,6 +245,12 @@ pub struct ConnectionDialog {
     /// Editing an existing connection: the name is fixed and a secret left
     /// empty keeps the one in the keychain.
     pub editing: bool,
+    /// The keys of the fields the user edited by hand, here or, in
+    /// *Edit…*, when the connection was saved: what the connector's
+    /// reaction does not fill.
+    pub edited: BTreeSet<String>,
+    /// The connector's notes by field key, from its last reaction.
+    pub notes: Vec<(&'static str, String)>,
     focus: bool,
 }
 
@@ -275,8 +281,74 @@ impl ConnectionDialog {
                 .collect(),
             error: None,
             editing: false,
+            edited: BTreeSet::new(),
+            notes: Vec::new(),
             focus: true,
         }
+    }
+
+    /// The *Add connection…* dialogue for `connector` as it opens: every
+    /// field at its default, and the connector's first reaction applied.
+    #[must_use]
+    pub fn open(connector: &dyn Connector) -> Self {
+        let mut dialog = Self::new(connector);
+        dialog.react(connector, None, true);
+        dialog
+    }
+
+    /// The note the connector put by the field `key`.
+    #[must_use]
+    pub fn note(&self, key: &str) -> Option<&str> {
+        self.notes
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, note)| note.as_str())
+    }
+
+    /// The user edited the field `key` by hand: it counts as typed from
+    /// here on, and the connector reacts to the form as it stands.
+    /// `settled` says the input is whole (pasted, picked, or the field was
+    /// left) rather than being typed.
+    pub fn edited(&mut self, connector: &dyn Connector, key: &'static str, settled: bool) {
+        self.edited.insert(key.to_owned());
+        self.react(connector, Some(key), settled);
+    }
+
+    /// The dialogue is about to save: the connector sees the form once
+    /// more, whole, so input typed and never left is taken as it is.
+    pub fn settle(&mut self, connector: &dyn Connector) {
+        self.react(connector, None, true);
+    }
+
+    /// Asks the connector what the form does now and applies its answer:
+    /// the rewritten fields, the fills of the fields the user has not
+    /// edited by hand, and the notes. A secret is not in the form the
+    /// connector sees, and a reaction does not set one.
+    fn react(&mut self, connector: &dyn Connector, changed: Option<&str>, settled: bool) {
+        let secret = |field: &ConnectionField| field.kind == ConnectionFieldKind::Secret;
+        let mut values: BTreeMap<String, String> = self
+            .values
+            .iter()
+            .filter(|(field, _)| !secret(field))
+            .map(|(field, value)| (field.key.to_owned(), value.clone()))
+            .collect();
+        let reaction = connector.react(&ConnectionForm {
+            values: &values,
+            edited: &self.edited,
+            changed,
+            settled,
+        });
+        reaction.apply(&mut values, &self.edited);
+        for (field, value) in &mut self.values {
+            if !secret(field)
+                && let Some(new) = values.get(field.key)
+            {
+                value.clone_from(new);
+            }
+        }
+        self.edited
+            .extend(reaction.rewrite.iter().map(|(key, _)| (*key).to_owned()));
+        self.notes = reaction.notes;
     }
 
     /// The *Edit…* dialogue for the connection `entry` of `connector`: the
@@ -292,7 +364,13 @@ impl ConnectionDialog {
                 continue;
             }
             *value = entry.settings.get(field.key).cloned().unwrap_or_default();
+            // What was saved counts as typed: a reaction does not replace
+            // it. A field saved empty is open to a fill.
+            if !value.is_empty() {
+                dialog.edited.insert(field.key.to_owned());
+            }
         }
+        dialog.react(connector, None, true);
         dialog
     }
 
@@ -542,7 +620,7 @@ fn suggested_kinds(app: &App, section: Section) -> Vec<SuggestedConnection> {
 /// this for `Request::AddConnection`.
 pub fn begin_connection(state: &mut SidePanelState, app: &App, provider: ProviderId) {
     if let Some(connector) = app.registry().connector_of(provider) {
-        state.connection = Some(ConnectionDialog::new(&**connector));
+        state.connection = Some(ConnectionDialog::open(&**connector));
     }
 }
 
@@ -603,6 +681,8 @@ fn connection_dialog(
         return;
     };
     let taken = connection_names(app, dialog.provider);
+    let connector = app.registry().connector_of(dialog.provider).cloned();
+    let mut touched: Option<(&'static str, bool)> = None;
     let mut open = true;
     let mut done: Option<bool> = None;
     let title = if dialog.editing {
@@ -633,7 +713,14 @@ fn connection_dialog(
                     ui.end_row();
                     let editing = dialog.editing;
                     for (field, value) in &mut dialog.values {
-                        connection_field(ui, field, value, editing);
+                        let note = dialog
+                            .notes
+                            .iter()
+                            .find(|(key, _)| *key == field.key)
+                            .map(|(_, note)| note.as_str());
+                        if let Some(settled) = connection_field(ui, field, value, editing, note) {
+                            touched = Some((field.key, settled));
+                        }
                         ui.end_row();
                     }
                 });
@@ -657,6 +744,14 @@ fn connection_dialog(
     if !open {
         done = Some(false);
     }
+    // The connector reacts to the edit before anything else reads the
+    // form, an OK in the same frame included.
+    if let (Some((key, settled)), Some(connector)) = (touched, &connector) {
+        dialog.edited(&**connector, key, settled);
+    }
+    if let (Some(true), Some(connector)) = (done, &connector) {
+        dialog.settle(&**connector);
+    }
     match done {
         Some(true) => match dialog.command(&taken) {
             Ok(command) => {
@@ -673,58 +768,90 @@ fn connection_dialog(
 /// One row of the connection dialogue: the label, then the field as its
 /// kind asks: a masked text for a secret (left empty while editing, it
 /// keeps the keychain's), a checkbox, a combo box for a choice, a text
-/// field for the rest.
-fn connection_field(ui: &mut egui::Ui, field: &ConnectionField, value: &mut String, editing: bool) {
+/// field for the rest. The connector's `note` for the field, when it has
+/// one, sits beside the control. Returns `None` while the user left the
+/// value alone, and otherwise whether the edit is whole: text that was
+/// pasted, a field typed in and now left, a box ticked, an option picked.
+/// Text being typed is `Some(false)`.
+fn connection_field(
+    ui: &mut egui::Ui,
+    field: &ConnectionField,
+    value: &mut String,
+    editing: bool,
+    note: Option<&str>,
+) -> Option<bool> {
     let label = if field.required {
         format!("{} *", field.label)
     } else {
         field.label.get()
     };
     ui.label(label);
-    match &field.kind {
-        ConnectionFieldKind::Secret => {
-            let hint = if editing { "(unchanged)" } else { "" };
-            ui.add(
-                egui::TextEdit::singleline(value)
-                    .password(true)
-                    .hint_text(hint)
-                    .desired_width(260.0),
-            );
+    // A text field: typing is not whole, a paste and leaving the field are.
+    let typed = |ui: &egui::Ui, response: &egui::Response| {
+        let pasted = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))));
+        if response.changed() {
+            Some(pasted)
+        } else if response.lost_focus() {
+            Some(true)
+        } else {
+            None
         }
-        ConnectionFieldKind::Bool { .. } => {
-            let mut on = value == "true";
-            if ui.checkbox(&mut on, "").changed() {
-                *value = on.to_string();
+    };
+    let mut edit = None;
+    ui.horizontal(|ui| {
+        match &field.kind {
+            ConnectionFieldKind::Secret => {
+                let hint = if editing { "(unchanged)" } else { "" };
+                let response = ui.add(
+                    egui::TextEdit::singleline(value)
+                        .password(true)
+                        .hint_text(hint)
+                        .desired_width(260.0),
+                );
+                edit = typed(ui, &response);
+            }
+            ConnectionFieldKind::Bool { .. } => {
+                let mut on = value == "true";
+                if ui.checkbox(&mut on, "").changed() {
+                    *value = on.to_string();
+                    edit = Some(true);
+                }
+            }
+            ConnectionFieldKind::Choice { options, .. } => {
+                let shown = if value.is_empty() {
+                    "(none)"
+                } else {
+                    value.as_str()
+                };
+                egui::ComboBox::from_id_salt(("add-connection-choice", field.key))
+                    .selected_text(shown.to_owned())
+                    .width(260.0)
+                    .show_ui(ui, |ui| {
+                        for option in options {
+                            let label = if option.is_empty() {
+                                "(none)"
+                            } else {
+                                option.as_str()
+                            };
+                            if ui.selectable_label(value == option, label).clicked() {
+                                value.clone_from(option);
+                                edit = Some(true);
+                            }
+                        }
+                    });
+            }
+            ConnectionFieldKind::Text { .. }
+            | ConnectionFieldKind::Integer { .. }
+            | ConnectionFieldKind::Path => {
+                let response = ui.add(egui::TextEdit::singleline(value).desired_width(260.0));
+                edit = typed(ui, &response);
             }
         }
-        ConnectionFieldKind::Choice { options, .. } => {
-            let shown = if value.is_empty() {
-                "(none)"
-            } else {
-                value.as_str()
-            };
-            egui::ComboBox::from_id_salt(("add-connection-choice", field.key))
-                .selected_text(shown.to_owned())
-                .width(260.0)
-                .show_ui(ui, |ui| {
-                    for option in options {
-                        let label = if option.is_empty() {
-                            "(none)"
-                        } else {
-                            option.as_str()
-                        };
-                        if ui.selectable_label(value == option, label).clicked() {
-                            value.clone_from(option);
-                        }
-                    }
-                });
+        if let Some(note) = note {
+            ui.weak(note);
         }
-        ConnectionFieldKind::Text { .. }
-        | ConnectionFieldKind::Integer { .. }
-        | ConnectionFieldKind::Path => {
-            ui.add(egui::TextEdit::singleline(value).desired_width(260.0));
-        }
-    }
+    });
+    edit
 }
 
 /// The menu of a section's header, on the menu card of the file list
@@ -1915,6 +2042,148 @@ pub fn folded(app: &App, window: WindowId) -> BTreeSet<Section> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A connector that reacts as the worked example of `ext::connection`
+    /// does: it settles the port of a host it recognises and says so, and
+    /// takes a port typed onto the host into the port field.
+    struct Reacting;
+
+    #[ext::async_trait]
+    impl Connector for Reacting {
+        fn provider(&self) -> ProviderId {
+            ProviderId("reacting")
+        }
+        fn schema(&self) -> ext::ConnectionSchema {
+            let text = |key, default: &str| ConnectionField {
+                key,
+                label: ext::Text(key),
+                kind: ConnectionFieldKind::Text {
+                    default: default.to_owned(),
+                },
+                required: false,
+            };
+            ext::ConnectionSchema {
+                title: ext::Text("reacting"),
+                fields: vec![
+                    text("host", ""),
+                    text("port", "22"),
+                    ConnectionField {
+                        key: "token",
+                        label: ext::Text("token"),
+                        kind: ConnectionFieldKind::Secret,
+                        required: false,
+                    },
+                ],
+            }
+        }
+        fn update(&self, _connections: Vec<ext::Connection>) {}
+        async fn connect(&self, _name: &str) -> Result<(), types::Error> {
+            Ok(())
+        }
+        fn disconnect(&self, _name: &str) {}
+        fn is_connected(&self, _name: &str) -> bool {
+            false
+        }
+        fn react(&self, form: &ConnectionForm<'_>) -> ext::ConnectionReaction {
+            assert!(
+                !form.values.contains_key("token"),
+                "a secret reached a reaction"
+            );
+            let mut reaction = ext::ConnectionReaction::default();
+            let host = form.get("host");
+            if let Some((name, port)) = host.split_once(':').filter(|_| form.settled) {
+                reaction.rewrite.push(("host", name.to_owned()));
+                reaction.rewrite.push(("port", port.to_owned()));
+            } else if host.ends_with(".example.org") {
+                reaction.fill.push(("port", "8443".to_owned()));
+                reaction.fill.push(("token", "never".to_owned()));
+                reaction.notes.push(("host", "Example Cloud".to_owned()));
+            }
+            reaction
+        }
+    }
+
+    fn value<'a>(dialog: &'a ConnectionDialog, key: &str) -> &'a str {
+        dialog
+            .values
+            .iter()
+            .find(|(field, _)| field.key == key)
+            .map_or("", |(_, value)| value.as_str())
+    }
+
+    fn type_into(dialog: &mut ConnectionDialog, key: &'static str, text: &str) {
+        for (field, value) in &mut dialog.values {
+            if field.key == key {
+                text.clone_into(value);
+            }
+        }
+        dialog.edited(&Reacting, key, true);
+    }
+
+    #[test]
+    fn the_connection_dialogue_fills_what_the_user_has_not_typed_and_shows_the_note() {
+        let mut dialog = ConnectionDialog::open(&Reacting);
+        assert_eq!(value(&dialog, "port"), "22");
+        assert_eq!(dialog.note("host"), None);
+        type_into(&mut dialog, "host", "eu.example.org");
+        assert_eq!(value(&dialog, "port"), "8443");
+        assert_eq!(dialog.note("host"), Some("Example Cloud"));
+        assert_eq!(value(&dialog, "token"), "", "a reaction set a secret");
+        // A filled field stays open to the next reaction, and the note goes
+        // with what it described.
+        type_into(&mut dialog, "host", "elsewhere.test");
+        assert_eq!(value(&dialog, "port"), "8443");
+        assert_eq!(dialog.note("host"), None);
+    }
+
+    #[test]
+    fn the_connection_dialogue_never_overwrites_a_value_typed_by_hand() {
+        let mut dialog = ConnectionDialog::open(&Reacting);
+        type_into(&mut dialog, "port", "2222");
+        type_into(&mut dialog, "host", "eu.example.org");
+        assert_eq!(value(&dialog, "port"), "2222");
+        assert_eq!(dialog.note("host"), Some("Example Cloud"));
+    }
+
+    #[test]
+    fn the_connection_dialogue_takes_rewritten_input_into_its_fields() {
+        let mut dialog = ConnectionDialog::open(&Reacting);
+        type_into(&mut dialog, "port", "2222");
+        type_into(&mut dialog, "host", "eu.example.org:9000");
+        assert_eq!(value(&dialog, "host"), "eu.example.org");
+        assert_eq!(value(&dialog, "port"), "9000");
+        // Half-typed input is left where the cursor is, and taken when the
+        // dialogue saves.
+        for (field, value) in &mut dialog.values {
+            if field.key == "host" {
+                "eu.example.org:70".clone_into(value);
+            }
+        }
+        dialog.edited(&Reacting, "host", false);
+        assert_eq!(value(&dialog, "host"), "eu.example.org:70");
+        assert_eq!(value(&dialog, "port"), "9000");
+        dialog.settle(&Reacting);
+        assert_eq!(value(&dialog, "host"), "eu.example.org");
+        assert_eq!(value(&dialog, "port"), "70");
+        // What was rewritten is the user's own input: a later fill leaves it.
+        type_into(&mut dialog, "host", "us.example.org");
+        assert_eq!(value(&dialog, "port"), "70");
+    }
+
+    #[test]
+    fn a_saved_value_counts_as_typed_in_the_edit_dialogue() {
+        let entry = model::ConnectionEntry {
+            provider: "reacting".to_owned(),
+            name: "work".to_owned(),
+            settings: BTreeMap::from([
+                ("host".to_owned(), "eu.example.org".to_owned()),
+                ("port".to_owned(), "2222".to_owned()),
+            ]),
+        };
+        let dialog = ConnectionDialog::edit(&Reacting, &entry);
+        assert_eq!(value(&dialog, "port"), "2222");
+        assert_eq!(dialog.note("host"), Some("Example Cloud"));
+    }
 
     #[test]
     fn gaps_and_targets_follow_the_pointer() {
