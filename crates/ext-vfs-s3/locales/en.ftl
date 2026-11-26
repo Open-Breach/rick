@@ -20,3 +20,14 @@ s3-error-signature = The signature was rejected, usually a wrong secret key. ({ 
 s3-error-no-such-bucket = The bucket does not exist; check the name. ({ $code })
 s3-error-other = { $code } ({ $status }): { $message }
 s3-error-http = HTTP { $status }: { $message }
+
+# The provider recognised from the endpoint, shown by the field
+# (specs/s3-connection.md 1.3).
+s3-provider-aws = Amazon S3
+s3-provider-r2 = Cloudflare R2
+s3-provider-b2 = Backblaze B2
+s3-provider-wasabi = Wasabi
+s3-provider-spaces = DigitalOcean Spaces
+s3-provider-scaleway = Scaleway
+s3-provider-ovh = OVHcloud
+s3-provider-gcs = Google Cloud Storage (S3-compatible)

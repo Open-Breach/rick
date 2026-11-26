@@ -937,3 +937,356 @@ fn a_missing_key_is_still_not_found() {
         assert!(matches!(object.err(), Some(types::Error::NotFound)));
     });
 }
+
+#[test]
+fn an_endpoint_is_split_into_the_endpoint_and_the_bucket_of_its_path() {
+    let split = |text: &str| {
+        let (endpoint, bucket) = split_endpoint(text);
+        (endpoint, bucket.unwrap_or_default())
+    };
+    assert_eq!(
+        split("https://abc123.r2.cloudflarestorage.com/packages"),
+        (
+            "https://abc123.r2.cloudflarestorage.com".into(),
+            "packages".into()
+        )
+    );
+    assert_eq!(
+        split(" https://abc123.r2.cloudflarestorage.com/packages/sub/key?x=1 "),
+        (
+            "https://abc123.r2.cloudflarestorage.com".into(),
+            "packages".into()
+        )
+    );
+    assert_eq!(
+        split("127.0.0.1:9000/media/"),
+        ("127.0.0.1:9000".into(), "media".into())
+    );
+    // A trailing slash names no bucket and is cleaned all the same.
+    assert_eq!(
+        split("http://127.0.0.1:9000/"),
+        ("http://127.0.0.1:9000".into(), String::new())
+    );
+    assert_eq!(
+        split("http://127.0.0.1:9000"),
+        ("http://127.0.0.1:9000".into(), String::new())
+    );
+    assert_eq!(split(""), (String::new(), String::new()));
+}
+
+/// The form of the S3 dialogue with these values, the endpoint just
+/// edited.
+fn reaction_to(values: &[(&str, &str)], edited: &[&str], settled: bool) -> ext::ConnectionReaction {
+    let values: std::collections::BTreeMap<String, String> = values
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+    let edited: std::collections::BTreeSet<String> =
+        edited.iter().map(|k| (*k).to_owned()).collect();
+    react(&ext::ConnectionForm {
+        values: &values,
+        edited: &edited,
+        changed: Some("endpoint"),
+        settled,
+    })
+}
+
+/// specs/s3-connection.md 1.4, sixth line, the dialogue's half: pasting an
+/// endpoint that ends in `/packages` leaves the endpoint clean and puts
+/// `packages` into *Buckets*, after the names already there.
+#[test]
+fn a_bucket_path_pasted_onto_the_endpoint_moves_to_the_buckets_field() {
+    let pasted = "https://abc123.r2.cloudflarestorage.com/packages";
+    let reaction = reaction_to(&[("endpoint", pasted)], &["endpoint"], true);
+    assert_eq!(
+        reaction.rewrite,
+        [
+            (
+                "endpoint",
+                "https://abc123.r2.cloudflarestorage.com".to_owned()
+            ),
+            ("buckets", "packages".to_owned())
+        ]
+    );
+    let reaction = reaction_to(
+        &[("endpoint", pasted), ("buckets", "media,packages , logs")],
+        &["endpoint", "buckets"],
+        true,
+    );
+    assert_eq!(
+        reaction.rewrite[1],
+        ("buckets", "media, packages, logs".to_owned())
+    );
+    let reaction = reaction_to(
+        &[("endpoint", pasted), ("buckets", "media")],
+        &["endpoint"],
+        true,
+    );
+    assert_eq!(
+        reaction.rewrite[1],
+        ("buckets", "media, packages".to_owned())
+    );
+    // While it is being typed the address stays under the cursor.
+    assert_eq!(
+        reaction_to(&[("endpoint", pasted)], &["endpoint"], false).rewrite,
+        []
+    );
+    // An endpoint without a path is left as typed.
+    let plain = "https://abc123.r2.cloudflarestorage.com";
+    assert_eq!(
+        reaction_to(&[("endpoint", plain)], &["endpoint"], true).rewrite,
+        []
+    );
+}
+
+/// specs/s3-connection.md 1.4, sixth line, the provider's half, and the
+/// connection saved before 0.6.1 with a path on its endpoint: the bucket
+/// of the path shows at the root, and the requests go to the endpoint
+/// without it. The test fails before the fix: the path was dropped and the
+/// root called `ListBuckets`.
+#[test]
+fn a_connection_saved_with_a_bucket_path_on_its_endpoint_opens_showing_that_bucket() {
+    let service = FakeService::start(|_, target| {
+        if target == "/" {
+            (403, error_body("AccessDenied", "Access Denied"))
+        } else {
+            (200, listing_body("readme.txt"))
+        }
+    });
+    let (conns, provider) = connected(&format!("{}/packages", service.endpoint), "");
+    assert_eq!(conns.buckets("test").unwrap_or_default(), ["packages"]);
+    runtime::block_on(async {
+        let root = names_at(&provider, "/test", ext::Depth::One).await;
+        assert_eq!(root.unwrap_or_else(|e| panic!("{e}")), ["packages"]);
+        assert!(service.seen().is_empty(), "{:?}", service.seen());
+        let inside = names_at(&provider, "/test/packages", ext::Depth::One).await;
+        assert_eq!(inside.unwrap_or_else(|e| panic!("{e}")), ["readme.txt"]);
+        let seen = service.seen();
+        assert!(seen[0].starts_with("GET /packages/?"), "{seen:?}");
+    });
+}
+
+/// What an endpoint is recognised as: the provider's name, the region and
+/// whether path-style is on.
+fn recognised(endpoint: &str) -> Option<(String, Option<String>, bool)> {
+    english();
+    recognise(endpoint).map(|r| (r.provider.get(), r.region, r.path_style))
+}
+
+/// The table of specs/s3-connection.md 1.3, each row as the provider's own
+/// documentation has it.
+#[test]
+fn providers_are_recognised_from_the_endpoint_host() {
+    let known = |endpoint: &str, name: &str, region: &str, path_style: bool| {
+        assert_eq!(
+            recognised(endpoint),
+            Some((name.to_owned(), Some(region.to_owned()), path_style)),
+            "{endpoint}"
+        );
+    };
+    assert_eq!(recognised(""), Some(("Amazon S3".into(), None, false)));
+    known(
+        "https://s3.eu-central-1.amazonaws.com",
+        "Amazon S3",
+        "eu-central-1",
+        false,
+    );
+    known(
+        "s3.dualstack.us-west-2.amazonaws.com",
+        "Amazon S3",
+        "us-west-2",
+        false,
+    );
+    known("https://s3.amazonaws.com", "Amazon S3", "us-east-1", false);
+    known(
+        "https://abc123.r2.cloudflarestorage.com",
+        "Cloudflare R2",
+        "auto",
+        true,
+    );
+    known(
+        "https://ABC123.eu.r2.cloudflarestorage.com/packages",
+        "Cloudflare R2",
+        "auto",
+        true,
+    );
+    known(
+        "https://s3.us-west-004.backblazeb2.com",
+        "Backblaze B2",
+        "us-west-004",
+        true,
+    );
+    known(
+        "https://s3.eu-central-1.wasabisys.com",
+        "Wasabi",
+        "eu-central-1",
+        true,
+    );
+    known("https://s3.wasabisys.com", "Wasabi", "us-east-1", true);
+    known(
+        "https://s3.nl-1.wasabisys.com",
+        "Wasabi",
+        "eu-central-1",
+        true,
+    );
+    known(
+        "https://nyc3.digitaloceanspaces.com",
+        "DigitalOcean Spaces",
+        "nyc3",
+        true,
+    );
+    known("https://s3.fr-par.scw.cloud", "Scaleway", "fr-par", true);
+    known(
+        "https://s3.gra.io.cloud.ovh.net:443",
+        "OVHcloud",
+        "gra",
+        true,
+    );
+    known(
+        "https://storage.googleapis.com",
+        "Google Cloud Storage (S3-compatible)",
+        "auto",
+        true,
+    );
+    // Anything else is the generic form.
+    for unknown in [
+        "http://127.0.0.1:9000",
+        "https://minio.example.org",
+        "https://r2.cloudflarestorage.com",
+        "https://s3.a.b.amazonaws.com",
+        "https://evil-r2.cloudflarestorage.com.example.org",
+        "https://fsn1.your-objectstorage.com",
+    ] {
+        assert_eq!(recognised(unknown), None, "{unknown}");
+    }
+    for row in TABLE {
+        assert!(row.source.starts_with("https://"), "{row:?}");
+    }
+}
+
+/// What the dialogue's reaction fills and notes for these values.
+fn filled(
+    values: &[(&str, &str)],
+    edited: &[&str],
+) -> (Vec<(&'static str, String)>, Option<String>) {
+    english();
+    let reaction = reaction_to(values, edited, true);
+    let note = reaction
+        .notes
+        .iter()
+        .find(|(key, _)| *key == "endpoint")
+        .map(|(_, note)| note.clone());
+    let values: std::collections::BTreeMap<String, String> = values
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+    let edited: std::collections::BTreeSet<String> =
+        edited.iter().map(|k| (*k).to_owned()).collect();
+    let mut after = values.clone();
+    reaction.apply(&mut after, &edited);
+    let changed = ["endpoint", "region", "buckets", "path_style"]
+        .into_iter()
+        .filter_map(|key| after.get(key).map(|value| (key, value.clone())))
+        .collect();
+    (changed, note)
+}
+
+/// specs/s3-connection.md 1.4, fifth line: pasting an R2 endpoint sets
+/// region `auto` and path style on and shows *Cloudflare R2*; a hand-typed
+/// region is left alone.
+#[test]
+fn an_r2_endpoint_settles_region_and_path_style_and_leaves_a_typed_region_alone() {
+    let r2 = "https://abc123.r2.cloudflarestorage.com";
+    let (values, note) = filled(
+        &[
+            ("endpoint", r2),
+            ("region", "us-east-1"),
+            ("path_style", "false"),
+        ],
+        &["endpoint"],
+    );
+    assert_eq!(note.as_deref(), Some("Cloudflare R2"));
+    assert_eq!(
+        values,
+        [
+            ("endpoint", r2.to_owned()),
+            ("region", "auto".to_owned()),
+            ("path_style", "true".to_owned())
+        ]
+    );
+    let (values, note) = filled(
+        &[
+            ("endpoint", r2),
+            ("region", "weur"),
+            ("path_style", "false"),
+        ],
+        &["endpoint", "region", "path_style"],
+    );
+    assert_eq!(note.as_deref(), Some("Cloudflare R2"));
+    assert_eq!(values[1], ("region", "weur".to_owned()));
+    assert_eq!(values[2], ("path_style", "false".to_owned()));
+}
+
+/// The sixth line of 1.4 in one step: the bucket's address pasted whole is
+/// recognised by its host, and the name goes to *Buckets*.
+#[test]
+fn an_r2_bucket_address_is_recognised_and_taken_apart_at_once() {
+    let (values, note) = filled(
+        &[
+            (
+                "endpoint",
+                "https://abc123.r2.cloudflarestorage.com/packages",
+            ),
+            ("region", "us-east-1"),
+        ],
+        &["endpoint"],
+    );
+    assert_eq!(note.as_deref(), Some("Cloudflare R2"));
+    assert_eq!(
+        values,
+        [
+            (
+                "endpoint",
+                "https://abc123.r2.cloudflarestorage.com".to_owned()
+            ),
+            ("region", "auto".to_owned()),
+            ("buckets", "packages".to_owned()),
+            ("path_style", "true".to_owned())
+        ]
+    );
+}
+
+/// An empty endpoint is AWS, and a host nothing knows is the generic form:
+/// both start from the schema's region, and what recognition had filled
+/// for another host does not stay behind.
+#[test]
+fn an_empty_endpoint_is_aws_and_an_unknown_host_is_the_generic_form() {
+    let (values, note) = filled(
+        &[("endpoint", ""), ("region", "auto"), ("path_style", "true")],
+        &[],
+    );
+    assert_eq!(note.as_deref(), Some("Amazon S3"));
+    assert_eq!(
+        values[1..],
+        [
+            ("region", "us-east-1".to_owned()),
+            ("path_style", "false".to_owned())
+        ]
+    );
+    let (values, note) = filled(
+        &[
+            ("endpoint", "http://127.0.0.1:9000"),
+            ("region", "auto"),
+            ("path_style", "false"),
+        ],
+        &["endpoint"],
+    );
+    assert_eq!(note, None);
+    assert_eq!(
+        values[1..],
+        [
+            ("region", "us-east-1".to_owned()),
+            ("path_style", "true".to_owned())
+        ]
+    );
+}
