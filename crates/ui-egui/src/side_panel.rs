@@ -769,7 +769,7 @@ fn connection_dialog(
 /// kind asks: a masked text for a secret (left empty while editing, it
 /// keeps the keychain's), a checkbox, a combo box for a choice, a text
 /// field for the rest. The connector's `note` for the field, when it has
-/// one, sits beside the control. Returns `None` while the user left the
+/// one, has the row under the control. Returns `None` while the user left the
 /// value alone, and otherwise whether the edit is whole: text that was
 /// pasted, a field typed in and now left, a box ticked, an option picked.
 /// Text being typed is `Some(false)`.
@@ -798,59 +798,61 @@ fn connection_field(
         }
     };
     let mut edit = None;
-    ui.horizontal(|ui| {
-        match &field.kind {
-            ConnectionFieldKind::Secret => {
-                let hint = if editing { "(unchanged)" } else { "" };
-                let response = ui.add(
-                    egui::TextEdit::singleline(value)
-                        .password(true)
-                        .hint_text(hint)
-                        .desired_width(260.0),
-                );
-                edit = typed(ui, &response);
+    match &field.kind {
+        ConnectionFieldKind::Secret => {
+            let hint = if editing { "(unchanged)" } else { "" };
+            let response = ui.add(
+                egui::TextEdit::singleline(value)
+                    .password(true)
+                    .hint_text(hint)
+                    .desired_width(260.0),
+            );
+            edit = typed(ui, &response);
+        }
+        ConnectionFieldKind::Bool { .. } => {
+            let mut on = value == "true";
+            if ui.checkbox(&mut on, "").changed() {
+                *value = on.to_string();
+                edit = Some(true);
             }
-            ConnectionFieldKind::Bool { .. } => {
-                let mut on = value == "true";
-                if ui.checkbox(&mut on, "").changed() {
-                    *value = on.to_string();
-                    edit = Some(true);
-                }
-            }
-            ConnectionFieldKind::Choice { options, .. } => {
-                let shown = if value.is_empty() {
-                    "(none)"
-                } else {
-                    value.as_str()
-                };
-                egui::ComboBox::from_id_salt(("add-connection-choice", field.key))
-                    .selected_text(shown.to_owned())
-                    .width(260.0)
-                    .show_ui(ui, |ui| {
-                        for option in options {
-                            let label = if option.is_empty() {
-                                "(none)"
-                            } else {
-                                option.as_str()
-                            };
-                            if ui.selectable_label(value == option, label).clicked() {
-                                value.clone_from(option);
-                                edit = Some(true);
-                            }
+        }
+        ConnectionFieldKind::Choice { options, .. } => {
+            let shown = if value.is_empty() {
+                "(none)"
+            } else {
+                value.as_str()
+            };
+            egui::ComboBox::from_id_salt(("add-connection-choice", field.key))
+                .selected_text(shown.to_owned())
+                .width(260.0)
+                .show_ui(ui, |ui| {
+                    for option in options {
+                        let label = if option.is_empty() {
+                            "(none)"
+                        } else {
+                            option.as_str()
+                        };
+                        if ui.selectable_label(value == option, label).clicked() {
+                            value.clone_from(option);
+                            edit = Some(true);
                         }
-                    });
-            }
-            ConnectionFieldKind::Text { .. }
-            | ConnectionFieldKind::Integer { .. }
-            | ConnectionFieldKind::Path => {
-                let response = ui.add(egui::TextEdit::singleline(value).desired_width(260.0));
-                edit = typed(ui, &response);
-            }
+                    }
+                });
         }
-        if let Some(note) = note {
-            ui.weak(note);
+        ConnectionFieldKind::Text { .. }
+        | ConnectionFieldKind::Integer { .. }
+        | ConnectionFieldKind::Path => {
+            let response = ui.add(egui::TextEdit::singleline(value).desired_width(260.0));
+            edit = typed(ui, &response);
         }
-    });
+    }
+    // The connector's note has the row under its field to itself, so the
+    // controls keep their column and their width.
+    if let Some(note) = note {
+        ui.end_row();
+        ui.label("");
+        ui.weak(note);
+    }
     edit
 }
 
