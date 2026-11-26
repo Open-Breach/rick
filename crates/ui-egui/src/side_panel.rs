@@ -251,8 +251,41 @@ pub struct ConnectionDialog {
     pub edited: BTreeSet<String>,
     /// The connector's notes by field key, from its last reaction.
     pub notes: Vec<(&'static str, String)>,
+    /// What the connector's test checks, in order; empty for a connector
+    /// without a test, whose dialogue has no *Test* button.
+    pub checks: Vec<String>,
+    /// Where the connection test stands.
+    pub test: TestPhase,
     focus: bool,
 }
+
+/// Where the connection test of a dialogue stands
+/// (specs/s3-connection.md 3.1 and 3.4).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum TestPhase {
+    /// No test ran on the form as it stands.
+    #[default]
+    Idle,
+    /// The test `request` is running; `saving` when *Add* or *Save*
+    /// started it, which saves once it is good.
+    Running {
+        /// The run's number.
+        request: u64,
+        /// *Add* or *Save* started it.
+        saving: bool,
+    },
+    /// The test ran. `held` when *Add* or *Save* started it and it is not
+    /// good: nothing is saved until the user chooses *Save anyway*.
+    Done {
+        /// Its result.
+        test: ext::ConnectionTest,
+        /// A save waits for the user's choice.
+        held: bool,
+    },
+}
+
+/// The number of the next connection test a dialogue starts.
+static TEST_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl ConnectionDialog {
     /// The dialogue for `connector`, every field at its default.
@@ -283,8 +316,73 @@ impl ConnectionDialog {
             editing: false,
             edited: BTreeSet::new(),
             notes: Vec::new(),
+            checks: connector.checks(),
+            test: TestPhase::Idle,
             focus: true,
         }
+    }
+
+    /// Whether the connector tests a connection: the dialogue then has a
+    /// *Test* button, and *Add* and *Save* run the test first.
+    #[must_use]
+    pub fn has_test(&self) -> bool {
+        !self.checks.is_empty()
+    }
+
+    /// Starts a test of what is in the form at this moment and returns the
+    /// command that runs it; nothing is saved. `saving` when *Add* or
+    /// *Save* asked: a good result then saves.
+    pub fn begin_test(&mut self, saving: bool) -> Command {
+        let request = TEST_REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.test = TestPhase::Running { request, saving };
+        Command::TestConnection {
+            provider: self.provider,
+            name: self.editing.then(|| self.name.trim().to_owned()),
+            values: self
+                .values
+                .iter()
+                .map(|(field, value)| (field.key.to_owned(), value.trim().to_owned()))
+                .filter(|(_, value)| !value.is_empty())
+                .collect(),
+            request,
+        }
+    }
+
+    /// Takes the result of the running test from the model's `run`.
+    /// Returns `true` when the dialogue saves now: *Add* or *Save* started
+    /// the test and it is good. A test that is not good holds the save
+    /// until the user chooses; a cancelled one leaves the form as it was.
+    pub fn take_test(&mut self, run: Option<&model::ConnectionTestRun>) -> bool {
+        let TestPhase::Running { request, saving } = self.test else {
+            return false;
+        };
+        let Some(run) = run.filter(|run| run.request == request) else {
+            return false;
+        };
+        match &run.state {
+            model::ConnectionTestState::Running => false,
+            model::ConnectionTestState::Cancelled => {
+                self.test = TestPhase::Idle;
+                false
+            }
+            model::ConnectionTestState::Done(test) => {
+                let save = saving && test.good;
+                self.test = TestPhase::Done {
+                    test: test.clone(),
+                    held: saving && !test.good,
+                };
+                save
+            }
+        }
+    }
+
+    /// The form changed: a result no longer describes it, and a running
+    /// test is of no use. Returns whether a test was running, which the
+    /// caller cancels.
+    pub fn forget_test(&mut self) -> bool {
+        let running = matches!(self.test, TestPhase::Running { .. });
+        self.test = TestPhase::Idle;
+        running
     }
 
     /// The *Add connection…* dialogue for `connector` as it opens: every
@@ -669,22 +767,43 @@ fn connection_names(app: &App, provider: ProviderId) -> Vec<String> {
         .collect()
 }
 
-/// The *Add connection…* dialogue: the name, the connector's fields, OK
-/// and Cancel.
+/// The *Add connection…* dialogue: the name, the connector's fields, and
+/// for a connector with a test the *Test* button and the list of its
+/// checks. OK runs the test first and saves when it is good; a test that
+/// is not good holds the save, with a warning and *Save anyway*
+/// (specs/s3-connection.md Part 3). A connector without a test is saved
+/// as before.
+// One dialogue, drawn and then answered in one place.
+#[allow(clippy::too_many_lines)]
 fn connection_dialog(
     ctx: &egui::Context,
     app: &App,
     state: &mut SidePanelState,
     requests: &mut Vec<Request>,
 ) {
+    /// What the user asked of the dialogue this frame.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Asked {
+        Ok,
+        Test,
+        SaveAnyway,
+        BackToFields,
+        CancelTest,
+        Close,
+    }
     let Some(dialog) = state.connection.as_mut() else {
         return;
     };
     let taken = connection_names(app, dialog.provider);
     let connector = app.registry().connector_of(dialog.provider).cloned();
+    let run = app.model().connection_test.as_ref();
+    let running_job = run
+        .filter(|run| matches!(dialog.test, TestPhase::Running { request, .. } if request == run.request))
+        .and_then(|run| run.job);
+    let before: Vec<String> = dialog.values.iter().map(|(_, v)| v.clone()).collect();
     let mut touched: Option<(&'static str, bool)> = None;
     let mut open = true;
-    let mut done: Option<bool> = None;
+    let mut asked: Option<Asked> = None;
     let title = if dialog.editing {
         format!("Edit {} connection", dialog.title)
     } else {
@@ -728,41 +847,172 @@ fn connection_dialog(
                 ui.add_space(4.0);
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
+            if let Some(clicked) = test_results(ui, dialog) {
+                asked = Some(match clicked {
+                    TestAnswer::SaveAnyway => Asked::SaveAnyway,
+                    TestAnswer::BackToFields => Asked::BackToFields,
+                    TestAnswer::CancelTest => Asked::CancelTest,
+                });
+            }
             ui.add_space(6.0);
+            let busy = matches!(dialog.test, TestPhase::Running { .. });
+            let held = matches!(dialog.test, TestPhase::Done { held: true, .. });
             ui.horizontal(|ui| {
                 let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if ui.button(t!("ok")).clicked() || enter {
-                    done = Some(true);
+                let ok = ui.add_enabled(!busy && !held, egui::Button::new(t!("ok")));
+                if ok.clicked() || (enter && !busy && !held) {
+                    asked = Some(Asked::Ok);
+                }
+                if dialog.has_test()
+                    && ui
+                        .add_enabled(!busy && !held, egui::Button::new(t!("connection-test")))
+                        .clicked()
+                {
+                    asked = Some(Asked::Test);
                 }
                 if ui.button(t!("cancel")).clicked()
                     || ui.input(|i| i.key_pressed(egui::Key::Escape))
                 {
-                    done = Some(false);
+                    asked = Some(Asked::Close);
                 }
             });
         });
     if !open {
-        done = Some(false);
+        asked = Some(Asked::Close);
     }
+    let cancel_run = |requests: &mut Vec<Request>| {
+        if let Some(job) = running_job {
+            requests.push(Request::Command(Command::CancelJob(job)));
+        }
+    };
     // The connector reacts to the edit before anything else reads the
     // form, an OK in the same frame included.
     if let (Some((key, settled)), Some(connector)) = (touched, &connector) {
         dialog.edited(&**connector, key, settled);
     }
-    if let (Some(true), Some(connector)) = (done, &connector) {
+    if let (Some(Asked::Ok | Asked::Test), Some(connector)) = (asked, &connector) {
         dialog.settle(&**connector);
     }
-    match done {
-        Some(true) => match dialog.command(&taken) {
+    // A test describes the form it ran on: an edit ends it.
+    if dialog.values.iter().map(|(_, v)| v).ne(before.iter()) && dialog.forget_test() {
+        cancel_run(requests);
+    }
+    // The running test ended: a good one that OK started saves.
+    let mut save = dialog.take_test(run);
+    match asked {
+        Some(Asked::Ok) => match dialog.command(&taken) {
+            Ok(_) if dialog.has_test() => {
+                dialog.error = None;
+                requests.push(Request::Command(dialog.begin_test(true)));
+            }
+            Ok(_) => save = true,
+            Err(error) => dialog.error = Some(error),
+        },
+        Some(Asked::Test) => requests.push(Request::Command(dialog.begin_test(false))),
+        Some(Asked::SaveAnyway) => save = true,
+        Some(Asked::BackToFields) => {
+            if let TestPhase::Done { held, .. } = &mut dialog.test {
+                *held = false;
+            }
+        }
+        Some(Asked::CancelTest) => {
+            cancel_run(requests);
+            dialog.test = TestPhase::Idle;
+        }
+        Some(Asked::Close) => {
+            cancel_run(requests);
+            state.connection = None;
+            return;
+        }
+        None => {}
+    }
+    if save {
+        match dialog.command(&taken) {
             Ok(command) => {
                 requests.push(Request::Command(command));
                 state.connection = None;
             }
             Err(error) => dialog.error = Some(error),
-        },
-        Some(false) => state.connection = None,
-        None => {}
+        }
     }
+}
+
+/// What the user chose under the test's results.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TestAnswer {
+    SaveAnyway,
+    BackToFields,
+    CancelTest,
+}
+
+/// The connection test in the dialogue: while it runs, its checks as
+/// pending with *Cancel test*; once it ran, each check as passed, failed,
+/// information or not run, with the service's reason; and, when OK
+/// started a test that is not good, the warning with *Save anyway* and
+/// *Back to the fields*.
+fn test_results(ui: &mut egui::Ui, dialog: &ConnectionDialog) -> Option<TestAnswer> {
+    let mut answer = None;
+    match &dialog.test {
+        TestPhase::Idle => {}
+        TestPhase::Running { .. } => {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(t!("connection-test-running"));
+                if ui.button(t!("connection-test-cancel")).clicked() {
+                    answer = Some(TestAnswer::CancelTest);
+                }
+            });
+            for check in &dialog.checks {
+                ui.weak(check);
+            }
+        }
+        TestPhase::Done { test, held } => {
+            ui.add_space(6.0);
+            let error = ui.visuals().error_fg_color;
+            let warn = ui.visuals().warn_fg_color;
+            for check in &test.checks {
+                let (state, color) = match check.outcome {
+                    ext::CheckOutcome::Passed => (t!("connection-check-passed"), None),
+                    ext::CheckOutcome::Failed => (t!("connection-check-failed"), Some(error)),
+                    ext::CheckOutcome::Info => (t!("connection-check-info"), Some(warn)),
+                    ext::CheckOutcome::NotRun => (t!("connection-check-not-run"), None),
+                };
+                ui.horizontal_wrapped(|ui| {
+                    ui.set_max_width(420.0);
+                    match color {
+                        Some(color) => ui.colored_label(color, state),
+                        None => ui.weak(state),
+                    };
+                    ui.label(&check.label);
+                });
+                if !check.detail.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.set_max_width(420.0);
+                        ui.weak(&check.detail);
+                    });
+                }
+            }
+            if *held {
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.set_max_width(420.0);
+                    ui.colored_label(warn, t!("connection-test-not-good"));
+                });
+                ui.horizontal(|ui| {
+                    if ui.button(t!("connection-back-to-fields")).clicked() {
+                        answer = Some(TestAnswer::BackToFields);
+                    }
+                    if ui.button(t!("connection-save-anyway")).clicked() {
+                        answer = Some(TestAnswer::SaveAnyway);
+                    }
+                });
+            } else if test.good {
+                ui.weak(t!("connection-test-good"));
+            }
+        }
+    }
+    answer
 }
 
 /// One row of the connection dialogue: the label, then the field as its
@@ -2170,6 +2420,121 @@ mod tests {
         // What was rewritten is the user's own input: a later fill leaves it.
         type_into(&mut dialog, "host", "us.example.org");
         assert_eq!(value(&dialog, "port"), "70");
+    }
+
+    /// A run of the model's, as the application leaves it.
+    fn run(request: u64, state: model::ConnectionTestState) -> model::ConnectionTestRun {
+        model::ConnectionTestRun {
+            request,
+            job: None,
+            state,
+        }
+    }
+
+    fn result(good: bool) -> ext::ConnectionTest {
+        ext::ConnectionTest {
+            checks: vec![ext::ConnectionCheck {
+                label: "The host is reachable".to_owned(),
+                outcome: if good {
+                    ext::CheckOutcome::Passed
+                } else {
+                    ext::CheckOutcome::Failed
+                },
+                detail: String::new(),
+            }],
+            good,
+        }
+    }
+
+    fn request_of(dialog: &ConnectionDialog) -> u64 {
+        match dialog.test {
+            TestPhase::Running { request, .. } => request,
+            _ => panic!("no test is running: {:?}", dialog.test),
+        }
+    }
+
+    /// specs/s3-connection.md 3.1 and 3.4: the test runs on what is in the
+    /// form, the secret included, and OK saves only when it is good.
+    #[test]
+    fn ok_saves_after_a_good_test_and_holds_after_one_that_is_not_good() {
+        let mut dialog = ConnectionDialog::open(&Reacting);
+        assert!(!dialog.has_test(), "a connector without checks has no test");
+        dialog.checks = vec!["The host is reachable".to_owned()];
+        assert!(dialog.has_test());
+        type_into(&mut dialog, "host", "eu.example.org");
+        type_into(&mut dialog, "token", "s3cret");
+        let Command::TestConnection {
+            name,
+            values,
+            request,
+            ..
+        } = dialog.begin_test(true)
+        else {
+            panic!("not a test");
+        };
+        assert_eq!(name, None, "Add connection tests no saved connection");
+        assert!(values.contains(&("token".to_owned(), "s3cret".to_owned())));
+        assert_eq!(request_of(&dialog), request);
+
+        // Another run's result, and this one while it runs, change nothing.
+        let done = model::ConnectionTestState::Done;
+        assert!(!dialog.take_test(Some(&run(request + 1, done(result(true))))));
+        assert!(!dialog.take_test(Some(&run(request, model::ConnectionTestState::Running))));
+        assert_eq!(request_of(&dialog), request);
+
+        // Not good: the save is held for the user's choice.
+        assert!(!dialog.take_test(Some(&run(request, done(result(false))))));
+        assert!(matches!(dialog.test, TestPhase::Done { held: true, .. }));
+
+        // Good: OK saves.
+        let Command::TestConnection { request, .. } = dialog.begin_test(true) else {
+            panic!("not a test");
+        };
+        assert!(dialog.take_test(Some(&run(request, done(result(true))))));
+        assert!(matches!(dialog.test, TestPhase::Done { held: false, .. }));
+
+        // The Test button never saves, good or not.
+        let Command::TestConnection { request, .. } = dialog.begin_test(false) else {
+            panic!("not a test");
+        };
+        assert!(!dialog.take_test(Some(&run(request, done(result(true))))));
+        let Command::TestConnection { request, .. } = dialog.begin_test(false) else {
+            panic!("not a test");
+        };
+        assert!(!dialog.take_test(Some(&run(request, done(result(false))))));
+        assert!(matches!(dialog.test, TestPhase::Done { held: false, .. }));
+    }
+
+    #[test]
+    fn a_cancelled_or_outdated_test_leaves_the_form_as_it_was() {
+        let mut dialog = ConnectionDialog::open(&Reacting);
+        let Command::TestConnection { request, .. } = dialog.begin_test(true) else {
+            panic!("not a test");
+        };
+        assert!(!dialog.take_test(Some(&run(request, model::ConnectionTestState::Cancelled))));
+        assert_eq!(dialog.test, TestPhase::Idle);
+        // An edit ends a running test and forgets a result.
+        let _ = dialog.begin_test(false);
+        assert!(dialog.forget_test());
+        assert_eq!(dialog.test, TestPhase::Idle);
+        assert!(!dialog.forget_test());
+    }
+
+    /// In *Edit…* the test names the saved connection, whose keychain
+    /// secret stands for the field left empty.
+    #[test]
+    fn the_edit_dialogue_tests_the_saved_connection_with_its_secret_left_out() {
+        let entry = model::ConnectionEntry {
+            provider: "reacting".to_owned(),
+            name: "work".to_owned(),
+            settings: BTreeMap::from([("host".to_owned(), "eu.example.org".to_owned())]),
+        };
+        let mut dialog = ConnectionDialog::edit(&Reacting, &entry);
+        let Command::TestConnection { name, values, .. } = dialog.begin_test(false) else {
+            panic!("not a test");
+        };
+        assert_eq!(name.as_deref(), Some("work"));
+        assert!(values.iter().all(|(key, _)| key != "token"), "{values:?}");
     }
 
     #[test]

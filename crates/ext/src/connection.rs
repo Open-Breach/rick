@@ -27,6 +27,16 @@
 //! connector that does not override `react` has a form that stays as
 //! typed.
 //!
+//! A connector can also test a connection before it is saved (API 25): it
+//! names its checks in [`Connector::checks`], which is what gives its
+//! dialogue a *Test* button, and runs them in [`Connector::test`] on the
+//! values of the form, a [`ConnectionTestForm`], answering with a
+//! [`ConnectionTest`]: each check passed, failed with the service's own
+//! reason, shown as information or not run, and whether the test as a
+//! whole is good. *Add* and *Save* run the test first and save at once
+//! only when it is good. A test only reads: it creates, changes and
+//! deletes nothing on the service.
+//!
 //! # Worked example
 //!
 //! A connector whose provider knows one field and holds no session.
@@ -168,11 +178,98 @@
 //! assert_eq!(react(&values, &typed).apply(&mut values, &typed), ["host", "port"]);
 //! assert_eq!(values["port"], "9000");
 //! ```
+//!
+//! # Worked example: a connection test
+//!
+//! A connector with two checks: the host answers, and the token is
+//! accepted. The second depends on the first.
+//!
+//! ```
+//! use std::collections::BTreeMap;
+//!
+//! use ext::{
+//!     CheckOutcome, Connection, ConnectionCheck, ConnectionSchema, ConnectionTest,
+//!     ConnectionTestForm, Connector, Text, async_trait,
+//! };
+//! use types::{CancelToken, Error, ProviderId};
+//!
+//! struct Demo;
+//!
+//! #[async_trait]
+//! impl Connector for Demo {
+//!     fn provider(&self) -> ProviderId {
+//!         ProviderId("demo")
+//!     }
+//!     fn schema(&self) -> ConnectionSchema {
+//!         ConnectionSchema { title: Text("demo"), fields: Vec::new() }
+//!     }
+//!     fn update(&self, _connections: Vec<Connection>) {}
+//!     async fn connect(&self, _name: &str) -> Result<(), Error> {
+//!         Ok(())
+//!     }
+//!     fn disconnect(&self, _name: &str) {}
+//!     fn is_connected(&self, _name: &str) -> bool {
+//!         false
+//!     }
+//!
+//!     // A real connector words these with `t!`.
+//!     fn checks(&self) -> Vec<String> {
+//!         vec!["The host is reachable".into(), "The token is accepted".into()]
+//!     }
+//!
+//!     async fn test(&self, form: &ConnectionTestForm<'_>, _cancel: &CancelToken) -> ConnectionTest {
+//!         // A real connector sends a read-only request here, under
+//!         // `tokio::time::timeout(ext::CHECK_TIMEOUT, …)`.
+//!         let reachable = form.get("host") == "example.org";
+//!         let accepted = reachable && form.get("token") == "s3cret";
+//!         let check = |label: &str, outcome, detail: &str| ConnectionCheck {
+//!             label: label.into(),
+//!             outcome,
+//!             detail: detail.into(),
+//!         };
+//!         let labels = self.checks();
+//!         let checks = vec![
+//!             if reachable {
+//!                 check(&labels[0], CheckOutcome::Passed, "")
+//!             } else {
+//!                 check(&labels[0], CheckOutcome::Failed, "no such host")
+//!             },
+//!             if !reachable {
+//!                 check(&labels[1], CheckOutcome::NotRun, "")
+//!             } else if accepted {
+//!                 check(&labels[1], CheckOutcome::Passed, "")
+//!             } else {
+//!                 check(&labels[1], CheckOutcome::Failed, "the token was refused (InvalidToken)")
+//!             },
+//!         ];
+//!         ConnectionTest { checks, good: accepted }
+//!     }
+//! }
+//!
+//! let test = |host: &str, token: &str| {
+//!     let values = BTreeMap::from([
+//!         ("host".to_owned(), host.to_owned()),
+//!         ("token".to_owned(), token.to_owned()),
+//!     ]);
+//!     let form = ConnectionTestForm { name: None, values: &values };
+//!     // The form's debug text names the fields, never a value.
+//!     assert!(!format!("{form:?}").contains(token));
+//!     runtime::block_on(Demo.test(&form, &CancelToken::new()))
+//! };
+//! assert!(test("example.org", "s3cret").good);
+//! let wrong = test("example.org", "guess");
+//! assert!(!wrong.good);
+//! assert_eq!(wrong.checks[1].outcome, CheckOutcome::Failed);
+//! let offline = test("nowhere.test", "s3cret");
+//! assert_eq!(offline.checks[0].outcome, CheckOutcome::Failed);
+//! assert_eq!(offline.checks[1].outcome, CheckOutcome::NotRun);
+//! ```
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use async_trait::async_trait;
-use types::{Error, ProviderId};
+use types::{CancelToken, Error, ProviderId};
 
 /// The section of the side panel a kind of connection is added in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -414,6 +511,84 @@ impl ConnectionReaction {
     }
 }
 
+/// How long one check of a connection test may take before it gives up
+/// (specs/s3-connection.md 3.5).
+pub const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The values a connection test runs on: what is in the dialogue at that
+/// moment, before anything is saved.
+#[derive(Clone, Copy)]
+pub struct ConnectionTestForm<'a> {
+    /// The connection being edited, when the dialogue is *Edit…*: a secret
+    /// field left empty then stands for the one in the keychain under
+    /// [`secret_key`]. `None` in *Add connection…*.
+    pub name: Option<&'a str>,
+    /// Every field by [`ConnectionField::key`] as typed, trimmed, the
+    /// secrets included; a field left empty is absent. A typed secret is
+    /// for the test alone: it goes into no file and no log.
+    pub values: &'a BTreeMap<String, String>,
+}
+
+impl ConnectionTestForm<'_> {
+    /// The value of the field `key`; empty when it has none.
+    #[must_use]
+    pub fn get(&self, key: &str) -> &str {
+        self.values.get(key).map_or("", String::as_str)
+    }
+}
+
+impl std::fmt::Debug for ConnectionTestForm<'_> {
+    /// The keys only: a value may be a secret.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectionTestForm")
+            .field("name", &self.name)
+            .field("fields", &self.values.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
+/// How one check of a connection test ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckOutcome {
+    /// The check passed.
+    Passed,
+    /// The check failed; [`ConnectionCheck::detail`] says why, in the
+    /// service's own words where it gave any.
+    Failed,
+    /// The check did not pass, and for this connection that is not a
+    /// failure: it is shown as information, with its detail.
+    Info,
+    /// The check was not run: one it depends on failed, or the test was
+    /// cancelled first.
+    NotRun,
+}
+
+/// One check of a connection test, as the dialogue lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionCheck {
+    /// What was checked, in the user's language (`t!`): "The host is
+    /// reachable".
+    pub label: String,
+    /// How it ended.
+    pub outcome: CheckOutcome,
+    /// The reason of a failure or the information, in the user's language
+    /// with the service's code; empty for a check that passed or was not
+    /// run.
+    pub detail: String,
+}
+
+/// The result of a connection test: the checks in the order they ran, and
+/// whether the connection can be saved without asking.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ConnectionTest {
+    /// The checks, in the order they ran.
+    pub checks: Vec<ConnectionCheck>,
+    /// Whether the test is good: *Add* and *Save* then save at once. The
+    /// connector decides; a check shown as information does not stand in
+    /// the way.
+    pub good: bool,
+}
+
 /// The keychain key of the secret field `field` of connection
 /// `connection` of `provider`: `s3/work/secret_key`.
 #[must_use]
@@ -468,5 +643,28 @@ pub trait Connector: Send + Sync + 'static {
     fn react(&self, form: &ConnectionForm<'_>) -> ConnectionReaction {
         let _ = form;
         ConnectionReaction::default()
+    }
+
+    /// What the connector's test checks, in order, in the user's language
+    /// (`t!`): the dialogue lists them while the test runs. Empty, the
+    /// default, means the connector has no test: its dialogue shows no
+    /// *Test* button and saves without one.
+    fn checks(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Tests the connection the form describes, before anything is saved:
+    /// asked by the dialogue's *Test* button and before *Add* and *Save*,
+    /// for a connector whose [`checks`](Self::checks) are not empty.
+    ///
+    /// A test only reads: no request of it creates, changes or deletes
+    /// anything on the service. Each check gives up after
+    /// [`CHECK_TIMEOUT`], a check that depends on a failed one is
+    /// [`CheckOutcome::NotRun`], and the test ends early once `cancel` is
+    /// cancelled. A typed secret stays in memory: it is written to no
+    /// file, no keychain and no log.
+    async fn test(&self, form: &ConnectionTestForm<'_>, cancel: &CancelToken) -> ConnectionTest {
+        let _ = (form, cancel);
+        ConnectionTest::default()
     }
 }

@@ -126,6 +126,29 @@ impl Places {
     }
 }
 
+/// Where a connection test stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionTestState {
+    /// The connector is running its checks.
+    Running,
+    /// The checks ran: their result.
+    Done(ext::ConnectionTest),
+    /// The run was cancelled before it had a result.
+    Cancelled,
+}
+
+/// The connection test a connection dialogue asked for
+/// (specs/s3-connection.md Part 3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionTestRun {
+    /// The dialogue's number for the run.
+    pub request: u64,
+    /// The job that runs it, to cancel; `None` once it ended.
+    pub job: Option<types::JobId>,
+    /// Where it stands.
+    pub state: ConnectionTestState,
+}
+
 /// The trash as the side panel knows it: enough for the Trash row's hint.
 #[derive(Debug, Clone, Default)]
 pub struct TrashView {

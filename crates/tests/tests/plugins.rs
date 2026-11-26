@@ -151,6 +151,11 @@ fn fixture_plugins_are_refused_or_caught_and_the_host_keeps_running() {
         t.id = "probe-api-23".into();
         t.api_version = 23;
     });
+    // Built before a connection could be tested (issue 310): API 24.
+    install(&plugins, "plugin_probe", |t| {
+        t.id = "probe-api-24".into();
+        t.api_version = 24;
+    });
     install(&plugins, "plugin_probe", |t| {
         t.id = "probe-toolchain".into();
         t.toolchain = "rustc 0.0.0 (nowhere 2000-01-01)".into();
@@ -173,7 +178,8 @@ fn fixture_plugins_are_refused_or_caught_and_the_host_keeps_running() {
 
     let host = Host::load(&options(vec![(Source::BesideBinary, plugins)]));
     refused_with(&host, "probe-api", "API version");
-    assert_eq!(API_VERSION, 24, "the contract of the reacting form");
+    assert_eq!(API_VERSION, 25, "the contract of the connection test");
+    refused_with(&host, "probe-api-24", "API version");
     refused_with(&host, "probe-api-22", "API version");
     refused_with(&host, "probe-api-23", "API version");
     refused_with(&host, "probe-toolchain", "built with");
@@ -181,7 +187,7 @@ fn fixture_plugins_are_refused_or_caught_and_the_host_keeps_running() {
     refused_with(&host, "panic", "panicked during registration");
     refused_with(&host, "empty", "no plugin.toml");
     assert_eq!(status_of(&host, "probe"), &PluginStatus::Loaded);
-    assert_eq!(host.plugins().len(), 8, "{:?}", host.plugins());
+    assert_eq!(host.plugins().len(), 9, "{:?}", host.plugins());
 
     // The host keeps running: the one good plugin is an extension that
     // registers into an application registry.

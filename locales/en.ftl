@@ -803,3 +803,18 @@ integration-check-at-startup-desc = Shows the setup dialog when something is mis
 integration-skipped-items = Skipped items
 integration-skipped-items-desc = Ask again about items switched off in the setup dialog
 integration-reset-choices = Reset choices
+
+# The connection test of the Add connection and Edit dialogues
+# (specs/s3-connection.md Part 3).
+connection-test = Test
+connection-test-running = Testing the connection…
+connection-test-cancel = Cancel test
+connection-check-passed = Passed
+connection-check-failed = Failed
+connection-check-info = Note
+connection-check-not-run = Not run
+connection-test-good = The connection works.
+connection-test-not-good = The test did not pass, so the connection is not saved yet. Go back to the fields, or save it as it is.
+connection-back-to-fields = Back to the fields
+connection-save-anyway = Save anyway
+job-test-connection = Test connection { $name }
