@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use ext::Text;
 use ext::platform::Platform;
 use ext::{
-    Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, Connector, async_trait,
-    secret_key,
+    Connection, ConnectionField, ConnectionFieldKind, ConnectionForm, ConnectionReaction,
+    ConnectionSchema, Connector, async_trait, secret_key,
 };
 use types::{Error, ProviderId};
 
@@ -101,9 +101,67 @@ pub fn bucket_names(text: &str) -> Vec<String> {
     names
 }
 
+/// An endpoint as typed or pasted, taken apart: the endpoint without a
+/// path, and the bucket its path named. The address Cloudflare's dashboard
+/// shows for a bucket, `https://<account>.r2.cloudflarestorage.com/<bucket>`,
+/// is an endpoint and a bucket; the client would drop the path on every
+/// request, so the name goes to *Buckets* instead (specs/s3-connection.md
+/// 1.1). The first segment of the path is the bucket; a query is dropped
+/// with the path.
+#[must_use]
+pub fn split_endpoint(text: &str) -> (String, Option<String>) {
+    let text = text.trim();
+    let host_at = text.find("://").map_or(0, |at| at + 3);
+    let Some(slash) = text[host_at..].find(['/', '?', '#']) else {
+        return (text.to_owned(), None);
+    };
+    let (endpoint, path) = text.split_at(host_at + slash);
+    let path = path.split(['?', '#']).next().unwrap_or_default();
+    let bucket = path
+        .split('/')
+        .map(str::trim)
+        .find(|segment| !segment.is_empty())
+        .map(str::to_owned);
+    (endpoint.to_owned(), bucket)
+}
+
+/// The endpoint and the bucket names of a connection's fields: the
+/// endpoint without its path, and the names of *Buckets* with the bucket
+/// the path named, when it is not among them already.
+fn endpoint_and_buckets(endpoint: &str, buckets: &str) -> (String, Vec<String>) {
+    let (endpoint, pasted) = split_endpoint(endpoint);
+    let mut names = bucket_names(buckets);
+    if let Some(bucket) = pasted
+        && !names.contains(&bucket)
+    {
+        names.push(bucket);
+    }
+    (endpoint, names)
+}
+
+/// What the dialogue does after an edit (specs/s3-connection.md 1.1): an
+/// endpoint that carries a path, once it is whole, is left clean and the
+/// bucket its path named joins *Buckets*. Nothing is dropped silently.
+#[must_use]
+pub fn react(form: &ConnectionForm<'_>) -> ConnectionReaction {
+    let mut reaction = ConnectionReaction::default();
+    let typed = form.get(field::ENDPOINT);
+    if form.settled {
+        let (endpoint, buckets) = endpoint_and_buckets(typed, form.get(field::BUCKETS));
+        if endpoint != typed {
+            reaction.rewrite.push((field::ENDPOINT, endpoint));
+            reaction.rewrite.push((field::BUCKETS, buckets.join(", ")));
+        }
+    }
+    reaction
+}
+
 /// One connection as the user made it, and its client once built.
 struct Conn {
     settings: Connection,
+    /// Its endpoint without a path: a connection saved with a bucket's
+    /// address as its endpoint is read as the endpoint and that bucket.
+    endpoint: String,
     /// The names of its *Buckets* field; empty when the root lists the
     /// account's buckets.
     buckets: Vec<String>,
@@ -205,7 +263,7 @@ impl S3Connections {
                 ))
             })?;
         let client = Arc::new(S3Client::new(
-            settings.get(field::ENDPOINT).unwrap_or_default(),
+            &conn.endpoint,
             settings.get(field::REGION).unwrap_or_default(),
             access_key,
             &secret,
@@ -237,8 +295,13 @@ impl Connector for S3Connections {
                 .filter(|c| c.settings == connection)
                 .cloned();
             let conn = kept.unwrap_or_else(|| {
+                let (endpoint, buckets) = endpoint_and_buckets(
+                    connection.get(field::ENDPOINT).unwrap_or_default(),
+                    connection.get(field::BUCKETS).unwrap_or_default(),
+                );
                 Arc::new(Conn {
-                    buckets: bucket_names(connection.get(field::BUCKETS).unwrap_or_default()),
+                    endpoint,
+                    buckets,
                     settings: connection.clone(),
                     client: tokio::sync::Mutex::new(None),
                 })
@@ -269,5 +332,9 @@ impl Connector for S3Connections {
     fn is_connected(&self, name: &str) -> bool {
         self.conn(name)
             .is_ok_and(|conn| conn.client.try_lock().is_ok_and(|slot| slot.is_some()))
+    }
+
+    fn react(&self, form: &ConnectionForm<'_>) -> ConnectionReaction {
+        react(form)
     }
 }

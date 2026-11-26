@@ -937,3 +937,131 @@ fn a_missing_key_is_still_not_found() {
         assert!(matches!(object.err(), Some(types::Error::NotFound)));
     });
 }
+
+#[test]
+fn an_endpoint_is_split_into_the_endpoint_and_the_bucket_of_its_path() {
+    let split = |text: &str| {
+        let (endpoint, bucket) = split_endpoint(text);
+        (endpoint, bucket.unwrap_or_default())
+    };
+    assert_eq!(
+        split("https://abc123.r2.cloudflarestorage.com/packages"),
+        (
+            "https://abc123.r2.cloudflarestorage.com".into(),
+            "packages".into()
+        )
+    );
+    assert_eq!(
+        split(" https://abc123.r2.cloudflarestorage.com/packages/sub/key?x=1 "),
+        (
+            "https://abc123.r2.cloudflarestorage.com".into(),
+            "packages".into()
+        )
+    );
+    assert_eq!(
+        split("127.0.0.1:9000/media/"),
+        ("127.0.0.1:9000".into(), "media".into())
+    );
+    // A trailing slash names no bucket and is cleaned all the same.
+    assert_eq!(
+        split("http://127.0.0.1:9000/"),
+        ("http://127.0.0.1:9000".into(), String::new())
+    );
+    assert_eq!(
+        split("http://127.0.0.1:9000"),
+        ("http://127.0.0.1:9000".into(), String::new())
+    );
+    assert_eq!(split(""), (String::new(), String::new()));
+}
+
+/// The form of the S3 dialogue with these values, the endpoint just
+/// edited.
+fn reaction_to(values: &[(&str, &str)], edited: &[&str], settled: bool) -> ext::ConnectionReaction {
+    let values: std::collections::BTreeMap<String, String> = values
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+    let edited: std::collections::BTreeSet<String> =
+        edited.iter().map(|k| (*k).to_owned()).collect();
+    react(&ext::ConnectionForm {
+        values: &values,
+        edited: &edited,
+        changed: Some("endpoint"),
+        settled,
+    })
+}
+
+/// specs/s3-connection.md 1.4, sixth line, the dialogue's half: pasting an
+/// endpoint that ends in `/packages` leaves the endpoint clean and puts
+/// `packages` into *Buckets*, after the names already there.
+#[test]
+fn a_bucket_path_pasted_onto_the_endpoint_moves_to_the_buckets_field() {
+    let pasted = "https://abc123.r2.cloudflarestorage.com/packages";
+    let reaction = reaction_to(&[("endpoint", pasted)], &["endpoint"], true);
+    assert_eq!(
+        reaction.rewrite,
+        [
+            (
+                "endpoint",
+                "https://abc123.r2.cloudflarestorage.com".to_owned()
+            ),
+            ("buckets", "packages".to_owned())
+        ]
+    );
+    let reaction = reaction_to(
+        &[("endpoint", pasted), ("buckets", "media,packages , logs")],
+        &["endpoint", "buckets"],
+        true,
+    );
+    assert_eq!(
+        reaction.rewrite[1],
+        ("buckets", "media, packages, logs".to_owned())
+    );
+    let reaction = reaction_to(
+        &[("endpoint", pasted), ("buckets", "media")],
+        &["endpoint"],
+        true,
+    );
+    assert_eq!(
+        reaction.rewrite[1],
+        ("buckets", "media, packages".to_owned())
+    );
+    // While it is being typed the address stays under the cursor.
+    assert_eq!(
+        reaction_to(&[("endpoint", pasted)], &["endpoint"], false).rewrite,
+        []
+    );
+    // An endpoint without a path is left as typed.
+    let plain = "https://abc123.r2.cloudflarestorage.com";
+    assert_eq!(
+        reaction_to(&[("endpoint", plain)], &["endpoint"], true).rewrite,
+        []
+    );
+}
+
+/// specs/s3-connection.md 1.4, sixth line, the provider's half, and the
+/// connection saved before 0.6.1 with a path on its endpoint: the bucket
+/// of the path shows at the root, and the requests go to the endpoint
+/// without it. The test fails before the fix: the path was dropped and the
+/// root called `ListBuckets`.
+#[test]
+fn a_connection_saved_with_a_bucket_path_on_its_endpoint_opens_showing_that_bucket() {
+    let service = FakeService::start(|_, target| {
+        if target == "/" {
+            (403, error_body("AccessDenied", "Access Denied"))
+        } else {
+            (200, listing_body("readme.txt"))
+        }
+    });
+    let (conns, provider) = connected(&format!("{}/packages", service.endpoint), "");
+    assert_eq!(conns.buckets("test").unwrap_or_default(), ["packages"]);
+    runtime::block_on(async {
+        let root = names_at(&provider, "/test", ext::Depth::One).await;
+        assert_eq!(root.unwrap_or_else(|e| panic!("{e}")), ["packages"]);
+        assert!(service.seen().is_empty(), "{:?}", service.seen());
+        let inside = names_at(&provider, "/test/packages", ext::Depth::One).await;
+        assert_eq!(inside.unwrap_or_else(|e| panic!("{e}")), ["readme.txt"]);
+        let seen = service.seen();
+        assert!(seen[0].starts_with("GET /packages/?"), "{seen:?}");
+    });
+}

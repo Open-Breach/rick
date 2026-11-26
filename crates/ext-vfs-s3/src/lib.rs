@@ -24,7 +24,12 @@
 //! work inside a bucket but may not list the account's buckets (a
 //! bucket-scoped R2 token, an AWS key limited to one bucket). With the
 //! field empty the account lists its buckets with `ListBuckets`
-//! (specs/s3-connection.md 1.1).
+//! (specs/s3-connection.md 1.1). An endpoint that carries a path, such as
+//! the address Cloudflare's dashboard shows for a bucket, is read as the
+//! endpoint and that bucket: the dialogue leaves the endpoint clean and
+//! puts the name into *Buckets* as soon as the address is pasted
+//! ([`react`]), and a connection saved with such an endpoint is read the
+//! same way.
 //!
 //! Connections are the application's: it keeps endpoint, region, access
 //! key, bucket names and addressing style in `rick.toml` and the secret key in the
@@ -55,7 +60,7 @@ use ext::{
 use types::{Error, ExtId, Location, ProviderId};
 
 pub use client::{S3Client, S3Error, sign};
-pub use connection::{S3Connections, bucket_names, schema};
+pub use connection::{S3Connections, bucket_names, react, schema, split_endpoint};
 pub use provider::S3Provider;
 
 /// The extension id.
