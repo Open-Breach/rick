@@ -72,6 +72,12 @@ the pull request that brought the change.
   drawn with the table of the details view: the columns fit their
   content, a drag on a divider resizes, a double-click fits again. A
   connection's name is no longer cut to an ellipsis (#327).
+- The drive table of This Machine, and of the mounted shares in the
+  Network overview, is that table too: the same header, columns that
+  fit, resize by dragging and fit again on a double-click (#330).
+- A Cloud or Network overview without a connection is a centred screen
+  with a button for each kind of connection, which opens its *Add
+  connection…* dialogue right there (#330).
 
 ### Fixed
 
