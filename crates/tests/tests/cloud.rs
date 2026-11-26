@@ -653,3 +653,147 @@ fn a_100_mb_upload_streams_with_progress_and_cancelled_half_way_leaves_no_object
     runtime::block_on(provider.remove(&at(&format!("/test/{bucket}")), ext::RemoveMode::Permanent))
         .unwrap_or_else(|e| panic!("remove bucket: {e}"));
 }
+
+/// A point inside the control of the connection dialogue's row whose
+/// label starts with `label`: the controls share a column right of the
+/// longest label.
+fn dialogue_field(harness: &Harness<'_, RickUi>, label: &str) -> egui::Pos2 {
+    let right = [
+        "Endpoint",
+        "Region",
+        "Access key",
+        "Secret key",
+        "Buckets",
+        "Path-style",
+    ]
+    .iter()
+    .filter_map(|text| harness.query_all_by_label_contains(text).next())
+    .map(|node| node.rect().right())
+    .fold(0.0, f32::max);
+    let row = harness
+        .query_all_by_label_contains(label)
+        .next()
+        .unwrap_or_else(|| panic!("the row {label}"))
+        .rect();
+    egui::pos2(right + 60.0, row.center().y)
+}
+
+/// Issue 309, `specs/s3-connection.md` 1.4, through the real dialogue:
+/// pasting the address of an R2 bucket leaves the endpoint clean, puts the
+/// bucket into *Buckets*, sets the region to `auto`, shows *Cloudflare R2*
+/// by the endpoint, and a region typed by hand is left alone afterwards.
+#[test]
+fn pasting_an_r2_bucket_address_fills_the_s3_dialogue() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![Arc::new(ext_vfs_s3::S3Extension::new())],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1400.0, 800.0))
+        .with_step_dt(0.05)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let shows = |harness: &Harness<'_, RickUi>, value: &str| {
+        harness.query_all_by_value(value).next().is_some()
+    };
+    let add = panel_rects(&harness, "Add connection");
+    click_at(&mut harness, add[0].center(), egui::PointerButton::Primary);
+    harness.step();
+    // An empty endpoint is AWS, and says so.
+    assert!(harness.query_by_label("Amazon S3").is_some());
+    assert!(shows(&harness, "us-east-1"));
+
+    let endpoint = dialogue_field(&harness, "Endpoint");
+    let region = dialogue_field(&harness, "Region");
+    click_at(&mut harness, endpoint, egui::PointerButton::Primary);
+    harness.event(egui::Event::Paste(
+        "https://abc123.r2.cloudflarestorage.com/packages".to_owned(),
+    ));
+    harness.step();
+    harness.step();
+    assert!(harness.query_by_label("Cloudflare R2").is_some());
+    assert!(harness.query_by_label("Amazon S3").is_none());
+    assert!(
+        shows(&harness, "https://abc123.r2.cloudflarestorage.com"),
+        "the endpoint is left clean"
+    );
+    assert!(shows(&harness, "packages"));
+    assert!(shows(&harness, "auto"));
+    assert!(!shows(&harness, "us-east-1"));
+
+    // A region typed by hand stays when the endpoint changes again.
+    click_at(&mut harness, region, egui::PointerButton::Primary);
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    harness.step();
+    harness.event(egui::Event::Text("weur".to_owned()));
+    harness.step();
+    click_at(&mut harness, endpoint, egui::PointerButton::Primary);
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    harness.step();
+    harness.event(egui::Event::Paste(
+        "https://s3.eu-central-1.wasabisys.com".to_owned(),
+    ));
+    harness.step();
+    harness.step();
+    assert!(harness.query_by_label("Wasabi").is_some());
+    assert!(shows(&harness, "weur"));
+    assert!(!shows(&harness, "eu-central-1"));
+}
+
+/// Issue 309, `specs/s3-connection.md` 1.4, last line: a connection that
+/// 0.6.0 wrote into `rick.toml`, without the fields 0.6.1 adds, loads as
+/// it is and is written back unchanged.
+#[test]
+fn a_connection_saved_before_the_buckets_field_loads_unchanged() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let saved = "[[connections]]\nprovider = \"s3\"\nname = \"old\"\naccess_key = \"minio\"\n\
+                 endpoint = \"http://127.0.0.1:1\"\npath_style = \"true\"\nregion = \"us-east-1\"\n";
+    fs::create_dir_all(fake.config_dir()).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(fake.config_dir().join(app::SETTINGS_FILE), saved).unwrap_or_else(|e| panic!("{e}"));
+    let s3 = Arc::new(ext_vfs_s3::S3Extension::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: Arc::new(EguiHost::new()),
+        extensions: vec![s3],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let entry = app
+        .model()
+        .settings
+        .connections
+        .iter()
+        .find(|c| c.name == "old")
+        .unwrap_or_else(|| panic!("the connection loaded"));
+    assert_eq!(
+        entry
+            .settings
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["access_key", "endpoint", "path_style", "region"]
+    );
+    let connector = app
+        .registry()
+        .connector_of(ProviderId("s3"))
+        .unwrap_or_else(|| panic!("the S3 connector"));
+    // Its root would list the buckets, as before: it names none.
+    let dialog = ui_egui::side_panel::ConnectionDialog::edit(&**connector, entry);
+    let value = |key: &str| {
+        dialog
+            .values
+            .iter()
+            .find(|(field, _)| field.key == key)
+            .map_or("", |(_, value)| value.as_str())
+    };
+    assert_eq!(value("buckets"), "");
+    assert_eq!(value("region"), "us-east-1");
+    assert_eq!(value("endpoint"), "http://127.0.0.1:1");
+}
