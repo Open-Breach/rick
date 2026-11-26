@@ -160,6 +160,19 @@ fn the_schema_names_the_fields_and_the_secret() {
     assert_eq!(schema.title.key(), "s3-s3");
     assert_eq!(schema.secret_fields().collect::<Vec<_>>(), ["secret_key"]);
     assert!(schema.field("access_key").is_some_and(|f| f.required));
+    assert!(schema.field("buckets").is_some_and(|f| !f.required));
+    assert_eq!(
+        schema.fields.iter().map(|f| f.key).collect::<Vec<_>>(),
+        [
+            "endpoint",
+            "region",
+            "access_key",
+            "secret_key",
+            "buckets",
+            "path_style"
+        ],
+        "the order of specs/s3-connection.md 1.3"
+    );
     assert!(matches!(
         schema.field("path_style").map(|f| &f.kind),
         Some(ConnectionFieldKind::Bool { default: true })
@@ -602,4 +615,231 @@ fn a_refused_connection_is_a_lost_connection() {
         .unwrap_or_else(|| panic!("the request was answered"));
     let error = super::client::transport(failure);
     assert!(error.is_unreachable(), "{error}");
+}
+
+/// A local stand-in for an S3 service: it answers every request with what
+/// `answer` returns for the method and the path with its query, and keeps
+/// the request lines it saw. No real account is involved.
+pub(crate) struct FakeService {
+    /// `http://127.0.0.1:<port>`.
+    pub endpoint: String,
+    seen: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl FakeService {
+    pub(crate) fn start(
+        answer: impl Fn(&str, &str) -> (u16, String) + Send + Sync + 'static,
+    ) -> Self {
+        use std::io::{BufRead as _, BufReader, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("{e}"));
+        let port = listener
+            .local_addr()
+            .unwrap_or_else(|e| panic!("{e}"))
+            .port();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(clone) => clone,
+                    Err(_) => continue,
+                });
+                let mut request = String::new();
+                if reader.read_line(&mut request).is_err() {
+                    continue;
+                }
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 0) && line != "\r\n" {
+                    line.clear();
+                }
+                let mut parts = request.split_whitespace();
+                let method = parts.next().unwrap_or_default().to_owned();
+                let target = parts.next().unwrap_or_default().to_owned();
+                log.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(format!("{method} {target}"));
+                let (status, body) = answer(&method, &target);
+                let body = if method == "HEAD" {
+                    String::new()
+                } else {
+                    body
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\ncontent-type: application/xml\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        Self {
+            endpoint: format!("http://127.0.0.1:{port}"),
+            seen,
+        }
+    }
+
+    /// The request lines so far, `GET /bucket?list-type=2…`.
+    pub(crate) fn seen(&self) -> Vec<String> {
+        self.seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// An S3 error body, as the services send it.
+pub(crate) fn error_body(code: &str, message: &str) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>{code}</Code><Message>{message}</Message></Error>"
+    )
+}
+
+/// A listing with the one object `key`.
+pub(crate) fn listing_body(key: &str) -> String {
+    format!(
+        "<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>{key}</Key><Size>3</Size><LastModified>2026-11-19T10:00:00.000Z</LastModified></Contents></ListBucketResult>"
+    )
+}
+
+/// A provider with the one connection `test` to `endpoint`, with the
+/// field `buckets` as typed.
+pub(crate) fn connected(endpoint: &str, buckets: &str) -> (Arc<S3Connections>, S3Provider) {
+    use platform::Secrets as _;
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let conns = Arc::new(S3Connections::new(fake.clone()));
+    let provider = S3Provider::new(Arc::clone(&conns));
+    let mut conn = ext::Connection {
+        name: "test".into(),
+        ..ext::Connection::default()
+    };
+    conn.settings.insert("endpoint".into(), endpoint.to_owned());
+    conn.settings.insert("access_key".into(), "key".into());
+    if !buckets.is_empty() {
+        conn.settings.insert("buckets".into(), buckets.to_owned());
+    }
+    fake.store_secret(
+        &ext::secret_key(PROVIDER_ID, "test", "secret_key"),
+        "secret",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    conns.update(vec![conn]);
+    (conns, provider)
+}
+
+/// The names a listing of `path` gives, or its error.
+pub(crate) async fn names_at(
+    provider: &S3Provider,
+    path: &str,
+    depth: ext::Depth,
+) -> Result<Vec<String>, types::Error> {
+    use futures::StreamExt as _;
+    let mut stream = provider.list(
+        &Location::new(PROVIDER_ID, path),
+        ext::ListOptions {
+            depth,
+            ..ext::ListOptions::default()
+        },
+        types::CancelToken::new(),
+    );
+    let mut names = Vec::new();
+    while let Some(batch) = stream.next().await {
+        names.extend(batch?.into_iter().map(|e| e.name));
+    }
+    Ok(names)
+}
+
+#[test]
+fn bucket_names_are_split_trimmed_deduplicated_and_kept_in_order() {
+    assert_eq!(
+        bucket_names(" packages , ,media,packages,, logs "),
+        ["packages", "media", "logs"]
+    );
+    assert_eq!(bucket_names(""), Vec::<String>::new());
+    assert_eq!(bucket_names(" , ,"), Vec::<String>::new());
+}
+
+/// specs/s3-connection.md 1.4, first line: a key that may not list buckets
+/// (every `ListBuckets` is refused here, as R2 refuses a bucket-scoped
+/// token) with the bucket named in *Buckets*: the root shows the bucket
+/// without a request, and opening it lists its objects.
+#[test]
+fn a_named_bucket_shows_at_the_root_without_a_request_and_opens() {
+    let service = FakeService::start(|_, target| {
+        if target == "/" {
+            (403, error_body("AccessDenied", "Access Denied"))
+        } else {
+            (200, listing_body("readme.txt"))
+        }
+    });
+    let (conns, provider) = connected(&service.endpoint, "packages, media");
+    runtime::block_on(async {
+        let root = names_at(&provider, "/test", ext::Depth::One).await;
+        assert_eq!(
+            root.unwrap_or_else(|e| panic!("{e}")),
+            ["packages", "media"]
+        );
+        // *Connect* sends nothing either.
+        conns
+            .connect("test")
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(conns.is_connected("test"));
+        assert!(service.seen().is_empty(), "{:?}", service.seen());
+        let inside = names_at(&provider, "/test/packages", ext::Depth::One).await;
+        assert_eq!(inside.unwrap_or_else(|e| panic!("{e}")), ["readme.txt"]);
+        // A bucket that is not in the list opens from the address bar too.
+        let other = names_at(&provider, "/test/elsewhere", ext::Depth::One).await;
+        assert_eq!(other.unwrap_or_else(|e| panic!("{e}")), ["readme.txt"]);
+        assert!(
+            service.seen().iter().all(|line| line != "GET /"),
+            "ListBuckets was called: {:?}",
+            service.seen()
+        );
+    });
+}
+
+/// The listing of unlimited depth beneath an account goes through the
+/// names too, without `ListBuckets`.
+#[test]
+fn everything_beneath_an_account_with_named_buckets_goes_through_the_names() {
+    let service = FakeService::start(|_, target| {
+        if target == "/" {
+            (403, error_body("AccessDenied", "Access Denied"))
+        } else if target.starts_with("/packages") {
+            (200, listing_body("a.txt"))
+        } else {
+            (200, listing_body("b.txt"))
+        }
+    });
+    let (_conns, provider) = connected(&service.endpoint, "packages,media");
+    runtime::block_on(async {
+        let all = names_at(&provider, "/test", ext::Depth::Unlimited).await;
+        assert_eq!(
+            all.unwrap_or_else(|e| panic!("{e}")),
+            ["packages", "media", "a.txt", "b.txt"]
+        );
+        assert!(service.seen().iter().all(|line| line != "GET /"));
+    });
+}
+
+/// specs/s3-connection.md 1.4: a key that may list, with *Buckets* empty,
+/// lists every bucket as before, and *Connect* asks the service.
+#[test]
+fn an_empty_buckets_field_lists_the_account_as_before() {
+    let service = FakeService::start(|_, _| {
+        (
+            200,
+            "<ListAllMyBucketsResult><Buckets><Bucket><Name>one</Name></Bucket><Bucket><Name>two</Name></Bucket></Buckets></ListAllMyBucketsResult>".to_owned(),
+        )
+    });
+    let (conns, provider) = connected(&service.endpoint, "");
+    runtime::block_on(async {
+        conns
+            .connect("test")
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        let root = names_at(&provider, "/test", ext::Depth::One).await;
+        assert_eq!(root.unwrap_or_else(|e| panic!("{e}")), ["one", "two"]);
+        assert_eq!(service.seen(), ["GET /", "GET /"]);
+    });
 }

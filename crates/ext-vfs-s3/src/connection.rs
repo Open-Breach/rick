@@ -13,7 +13,7 @@ use ext::{
 use types::{Error, ProviderId};
 
 use crate::PROVIDER_ID;
-use crate::client::{S3Client, message};
+use crate::client::{Bucket, S3Client, message};
 
 /// The field keys of the *Add connection…* dialogue and `rick.toml`.
 pub mod field {
@@ -25,6 +25,9 @@ pub mod field {
     pub const ACCESS_KEY: &str = "access_key";
     /// The secret access key, in the keychain.
     pub const SECRET_KEY: &str = "secret_key";
+    /// The buckets the connection shows at its root, as typed: names
+    /// separated by commas. Empty, the root lists the account's buckets.
+    pub const BUCKETS: &str = "buckets";
     /// Path-style addressing (`endpoint/bucket/key`) rather than the
     /// bucket as a host name; on by default, what `MinIO` and R2 take.
     pub const PATH_STYLE: &str = "path_style";
@@ -67,6 +70,14 @@ pub fn schema() -> ConnectionSchema {
                 required: true,
             },
             ConnectionField {
+                key: field::BUCKETS,
+                label: Text("s3-buckets"),
+                kind: ConnectionFieldKind::Text {
+                    default: String::new(),
+                },
+                required: false,
+            },
+            ConnectionField {
                 key: field::PATH_STYLE,
                 label: Text("s3-path-style-addressing"),
                 kind: ConnectionFieldKind::Bool { default: true },
@@ -76,9 +87,26 @@ pub fn schema() -> ConnectionSchema {
     }
 }
 
+/// The names in a *Buckets* field: split on commas, trimmed, without the
+/// empty entries and the repeats, in the order typed
+/// (specs/s3-connection.md 1.1).
+#[must_use]
+pub fn bucket_names(text: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for name in text.split(',').map(str::trim) {
+        if !name.is_empty() && !names.iter().any(|known| known == name) {
+            names.push(name.to_owned());
+        }
+    }
+    names
+}
+
 /// One connection as the user made it, and its client once built.
 struct Conn {
     settings: Connection,
+    /// The names of its *Buckets* field; empty when the root lists the
+    /// account's buckets.
+    buckets: Vec<String>,
     client: tokio::sync::Mutex<Option<Arc<S3Client>>>,
 }
 
@@ -118,6 +146,35 @@ impl S3Connections {
     #[must_use]
     pub fn names(&self) -> Vec<String> {
         lock(&self.conns).keys().cloned().collect()
+    }
+
+    /// The buckets the connection `name` names in its *Buckets* field, in
+    /// the order typed; empty when it names none, and the root is then
+    /// filled from `ListBuckets`.
+    ///
+    /// # Errors
+    ///
+    /// `Error::NotFound` for a name the connector does not know.
+    pub fn buckets(&self, name: &str) -> Result<Vec<String>, Error> {
+        Ok(self.conn(name)?.buckets.clone())
+    }
+
+    /// The buckets at the root of the connection `name`: the names of its
+    /// *Buckets* field, as typed and without a request, or, with the
+    /// field empty, what `ListBuckets` answers (specs/s3-connection.md
+    /// 1.1). A key that may not list buckets gets in through the names.
+    pub(crate) async fn account_buckets(&self, name: &str) -> Result<Vec<Bucket>, Error> {
+        let named = self.buckets(name)?;
+        if named.is_empty() {
+            return self.client(name).await?.list_buckets().await;
+        }
+        Ok(named
+            .into_iter()
+            .map(|name| Bucket {
+                name,
+                created: None,
+            })
+            .collect())
     }
 
     fn conn(&self, name: &str) -> Result<Arc<Conn>, Error> {
@@ -181,6 +238,7 @@ impl Connector for S3Connections {
                 .cloned();
             let conn = kept.unwrap_or_else(|| {
                 Arc::new(Conn {
+                    buckets: bucket_names(connection.get(field::BUCKETS).unwrap_or_default()),
                     settings: connection.clone(),
                     client: tokio::sync::Mutex::new(None),
                 })
@@ -190,9 +248,13 @@ impl Connector for S3Connections {
     }
 
     /// Builds the client and lists the buckets, so wrong credentials are
-    /// reported now.
+    /// reported now. A connection that names its buckets sends no request
+    /// (specs/s3-connection.md 1.1): its key may not be allowed to list.
     async fn connect(&self, name: &str) -> Result<(), Error> {
         let client = self.client(name).await?;
+        if !self.conn(name)?.buckets.is_empty() {
+            return Ok(());
+        }
         client.list_buckets().await.map(|_| ())
     }
 
