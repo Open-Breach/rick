@@ -1181,3 +1181,179 @@ fn the_cloud_overview_s_columns_fit_their_content_resize_and_fit_again() {
         "fitted again at {again}, was {fitted}"
     );
 }
+
+/// An overview with no connection is a centred screen with a button per
+/// kind of connection, and the button opens that kind's dialogue there.
+#[test]
+fn an_empty_cloud_overview_offers_to_add_a_connection_right_there() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_vfs_s3::S3Extension::new()),
+            Arc::new(ext_vfs_azure::AzureExtension::new()),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1400.0, 800.0))
+        .with_step_dt(0.05)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        Command::Navigate {
+            pane,
+            to: vfs_rick::Virtual::Cloud.location(),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let pane_rect = harness
+        .state()
+        .pane_rects()
+        .into_iter()
+        .find(|(p, _)| *p == pane)
+        .map_or(egui::Rect::NOTHING, |(_, r)| r);
+    let in_pane = |harness: &Harness<'_, RickUi>, text: &str| {
+        harness
+            .query_all_by_label(text)
+            .map(|node| node.rect())
+            .find(|rect| pane_rect.contains(rect.center()))
+            .unwrap_or_else(|| panic!("{text} in the pane"))
+    };
+    // The message is centred in the pane, and so is the row of buttons.
+    let title = in_pane(&harness, "No cloud connections yet");
+    assert!(
+        (title.center().x - pane_rect.center().x).abs() < 2.0,
+        "{title:?}"
+    );
+    let s3 = in_pane(&harness, "Add S3 connection…");
+    let azure = in_pane(&harness, "Add Azure Blob connection…");
+    let row = s3.union(azure);
+    assert!(
+        (row.center().x - pane_rect.center().x).abs() < 2.0,
+        "{row:?}"
+    );
+    assert!(s3.top() > title.bottom());
+    assert!((title.center().y - pane_rect.center().y).abs() < 80.0);
+
+    // A button opens its kind's dialogue.
+    click_at(&mut harness, azure.center(), egui::PointerButton::Primary);
+    for _ in 0..4 {
+        harness.step();
+    }
+    assert!(shows(&harness, "Add Azure Blob connection"));
+    assert!(
+        harness
+            .state()
+            .side_panel_state()
+            .connection
+            .as_ref()
+            .is_some_and(|dialog| dialog.provider == ProviderId("azure"))
+    );
+}
+
+/// The drive table of This Machine is the overviews' table too: its
+/// titles are there, the Name column is as wide as its longest name, and
+/// a drag on a divider resizes.
+#[test]
+fn the_drive_table_s_columns_fit_their_content_and_resize() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let long = "a-drive-with-a-rather-long-name-for-a-column";
+    for name in ["system", long] {
+        let mount = dir.path().join(name);
+        fs::create_dir_all(&mount).unwrap_or_else(|e| panic!("{e}"));
+        fake.add_volume(platform::Volume {
+            name: name.into(),
+            mount_point: mount,
+            kind: platform::VolumeKind::Fixed,
+            fs_type: "ext4".into(),
+            device: None,
+            total: Some(100 << 20),
+            free: Some(40 << 20),
+            read_only: false,
+        });
+    }
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: Vec::new(),
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1600.0, 800.0))
+        .with_step_dt(0.05)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().volumes.len() == 2
+    }));
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        Command::Navigate {
+            pane,
+            to: vfs_rick::Virtual::Machine.location(),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let name = pane_label_left(&harness, "Name");
+    let fitted = pane_label_left(&harness, "Mount point");
+    for title in [
+        "File system",
+        "Total",
+        "Used",
+        "Free",
+        "Utilisation",
+        "Removable",
+    ] {
+        assert!(pane_label_left(&harness, title) > fitted, "{title}");
+    }
+    let longest = harness
+        .query_all_by_label_contains(long)
+        .map(|node| node.rect())
+        .filter(|rect| rect.left() >= name - 20.0 && rect.left() < fitted)
+        .map(|rect| rect.right())
+        .fold(0.0, f32::max);
+    assert!(longest > 0.0, "the long name's row");
+    assert!(fitted >= longest, "{fitted} cuts the name at {longest}");
+
+    let header_y = harness
+        .query_all_by_label("Mount point")
+        .map(|node| node.rect())
+        .find(|rect| rect.left() >= name)
+        .map_or(0.0, |rect| rect.center().y);
+    let divider = egui::pos2(fitted - 12.0, header_y);
+    harness.event(egui::Event::PointerMoved(divider));
+    harness.step();
+    let button = |harness: &mut Harness<'_, RickUi>, pos, pressed| {
+        harness.event(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.step();
+    };
+    button(&mut harness, divider, true);
+    for step in 1..=4u8 {
+        let at = divider + egui::vec2(-25.0 * f32::from(step), 0.0);
+        harness.event(egui::Event::PointerMoved(at));
+        harness.step();
+    }
+    button(&mut harness, divider + egui::vec2(-100.0, 0.0), false);
+    settle(&mut harness);
+    let narrowed = pane_label_left(&harness, "Mount point");
+    assert!(
+        (narrowed - (fitted - 100.0)).abs() < 4.0,
+        "dragged from {fitted} to {narrowed}"
+    );
+}

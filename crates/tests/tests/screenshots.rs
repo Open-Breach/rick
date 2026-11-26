@@ -7277,3 +7277,91 @@ fn screenshots_of_the_connection_overviews() {
         }
     }
 }
+
+/// The This Machine overview with three drives, and the Cloud and Network
+/// overviews with no connection yet, in light and dark.
+#[test]
+#[ignore = "renders screenshots; run with --ignored on a machine with a GPU adapter"]
+fn screenshots_of_the_drive_table_and_the_empty_overviews() {
+    for theme in [Theme::Light, Theme::Dark] {
+        let look = look(theme, Density::Comfortable);
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let drive = |name: &str, kind, total: u64, free: u64| {
+            let mount = dir.path().join(name);
+            fs::create_dir_all(&mount).unwrap_or_else(|e| panic!("{e}"));
+            platform::Volume {
+                name: name.into(),
+                mount_point: mount,
+                kind,
+                fs_type: "ext4".into(),
+                device: None,
+                total: Some(total),
+                free: Some(free),
+                read_only: false,
+            }
+        };
+        fake.add_volume(drive(
+            "system",
+            platform::VolumeKind::Fixed,
+            512 << 30,
+            200 << 30,
+        ));
+        fake.add_volume(drive(
+            "data-archive-2026",
+            platform::VolumeKind::Fixed,
+            4 << 40,
+            300 << 30,
+        ));
+        fake.add_volume(drive(
+            "usb-stick",
+            platform::VolumeKind::Removable,
+            64 << 30,
+            60 << 30,
+        ));
+        let host = Arc::new(EguiHost::new());
+        let app = app::App::new(app::Config {
+            platform: fake.clone(),
+            ui: host.clone(),
+            extensions: vec![
+                Arc::new(ext_vfs_s3::S3Extension::new()),
+                Arc::new(ext_vfs_azure::AzureExtension::new()),
+                Arc::new(ext_vfs_gcs::GcsExtension::new()),
+                Arc::new(ext_ssh::SshExtension::new()),
+            ],
+            config_dir: Some(fake.config_dir()),
+            start: Some(local(dir.path())),
+        });
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1400.0, 800.0))
+            .with_pixels_per_point(2.0)
+            .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(Density::Comfortable),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        for (name, overview) in [
+            ("machine", vfs_rick::Virtual::Machine),
+            ("empty-cloud", vfs_rick::Virtual::Cloud),
+            ("empty-network", vfs_rick::Virtual::Network),
+        ] {
+            let pane = harness.state().app().model().focused;
+            harness.state_mut().app_mut().handle(
+                app::Command::Navigate {
+                    pane,
+                    to: overview.location(),
+                },
+                &mut Vec::new(),
+            );
+            settle(&mut harness);
+            hold_still(&mut harness, 4);
+            shoot(&mut harness, &format!("overview-{name}-{look}"));
+        }
+    }
+}
