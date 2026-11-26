@@ -843,3 +843,97 @@ fn an_empty_buckets_field_lists_the_account_as_before() {
         assert_eq!(service.seen(), ["GET /", "GET /"]);
     });
 }
+
+/// The plugin's English messages, as `register` hands them to the host.
+pub(crate) fn english() {
+    ext::Registry::new().translations(&[("en", include_str!("../locales/en.ftl"))]);
+}
+
+/// The message of listing `path` on a service that answers every request
+/// with `status` and the error `code`.
+fn refusal(status: u16, code: &'static str, buckets: &str, path: &str) -> String {
+    english();
+    let service = FakeService::start(move |_, _| (status, error_body(code, "as the service said")));
+    let (_conns, provider) = connected(&service.endpoint, buckets);
+    let error = runtime::block_on(names_at(&provider, path, ext::Depth::One))
+        .err()
+        .unwrap_or_else(|| panic!("{code} was not an error"));
+    assert!(
+        !matches!(error, types::Error::PermissionDenied),
+        "{code} was folded into a bare permission denied"
+    );
+    error.to_string()
+}
+
+/// specs/s3-connection.md 1.4, second line: a key that may not list
+/// buckets, with *Buckets* empty, gets the list-buckets message with the
+/// hint and the service's code, not a bare "permission denied". The test
+/// fails before the fix: every 403 was `Error::PermissionDenied`.
+#[test]
+fn a_refused_bucket_listing_names_the_buckets_field() {
+    let text = refusal(403, "AccessDenied", "", "/test");
+    assert!(text.contains("not allowed to list buckets"), "{text}");
+    assert!(text.contains("Buckets field"), "{text}");
+    assert!(text.contains("AccessDenied"), "{text}");
+}
+
+/// specs/s3-connection.md 1.4, third line, and the table of 1.2: each
+/// refusal has its own message with the service's code.
+#[test]
+fn each_refusal_has_its_own_message_with_the_service_s_code() {
+    let denied = refusal(403, "AccessDenied", "packages", "/test/packages");
+    assert!(
+        denied.contains("Access to this bucket or object was denied"),
+        "{denied}"
+    );
+    assert!(denied.contains("AccessDenied"), "{denied}");
+    assert!(!denied.contains("Buckets field"), "{denied}");
+
+    let key = refusal(403, "InvalidAccessKeyId", "", "/test");
+    assert!(key.contains("The access key is not recognised"), "{key}");
+    assert!(key.contains("InvalidAccessKeyId"), "{key}");
+
+    let secret = refusal(403, "SignatureDoesNotMatch", "", "/test");
+    assert!(secret.contains("usually a wrong secret key"), "{secret}");
+    assert!(secret.contains("SignatureDoesNotMatch"), "{secret}");
+
+    let missing = refusal(404, "NoSuchBucket", "pakages", "/test/pakages");
+    assert!(
+        missing.contains("The bucket does not exist; check the name"),
+        "{missing}"
+    );
+    assert!(missing.contains("NoSuchBucket"), "{missing}");
+
+    let other = refusal(503, "SlowDown", "", "/test");
+    assert!(
+        other.contains("SlowDown (503): as the service said"),
+        "{other}"
+    );
+}
+
+/// A missing key stays `NotFound`, which the kernel reads, and so does a
+/// 404 without a body, what a `HEAD` gets.
+#[test]
+fn a_missing_key_is_still_not_found() {
+    let service = FakeService::start(|method, _| {
+        if method == "HEAD" {
+            (404, String::new())
+        } else {
+            (
+                404,
+                error_body("NoSuchKey", "The specified key does not exist."),
+            )
+        }
+    });
+    let (_conns, provider) = connected(&service.endpoint, "");
+    runtime::block_on(async {
+        let bucket = provider
+            .stat(&Location::new(PROVIDER_ID, "/test/gone"))
+            .await;
+        assert!(matches!(bucket, Err(types::Error::NotFound)), "{bucket:?}");
+        let object = provider
+            .open_read(&Location::new(PROVIDER_ID, "/test/b/k"))
+            .await;
+        assert!(matches!(object.err(), Some(types::Error::NotFound)));
+    });
+}
