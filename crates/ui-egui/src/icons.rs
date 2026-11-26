@@ -15,6 +15,14 @@ pub const UP: &str = ph::ARROW_UP;
 pub const REFRESH: &str = ph::ARROW_CLOCKWISE;
 /// Copy.
 pub const COPY: &str = ph::COPY;
+/// A check that passed.
+pub const CHECK_PASSED: &str = ph::CHECK_CIRCLE;
+/// A check that failed.
+pub const CHECK_FAILED: &str = ph::X_CIRCLE;
+/// A check that was not run.
+pub const CHECK_NOT_RUN: &str = ph::MINUS_CIRCLE;
+/// What stopped a dialogue from saving.
+pub const SAVE_REFUSED: &str = ph::WARNING_CIRCLE;
 /// Close.
 pub const CLOSE: &str = ph::X;
 /// New tab.

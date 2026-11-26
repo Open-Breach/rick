@@ -931,6 +931,75 @@ pub(crate) fn text_field(
     text_field_with(ui, text, hint, mono, border, focus, |_| {})
 }
 
+/// A [`text_field`] that shows dots for what is typed: a password, a key
+/// or a token.
+pub(crate) fn secret_field(ui: &mut egui::Ui, text: &mut String, hint: &str) -> egui::Response {
+    field(ui, text, hint, false, None, false, true, |_| {})
+}
+
+/// A row of the field grid `height` tall: `label` in `text/secondary` in
+/// the label column, and `control` laid out in the column right of it,
+/// which it fills.
+pub(crate) fn labelled_row<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    height: f32,
+    control: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let scheme = theme::scheme(ui);
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    let label_rect = Rect::from_min_max(
+        row.min,
+        pos2(row.left() + LABEL_COLUMN - 12.0, row.bottom()),
+    );
+    let mut label_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(label_rect)
+            .layout(egui::Layout::left_to_right(Align::Center)),
+    );
+    label_ui.add(
+        egui::Label::new(
+            egui::RichText::new(label)
+                .size(TEXT_BODY)
+                .color(scheme.text_secondary),
+        )
+        .wrap()
+        .selectable(false),
+    );
+    let mut control_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(Rect::from_min_max(
+                pos2(row.left() + LABEL_COLUMN, row.top()),
+                row.max,
+            ))
+            .layout(egui::Layout::left_to_right(Align::Center)),
+    );
+    control(&mut control_ui)
+}
+
+/// A line of 12 px `text/secondary` under a control of the field grid, in
+/// the control's column: what there is to say about the field above it.
+pub(crate) fn field_note(ui: &mut egui::Ui, text: &str) {
+    let scheme = theme::scheme(ui);
+    // Closer to its field than the next row is.
+    ui.add_space(6.0 - ROW_GAP);
+    // Laid out by hand at the column's width, so the line has its height
+    // in its first frame and nothing below it moves in the second.
+    let width = (ui.available_width() - LABEL_COLUMN).max(0.0);
+    let galley = ui.painter().layout(
+        text.to_owned(),
+        FontId::proportional(TEXT_SECONDARY),
+        scheme.text_secondary,
+        width,
+    );
+    let (row, _) =
+        ui.allocate_exact_size(vec2(ui.available_width(), galley.size().y), Sense::hover());
+    let rect = Rect::from_min_size(pos2(row.left() + LABEL_COLUMN, row.top()), galley.size());
+    ui.painter().galley(rect.min, galley, scheme.text_secondary);
+    ui.interact(rect, ui.id().with(("field-note", text)), Sense::hover())
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text.to_owned()));
+}
+
 /// [`text_field`] with `trailing` laid out inside its right end, from the
 /// right edge inwards — a pill, a hint — and the text kept clear of it.
 pub(crate) fn text_field_with(
@@ -940,6 +1009,24 @@ pub(crate) fn text_field_with(
     mono: bool,
     border: Option<egui::Color32>,
     focus: bool,
+    trailing: impl FnOnce(&mut egui::Ui),
+) -> egui::Response {
+    field(ui, text, hint, mono, border, focus, false, trailing)
+}
+
+/// The text field behind [`text_field_with`] and [`secret_field`];
+/// `masked` shows dots for the text.
+// One widget with its options spelled out; the two public faces above
+// name the combinations in use.
+#[allow(clippy::too_many_arguments)]
+fn field(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    hint: &str,
+    mono: bool,
+    border: Option<egui::Color32>,
+    focus: bool,
+    masked: bool,
     trailing: impl FnOnce(&mut egui::Ui),
 ) -> egui::Response {
     let scheme = theme::scheme(ui);
@@ -983,6 +1070,7 @@ pub(crate) fn text_field_with(
         FontId::proportional(TEXT_BODY)
     };
     let output = egui::TextEdit::singleline(text)
+        .password(masked)
         .frame(egui::Frame::NONE)
         .margin(egui::Margin::ZERO)
         .font(font.clone())

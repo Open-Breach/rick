@@ -44,7 +44,7 @@ use crate::overview::{percent, read_only_bar, utilisation_bar, volume_icon};
 use crate::shell::Request;
 use crate::suggestion::Answer;
 use crate::theme::{self, BAR, ICON, Scheme, TEXT_BODY, TEXT_CAPS, TEXT_SECONDARY};
-use crate::{format, icons, menus};
+use crate::{dialog, format, icons, menus, widgets};
 
 /// How far a row sits in from the panel's edges (SPEC.md *Rows*).
 const INSET: f32 = 6.0;
@@ -257,6 +257,10 @@ pub struct ConnectionDialog {
     /// Where the connection test stands.
     pub test: TestPhase,
     focus: bool,
+    /// The frames the dialogue has been drawn again in, while it finds its
+    /// size, and the height it had in the last one.
+    frames: u8,
+    height: f32,
 }
 
 /// Where the connection test of a dialogue stands
@@ -319,6 +323,8 @@ impl ConnectionDialog {
             checks: connector.checks(),
             test: TestPhase::Idle,
             focus: true,
+            frames: 0,
+            height: 0.0,
         }
     }
 
@@ -767,12 +773,26 @@ fn connection_names(app: &App, provider: ProviderId) -> Vec<String> {
         .collect()
 }
 
-/// The *Add connection…* dialogue: the name, the connector's fields, and
-/// for a connector with a test the *Test* button and the list of its
-/// checks. OK runs the test first and saves when it is good; a test that
-/// is not good holds the save, with a warning and *Save anyway*
-/// (specs/s3-connection.md Part 3). A connector without a test is saved
-/// as before.
+/// What the user asked of the connection dialogue in one frame.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Asked {
+    Primary,
+    Test,
+    SaveAnyway,
+    BackToFields,
+    CancelTest,
+    Close,
+}
+
+/// The *Add connection…* and *Edit…* dialogue (SPEC.md *Connection
+/// dialogue*): the header with the section's glyph, the title and the
+/// secondary line; the body with the name and the connector's fields in
+/// the two-column grid, the reason of a refused save, and for a connector
+/// with a test the card of its checks; the footer with *Test*, *Cancel*
+/// and *Add* or *Save*. The primary runs the test first and saves when it
+/// is good; a test that is not good holds the save, with *Back to the
+/// fields* and *Save anyway* (specs/s3-connection.md Part 3). A connector
+/// without a test is saved as before.
 // One dialogue, drawn and then answered in one place.
 #[allow(clippy::too_many_lines)]
 fn connection_dialog(
@@ -781,16 +801,6 @@ fn connection_dialog(
     state: &mut SidePanelState,
     requests: &mut Vec<Request>,
 ) {
-    /// What the user asked of the dialogue this frame.
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum Asked {
-        Ok,
-        Test,
-        SaveAnyway,
-        BackToFields,
-        CancelTest,
-        Close,
-    }
     let Some(dialog) = state.connection.as_mut() else {
         return;
     };
@@ -798,94 +808,75 @@ fn connection_dialog(
     let connector = app.registry().connector_of(dialog.provider).cloned();
     let run = app.model().connection_test.as_ref();
     let running_job = run
-        .filter(|run| matches!(dialog.test, TestPhase::Running { request, .. } if request == run.request))
+        .filter(
+            |run| matches!(dialog.test, TestPhase::Running { request, .. } if request == run.request),
+        )
         .and_then(|run| run.job);
     let before: Vec<String> = dialog.values.iter().map(|(_, v)| v.clone()).collect();
     let mut touched: Option<(&'static str, bool)> = None;
-    let mut open = true;
     let mut asked: Option<Asked> = None;
-    let title = if dialog.editing {
-        format!("Edit {} connection", dialog.title)
+    let cloud = app.model().cloud_providers.contains(&dialog.provider);
+    // The section as the side panel titles it.
+    let (glyph, section) = if cloud {
+        (icons::CLOUD, Virtual::Cloud.title())
     } else {
-        format!("Add {} connection", dialog.title)
+        (icons::NETWORK, Virtual::Network.title())
     };
-    egui::Window::new(title)
-        .id(egui::Id::new("add-connection"))
-        .collapsible(false)
-        .resizable(false)
-        .open(&mut open)
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .show(ctx, |ui| {
-            egui::Grid::new("add-connection-fields")
-                .num_columns(2)
-                .spacing(egui::vec2(12.0, 6.0))
-                .show(ui, |ui| {
-                    ui.label(t!("compare-name"));
-                    let name = ui.add_enabled(
-                        !dialog.editing,
-                        egui::TextEdit::singleline(&mut dialog.name).desired_width(260.0),
+    let (title, subtitle) = if dialog.editing {
+        (
+            t!("connection-edit-title", provider = dialog.title.as_str()),
+            dialog.name.clone(),
+        )
+    } else {
+        (
+            t!("connection-add-title", provider = dialog.title.as_str()),
+            section.to_owned(),
+        )
+    };
+    let modal = dialog::modal(
+        ctx,
+        egui::Id::new("add-connection"),
+        dialog::FORM_WIDTH,
+        |ui| {
+            if dialog::band(ui, Some(glyph), &title, &subtitle) {
+                asked = Some(Asked::Close);
+            }
+            dialog::body(ui, |ui| {
+                connection_fields(ui, dialog, &mut touched);
+                if let Some(error) = &dialog.error {
+                    status_line(
+                        ui,
+                        icons::SAVE_REFUSED,
+                        error,
+                        theme::scheme(ui).status_danger,
                     );
-                    if dialog.focus {
-                        name.request_focus();
-                        dialog.focus = false;
-                    }
-                    ui.end_row();
-                    let editing = dialog.editing;
-                    for (field, value) in &mut dialog.values {
-                        let note = dialog
-                            .notes
-                            .iter()
-                            .find(|(key, _)| *key == field.key)
-                            .map(|(_, note)| note.as_str());
-                        if let Some(settled) = connection_field(ui, field, value, editing, note) {
-                            touched = Some((field.key, settled));
-                        }
-                        ui.end_row();
-                    }
-                });
-            if let Some(error) = &dialog.error {
-                ui.add_space(4.0);
-                ui.colored_label(ui.visuals().error_fg_color, error);
-            }
-            if let Some(clicked) = test_results(ui, dialog) {
-                asked = Some(match clicked {
-                    TestAnswer::SaveAnyway => Asked::SaveAnyway,
-                    TestAnswer::BackToFields => Asked::BackToFields,
-                    TestAnswer::CancelTest => Asked::CancelTest,
-                });
-            }
-            ui.add_space(6.0);
-            let busy = matches!(dialog.test, TestPhase::Running { .. });
-            let held = matches!(dialog.test, TestPhase::Done { held: true, .. });
-            ui.horizontal(|ui| {
-                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                // *Add* and, in *Edit…*, *Save*, as specs/s3-connection.md 3.4
-                // names them.
-                let primary = if dialog.editing {
-                    t!("connection-save")
-                } else {
-                    t!("connection-add")
-                };
-                let ok = ui.add_enabled(!busy && !held, egui::Button::new(primary));
-                if ok.clicked() || (enter && !busy && !held) {
-                    asked = Some(Asked::Ok);
                 }
-                if dialog.has_test()
-                    && ui
-                        .add_enabled(!busy && !held, egui::Button::new(t!("connection-test")))
-                        .clicked()
-                {
-                    asked = Some(Asked::Test);
-                }
-                if ui.button(t!("cancel")).clicked()
-                    || ui.input(|i| i.key_pressed(egui::Key::Escape))
-                {
-                    asked = Some(Asked::Close);
+                if let Some(answer) = test_card(ui, dialog) {
+                    asked = Some(answer);
                 }
             });
-        });
-    if !open {
+            if let Some(answer) = connection_footer(ui, dialog) {
+                asked = Some(answer);
+            }
+        },
+    );
+    // Escape is *Cancel*, with the focus in a field too.
+    let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    if (modal.should_close() || escape) && asked.is_none() {
         asked = Some(Asked::Close);
+    }
+    // The window finds its height over its first frames, a long form
+    // over more of them: while it still changes, the frame is drawn again
+    // at once, so it opens where it stays and nothing moves under the
+    // pointer. Bounded, so a form that never rests cannot spin.
+    let height = modal.response.rect.height();
+    if dialog.frames < 12 && (dialog.frames < 2 || (height - dialog.height).abs() > 0.5) {
+        dialog.frames += 1;
+        ctx.request_discard("the connection dialogue finds its size");
+    }
+    dialog.height = height;
+    if matches!(dialog.test, TestPhase::Running { .. }) {
+        ctx.request_repaint();
     }
     let cancel_run = |requests: &mut Vec<Request>| {
         if let Some(job) = running_job {
@@ -893,21 +884,21 @@ fn connection_dialog(
         }
     };
     // The connector reacts to the edit before anything else reads the
-    // form, an OK in the same frame included.
+    // form, a save in the same frame included.
     if let (Some((key, settled)), Some(connector)) = (touched, &connector) {
         dialog.edited(&**connector, key, settled);
     }
-    if let (Some(Asked::Ok | Asked::Test), Some(connector)) = (asked, &connector) {
+    if let (Some(Asked::Primary | Asked::Test), Some(connector)) = (asked, &connector) {
         dialog.settle(&**connector);
     }
     // A test describes the form it ran on: an edit ends it.
     if dialog.values.iter().map(|(_, v)| v).ne(before.iter()) && dialog.forget_test() {
         cancel_run(requests);
     }
-    // The running test ended: a good one that OK started saves.
+    // The running test ended: a good one that the primary started saves.
     let mut save = dialog.take_test(run);
     match asked {
-        Some(Asked::Ok) => match dialog.command(&taken) {
+        Some(Asked::Primary) => match dialog.command(&taken) {
             Ok(_) if dialog.has_test() => {
                 dialog.error = None;
                 requests.push(Request::Command(dialog.begin_test(true)));
@@ -944,105 +935,62 @@ fn connection_dialog(
     }
 }
 
-/// What the user chose under the test's results.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TestAnswer {
-    SaveAnyway,
-    BackToFields,
-    CancelTest,
-}
-
-/// The connection test in the dialogue: while it runs, its checks as
-/// pending with *Cancel test*; once it ran, each check as passed, failed,
-/// information or not run, with the service's reason; and, when OK
-/// started a test that is not good, the warning with *Save anyway* and
-/// *Back to the fields*.
-fn test_results(ui: &mut egui::Ui, dialog: &ConnectionDialog) -> Option<TestAnswer> {
-    let mut answer = None;
-    match &dialog.test {
-        TestPhase::Idle => {}
-        TestPhase::Running { .. } => {
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(t!("connection-test-running"));
-                if ui.button(t!("connection-test-cancel")).clicked() {
-                    answer = Some(TestAnswer::CancelTest);
-                }
-            });
-            for check in &dialog.checks {
-                ui.weak(check);
-            }
+/// The field grid of the connection dialogue: the name, focused on open
+/// and fixed while editing, then the connector's fields in its order,
+/// each with the connector's note under it when it has one.
+fn connection_fields(
+    ui: &mut egui::Ui,
+    dialog: &mut ConnectionDialog,
+    touched: &mut Option<(&'static str, bool)>,
+) {
+    let scheme = theme::scheme(ui);
+    let editing = dialog.editing;
+    let focus = std::mem::take(&mut dialog.focus);
+    dialog::labelled_row(ui, &t!("compare-name"), dialog::FIELD_HEIGHT, |ui| {
+        if editing {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(&dialog.name)
+                        .size(TEXT_BODY)
+                        .color(scheme.text_primary),
+                )
+                .truncate()
+                .selectable(false),
+            );
+        } else {
+            dialog::text_field(ui, &mut dialog.name, "", false, None, focus);
         }
-        TestPhase::Done { test, held } => {
-            ui.add_space(6.0);
-            let error = ui.visuals().error_fg_color;
-            let warn = ui.visuals().warn_fg_color;
-            for check in &test.checks {
-                let (state, color) = match check.outcome {
-                    ext::CheckOutcome::Passed => (t!("connection-check-passed"), None),
-                    ext::CheckOutcome::Failed => (t!("connection-check-failed"), Some(error)),
-                    ext::CheckOutcome::Info => (t!("connection-check-info"), Some(warn)),
-                    ext::CheckOutcome::NotRun => (t!("connection-check-not-run"), None),
-                };
-                ui.horizontal_wrapped(|ui| {
-                    ui.set_max_width(420.0);
-                    match color {
-                        Some(color) => ui.colored_label(color, state),
-                        None => ui.weak(state),
-                    };
-                    ui.label(&check.label);
-                });
-                if !check.detail.is_empty() {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.set_max_width(420.0);
-                        ui.weak(&check.detail);
-                    });
-                }
-            }
-            if *held {
-                ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.set_max_width(420.0);
-                    ui.colored_label(warn, t!("connection-test-not-good"));
-                });
-                ui.horizontal(|ui| {
-                    if ui.button(t!("connection-back-to-fields")).clicked() {
-                        answer = Some(TestAnswer::BackToFields);
-                    }
-                    if ui.button(t!("connection-save-anyway")).clicked() {
-                        answer = Some(TestAnswer::SaveAnyway);
-                    }
-                });
-            } else if test.good {
-                ui.weak(t!("connection-test-good"));
-            }
+    });
+    for (field, value) in &mut dialog.values {
+        if let Some(settled) = connection_field(ui, field, value, editing) {
+            *touched = Some((field.key, settled));
+        }
+        if let Some((_, note)) = dialog.notes.iter().find(|(key, _)| *key == field.key) {
+            dialog::field_note(ui, note);
         }
     }
-    answer
 }
 
-/// One row of the connection dialogue: the label, then the field as its
-/// kind asks: a masked text for a secret (left empty while editing, it
-/// keeps the keychain's), a checkbox, a combo box for a choice, a text
-/// field for the rest. The connector's `note` for the field, when it has
-/// one, has the row under the control. Returns `None` while the user left the
-/// value alone, and otherwise whether the edit is whole: text that was
-/// pasted, a field typed in and now left, a box ticked, an option picked.
-/// Text being typed is `Some(false)`.
+/// One row of the connection dialogue: the label, with ` *` for a
+/// required field, then the control its kind asks for, as wide as the
+/// column: a text field for a text, a number and, in monospace, a path; a
+/// masked one for a secret, which while editing is empty and says so; a
+/// checkbox; a dropdown for a choice, whose empty option reads *None*.
+/// Returns `None` while the user left the value alone, and otherwise
+/// whether the edit is whole: text that was pasted, a field typed in and
+/// now left, a box ticked, an option picked. Text being typed is
+/// `Some(false)`.
 fn connection_field(
     ui: &mut egui::Ui,
     field: &ConnectionField,
     value: &mut String,
     editing: bool,
-    note: Option<&str>,
 ) -> Option<bool> {
     let label = if field.required {
         format!("{} *", field.label)
     } else {
         field.label.get()
     };
-    ui.label(label);
     // A text field: typing is not whole, a paste and leaving the field are.
     let typed = |ui: &egui::Ui, response: &egui::Response| {
         let pasted = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))));
@@ -1054,63 +1002,242 @@ fn connection_field(
             None
         }
     };
-    let mut edit = None;
-    match &field.kind {
+    dialog::labelled_row(ui, &label, dialog::FIELD_HEIGHT, |ui| match &field.kind {
         ConnectionFieldKind::Secret => {
-            let hint = if editing { "(unchanged)" } else { "" };
-            let response = ui.add(
-                egui::TextEdit::singleline(value)
-                    .password(true)
-                    .hint_text(hint)
-                    .desired_width(260.0),
-            );
-            edit = typed(ui, &response);
+            let hint = if editing {
+                t!("connection-unchanged")
+            } else {
+                String::new()
+            };
+            let response = dialog::secret_field(ui, value, &hint);
+            typed(ui, &response)
         }
         ConnectionFieldKind::Bool { .. } => {
-            let mut on = value == "true";
-            if ui.checkbox(&mut on, "").changed() {
-                *value = on.to_string();
-                edit = Some(true);
-            }
+            let on = value == "true";
+            let response = widgets::checkbox(ui, on, "");
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, field.label.get())
+            });
+            response.clicked().then(|| {
+                *value = (!on).to_string();
+                true
+            })
         }
         ConnectionFieldKind::Choice { options, .. } => {
-            let shown = if value.is_empty() {
-                "(none)"
-            } else {
-                value.as_str()
-            };
-            egui::ComboBox::from_id_salt(("add-connection-choice", field.key))
-                .selected_text(shown.to_owned())
-                .width(260.0)
-                .show_ui(ui, |ui| {
-                    for option in options {
-                        let label = if option.is_empty() {
-                            "(none)"
-                        } else {
-                            option.as_str()
-                        };
-                        if ui.selectable_label(value == option, label).clicked() {
-                            value.clone_from(option);
-                            edit = Some(true);
-                        }
+            let shown: Vec<String> = options
+                .iter()
+                .map(|option| {
+                    if option.is_empty() {
+                        t!("connection-none")
+                    } else {
+                        option.clone()
                     }
-                });
+                })
+                .collect();
+            let selected = options.iter().position(|o| o == value).unwrap_or(0);
+            let id = egui::Id::new(("add-connection-choice", field.key));
+            let picked = widgets::dropdown(ui, id, ui.available_width(), &shown, selected, false)?;
+            value.clone_from(options.get(picked)?);
+            Some(true)
         }
-        ConnectionFieldKind::Text { .. }
-        | ConnectionFieldKind::Integer { .. }
-        | ConnectionFieldKind::Path => {
-            let response = ui.add(egui::TextEdit::singleline(value).desired_width(260.0));
-            edit = typed(ui, &response);
+        ConnectionFieldKind::Text { .. } | ConnectionFieldKind::Integer { .. } => {
+            let response = dialog::text_field(ui, value, "", false, None, false);
+            typed(ui, &response)
         }
+        ConnectionFieldKind::Path => {
+            let response = dialog::text_field(ui, value, "", true, None, false);
+            typed(ui, &response)
+        }
+    })
+}
+
+/// A glyph in `colour` and, after it, `text` in the same colour, wrapped:
+/// the reason of a refused save, the warning of a held one.
+fn status_line(ui: &mut egui::Ui, glyph: &str, text: &str, colour: egui::Color32) {
+    ui.horizontal_top(|ui| {
+        ui.add(
+            egui::Label::new(egui::RichText::new(glyph).size(ICON).color(colour)).selectable(false),
+        );
+        ui.add_space(8.0);
+        ui.add(
+            egui::Label::new(egui::RichText::new(text).size(TEXT_BODY).color(colour))
+                .wrap()
+                .selectable(false),
+        );
+    });
+}
+
+/// The connection test in the dialogue's body: a *CONNECTION TEST*
+/// heading, with *Cancel test* at its right while the test runs, over a
+/// card with one row per check; under it, when the primary started a test
+/// that is not good, the warning. Nothing before a test was started.
+fn test_card(ui: &mut egui::Ui, dialog: &ConnectionDialog) -> Option<Asked> {
+    let scheme = theme::scheme(ui);
+    let mut answer = None;
+    let (running, held) = match &dialog.test {
+        TestPhase::Idle => return None,
+        TestPhase::Running { .. } => (true, false),
+        TestPhase::Done { held, .. } => (false, *held),
+    };
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        widgets::caps_heading(ui, &t!("connection-test-heading"));
+        if running {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(
+                        egui::Label::new(
+                            egui::RichText::new(t!("connection-test-cancel"))
+                                .size(TEXT_SECONDARY)
+                                .color(scheme.accent_focus),
+                        )
+                        .selectable(false)
+                        .sense(egui::Sense::click()),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    answer = Some(Asked::CancelTest);
+                }
+            });
+        }
+    });
+    dialog::card_frame(ui, |ui| match &dialog.test {
+        TestPhase::Idle => {}
+        TestPhase::Running { .. } => {
+            for label in &dialog.checks {
+                check_row(ui, None, label, "");
+            }
+        }
+        TestPhase::Done { test, .. } => {
+            for check in &test.checks {
+                check_row(ui, Some(check.outcome), &check.label, &check.detail);
+            }
+        }
+    });
+    if held {
+        status_line(
+            ui,
+            icons::FAILED,
+            &t!("connection-test-not-good"),
+            scheme.status_warning,
+        );
     }
-    // The connector's note has the row under its field to itself, so the
-    // controls keep their column and their width.
-    if let Some(note) = note {
-        ui.end_row();
-        ui.label("");
-        ui.weak(note);
-    }
-    edit
+    answer
+}
+
+/// One check of the connection test: a glyph for how it ended, or a
+/// spinner while it runs, then the label and, under it, the reason. The
+/// row's accessible name says the outcome in words before the label, so
+/// the glyph's colour never carries it alone.
+fn check_row(ui: &mut egui::Ui, outcome: Option<ext::CheckOutcome>, label: &str, detail: &str) {
+    let scheme = theme::scheme(ui);
+    let (glyph, colour, word) = match outcome {
+        None => ("", scheme.text_secondary, t!("connection-test-running")),
+        Some(ext::CheckOutcome::Passed) => (
+            icons::CHECK_PASSED,
+            scheme.status_success,
+            t!("connection-check-passed"),
+        ),
+        Some(ext::CheckOutcome::Failed) => (
+            icons::CHECK_FAILED,
+            scheme.status_danger,
+            t!("connection-check-failed"),
+        ),
+        Some(ext::CheckOutcome::Info) => (
+            icons::INFO,
+            scheme.accent_focus,
+            t!("connection-check-info"),
+        ),
+        Some(ext::CheckOutcome::NotRun) => (
+            icons::CHECK_NOT_RUN,
+            scheme.text_secondary,
+            t!("connection-check-not-run"),
+        ),
+    };
+    ui.horizontal_top(|ui| {
+        if outcome.is_none() {
+            ui.add(egui::Spinner::new().size(ICON));
+        } else {
+            ui.add(
+                egui::Label::new(egui::RichText::new(glyph).size(ICON).color(colour))
+                    .selectable(false),
+            )
+            .on_hover_text(&word);
+        }
+        ui.add_space(10.0);
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            let name = ui.add(
+                egui::Label::new(
+                    egui::RichText::new(label)
+                        .size(TEXT_BODY)
+                        .color(scheme.text_primary),
+                )
+                .wrap()
+                .selectable(false),
+            );
+            name.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("{word}: {label}"))
+            });
+            if !detail.is_empty() {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(detail)
+                            .size(TEXT_SECONDARY)
+                            .color(scheme.text_secondary),
+                    )
+                    .wrap(),
+                );
+            }
+        });
+    });
+}
+
+/// The footer of the connection dialogue: *Test* at the left for a
+/// connector with a test; at the right *Cancel* and the primary *Add* or
+/// *Save*, or, while a test that is not good holds the save, *Back to the
+/// fields* and the caution button *Save anyway*. Enter is the primary.
+fn connection_footer(ui: &mut egui::Ui, dialog: &ConnectionDialog) -> Option<Asked> {
+    let busy = matches!(dialog.test, TestPhase::Running { .. });
+    let held = matches!(dialog.test, TestPhase::Done { held: true, .. });
+    let asked = std::cell::Cell::new(None);
+    dialog::footer(
+        ui,
+        |left| {
+            if dialog.has_test()
+                && widgets::button(left, &t!("connection-test"), false, !busy && !held).clicked()
+                && !busy
+                && !held
+            {
+                asked.set(Some(Asked::Test));
+            }
+        },
+        |right| {
+            if held {
+                if widgets::caution_button(right, &t!("connection-save-anyway"), true).clicked() {
+                    asked.set(Some(Asked::SaveAnyway));
+                }
+                if widgets::button(right, &t!("connection-back-to-fields"), false, true).clicked() {
+                    asked.set(Some(Asked::BackToFields));
+                }
+                return;
+            }
+            let primary = if dialog.editing {
+                t!("connection-save")
+            } else {
+                t!("connection-add")
+            };
+            let enter = right.input(|i| i.key_pressed(egui::Key::Enter));
+            if (widgets::button(right, &primary, true, !busy).clicked() || enter) && !busy {
+                asked.set(Some(Asked::Primary));
+            }
+            if widgets::button(right, &t!("cancel"), false, true).clicked() {
+                asked.set(Some(Asked::Close));
+            }
+        },
+    );
+    asked.get()
 }
 
 /// The menu of a section's header, on the menu card of the file list
