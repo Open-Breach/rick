@@ -806,6 +806,8 @@ integration-reset-choices = Reset choices
 
 # The connection test of the Add connection and Edit dialogues
 # (specs/s3-connection.md Part 3).
+connection-add = Add
+connection-save = Save
 connection-test = Test
 connection-test-running = Testing the connection…
 connection-test-cancel = Cancel test

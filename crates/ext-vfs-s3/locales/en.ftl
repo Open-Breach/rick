@@ -31,3 +31,14 @@ s3-provider-spaces = DigitalOcean Spaces
 s3-provider-scaleway = Scaleway
 s3-provider-ovh = OVHcloud
 s3-provider-gcs = Google Cloud Storage (S3-compatible)
+
+# The connection test (specs/s3-connection.md Part 3): its checks, and
+# what a check says when it did not pass.
+s3-test-reachable = The host is reachable
+s3-test-credentials = The credentials are accepted
+s3-test-list-buckets = The key may list buckets
+s3-test-buckets = Each bucket named in Buckets can be opened
+s3-test-bucket = The bucket { $name } can be opened
+s3-test-timeout = No answer within { $seconds } seconds.
+s3-test-list-denied-info = This key may not list buckets. The connection shows the buckets named in the Buckets field. ({ $code })
+s3-test-no-secret = The secret key is missing.

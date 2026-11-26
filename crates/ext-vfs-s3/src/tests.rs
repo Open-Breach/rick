@@ -1423,3 +1423,349 @@ fn against_a_store_named_buckets_show_without_listing_and_refusals_keep_their_co
             .unwrap_or_else(|e| panic!("remove bucket: {e}"));
     });
 }
+
+/// One check of a test's result, for an assertion: the label, the outcome
+/// and the detail.
+type Line = (String, ext::CheckOutcome, String);
+
+/// Runs the connection test on a form for `endpoint` with *Buckets* as
+/// typed, the secret typed, and each check limited to `limit`.
+fn tested(
+    endpoint: &str,
+    buckets: &str,
+    limit: Duration,
+    cancel: &types::CancelToken,
+) -> (bool, Vec<Line>) {
+    english();
+    let mut values = std::collections::BTreeMap::from([
+        ("endpoint".to_owned(), endpoint.to_owned()),
+        ("access_key".to_owned(), "key".to_owned()),
+        ("secret_key".to_owned(), "typed-secret".to_owned()),
+    ]);
+    if !buckets.is_empty() {
+        values.insert("buckets".to_owned(), buckets.to_owned());
+    }
+    let form = ext::ConnectionTestForm {
+        name: None,
+        values: &values,
+    };
+    let result = runtime::block_on(super::check::run(
+        &form,
+        Ok("typed-secret".to_owned()),
+        limit,
+        cancel,
+    ));
+    let lines = result
+        .checks
+        .into_iter()
+        .map(|c| (c.label, c.outcome, c.detail))
+        .collect();
+    (result.good, lines)
+}
+
+fn test_of(endpoint: &str, buckets: &str) -> (bool, Vec<Line>) {
+    tested(
+        endpoint,
+        buckets,
+        Duration::from_secs(10),
+        &types::CancelToken::new(),
+    )
+}
+
+/// A service like R2 for a bucket-scoped key: `ListBuckets` is refused,
+/// the bucket `packages` lists, every other bucket does not exist.
+fn scoped_service() -> FakeService {
+    FakeService::start(|_, target| {
+        if target == "/" {
+            (403, error_body("AccessDenied", "Access Denied"))
+        } else if target.starts_with("/packages/") {
+            (200, listing_body("readme.txt"))
+        } else {
+            (
+                404,
+                error_body("NoSuchBucket", "The specified bucket does not exist."),
+            )
+        }
+    })
+}
+
+const REACHABLE: &str = "The host is reachable";
+const CREDENTIALS: &str = "The credentials are accepted";
+const LIST: &str = "The key may list buckets";
+
+fn outcomes(lines: &[Line]) -> Vec<(&str, ext::CheckOutcome)> {
+    lines
+        .iter()
+        .map(|(label, outcome, _)| (label.as_str(), *outcome))
+        .collect()
+}
+
+/// specs/s3-connection.md 3.6, first line: a bucket-scoped key with the
+/// bucket named is a good test, and the list-buckets line shows as
+/// information. The test only reads: every request is a `GET`.
+#[test]
+fn a_scoped_key_with_its_bucket_named_tests_good_with_the_listing_as_information() {
+    use ext::CheckOutcome::{Info, Passed};
+    let service = scoped_service();
+    let (good, lines) = test_of(&service.endpoint, "packages");
+    assert!(good, "{lines:?}");
+    assert_eq!(
+        outcomes(&lines),
+        [
+            (REACHABLE, Passed),
+            (CREDENTIALS, Passed),
+            (LIST, Info),
+            ("The bucket packages can be opened", Passed)
+        ]
+    );
+    assert!(lines[2].2.contains("may not list buckets"), "{lines:?}");
+    assert!(lines[2].2.contains("AccessDenied"), "{lines:?}");
+    let seen = service.seen();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(seen[0], "GET /");
+    assert!(seen[1].starts_with("GET /packages/?"), "{seen:?}");
+    assert!(seen[1].contains("max-keys=1"), "{seen:?}");
+}
+
+/// specs/s3-connection.md 3.6, second line, first case: the same key with
+/// *Buckets* empty is not good, and says to add bucket names.
+#[test]
+fn a_scoped_key_without_bucket_names_tests_not_good_with_the_hint() {
+    use ext::CheckOutcome::{Failed, Passed};
+    let service = scoped_service();
+    let (good, lines) = test_of(&service.endpoint, "");
+    assert!(!good);
+    assert_eq!(
+        outcomes(&lines),
+        [(REACHABLE, Passed), (CREDENTIALS, Passed), (LIST, Failed)]
+    );
+    assert!(lines[2].2.contains("Buckets field"), "{lines:?}");
+    assert!(lines[2].2.contains("AccessDenied"), "{lines:?}");
+}
+
+/// 3.6, second line: a wrong secret fails the credentials with the
+/// service's code, and the checks that depend on it are not run.
+#[test]
+fn a_wrong_secret_fails_the_credentials_and_the_rest_is_not_run() {
+    use ext::CheckOutcome::{Failed, NotRun, Passed};
+    let service = FakeService::start(|_, _| {
+        (
+            403,
+            error_body(
+                "SignatureDoesNotMatch",
+                "The request signature we calculated does not match.",
+            ),
+        )
+    });
+    let (good, lines) = test_of(&service.endpoint, "packages, media");
+    assert!(!good);
+    assert_eq!(
+        outcomes(&lines),
+        [
+            (REACHABLE, Passed),
+            (CREDENTIALS, Failed),
+            (LIST, NotRun),
+            ("The bucket packages can be opened", NotRun),
+            ("The bucket media can be opened", NotRun)
+        ]
+    );
+    assert!(lines[1].2.contains("SignatureDoesNotMatch"), "{lines:?}");
+    assert!(lines[1].2.contains("wrong secret key"), "{lines:?}");
+    assert_eq!(
+        service.seen(),
+        ["GET /"],
+        "nothing is asked after the refusal"
+    );
+    let unknown = FakeService::start(|_, _| {
+        (
+            403,
+            error_body("InvalidAccessKeyId", "The key does not exist."),
+        )
+    });
+    let (good, lines) = test_of(&unknown.endpoint, "");
+    assert!(!good);
+    assert!(lines[1].2.contains("InvalidAccessKeyId"), "{lines:?}");
+}
+
+/// 3.6, second line: a mistyped bucket name is caught per name, whether
+/// or not the key may list buckets.
+#[test]
+fn a_mistyped_bucket_name_is_caught_per_name_either_way() {
+    use ext::CheckOutcome::{Failed, Info, Passed};
+    let service = scoped_service();
+    let (good, lines) = test_of(&service.endpoint, "packages, pakages");
+    assert!(!good);
+    assert_eq!(
+        outcomes(&lines),
+        [
+            (REACHABLE, Passed),
+            (CREDENTIALS, Passed),
+            (LIST, Info),
+            ("The bucket packages can be opened", Passed),
+            ("The bucket pakages can be opened", Failed)
+        ]
+    );
+    assert!(lines[4].2.contains("NoSuchBucket"), "{lines:?}");
+    assert!(lines[4].2.contains("does not exist"), "{lines:?}");
+
+    // A key that may list buckets: the name is checked all the same.
+    let admin = FakeService::start(|_, target| {
+        if target == "/" {
+            (
+                200,
+                "<ListAllMyBucketsResult><Buckets/></ListAllMyBucketsResult>".to_owned(),
+            )
+        } else {
+            (403, error_body("AccessDenied", "Access Denied"))
+        }
+    });
+    let (good, lines) = test_of(&admin.endpoint, "private");
+    assert!(!good);
+    assert_eq!(lines[2].1, Passed);
+    assert_eq!(lines[3].1, Failed);
+    assert!(
+        lines[3]
+            .2
+            .contains("Access to this bucket or object was denied"),
+        "{lines:?}"
+    );
+}
+
+/// 3.6, second line: a host that cannot be reached fails the first check,
+/// and nothing else is run.
+#[test]
+fn an_unreachable_host_fails_the_first_check_and_the_rest_is_not_run() {
+    use ext::CheckOutcome::{Failed, NotRun};
+    let (good, lines) = test_of(&format!("http://{}", refusing_address()), "packages");
+    assert!(!good);
+    assert_eq!(
+        outcomes(&lines),
+        [
+            (REACHABLE, Failed),
+            (CREDENTIALS, NotRun),
+            (LIST, NotRun),
+            ("The bucket packages can be opened", NotRun)
+        ]
+    );
+    assert_ne!(lines[0].2, "");
+    // An endpoint that is no address fails there too.
+    let (good, lines) = test_of("http://", "");
+    assert!(!good);
+    assert_eq!(lines[0].1, Failed);
+}
+
+/// 3.6, fourth line: a key that may list buckets, with *Buckets* empty,
+/// is a good test.
+#[test]
+fn an_admin_key_without_bucket_names_tests_good() {
+    use ext::CheckOutcome::Passed;
+    let service = FakeService::start(|_, _| {
+        (
+            200,
+            "<ListAllMyBucketsResult><Buckets/></ListAllMyBucketsResult>".to_owned(),
+        )
+    });
+    let (good, lines) = test_of(&service.endpoint, "");
+    assert!(good);
+    assert_eq!(
+        outcomes(&lines),
+        [(REACHABLE, Passed), (CREDENTIALS, Passed), (LIST, Passed)]
+    );
+    assert_eq!(service.seen(), ["GET /"]);
+}
+
+/// specs/s3-connection.md 3.5: a check gives up after its time limit, and
+/// a cancelled test ends at once with the rest not run.
+#[test]
+fn a_check_gives_up_after_its_limit_and_a_cancelled_test_ends_at_once() {
+    use ext::CheckOutcome::{Failed, NotRun};
+    let silent = FakeService::start(|_, _| {
+        std::thread::sleep(Duration::from_secs(3));
+        (200, String::new())
+    });
+    let started = std::time::Instant::now();
+    let (good, lines) = tested(
+        &silent.endpoint,
+        "packages",
+        Duration::from_millis(200),
+        &types::CancelToken::new(),
+    );
+    assert!(!good);
+    assert_eq!(lines[0].1, Failed);
+    assert!(lines[0].2.contains("No answer within"), "{lines:?}");
+    assert_eq!(lines[3].1, NotRun);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+
+    let cancel = types::CancelToken::new();
+    let later = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        later.cancel();
+    });
+    let started = std::time::Instant::now();
+    let (good, lines) = tested(
+        &silent.endpoint,
+        "packages",
+        Duration::from_secs(10),
+        &cancel,
+    );
+    assert!(!good);
+    assert!(
+        lines.iter().all(|(_, outcome, _)| *outcome == NotRun),
+        "{lines:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// specs/s3-connection.md 3.1 and 3.5 through the connector: in *Edit…* a
+/// secret left empty is the keychain's, a typed secret is used and stored
+/// nowhere, and *Add* without a secret says so.
+#[test]
+fn the_connector_tests_with_the_typed_secret_or_the_keychain_s_and_stores_nothing() {
+    use ext::Connector as _;
+    english();
+    let service = scoped_service();
+    let (conns, _provider) = connected(&service.endpoint, "");
+    assert_eq!(conns.checks().len(), 4);
+    let run = |name: Option<&str>, secret: &str| {
+        let mut values = std::collections::BTreeMap::from([
+            ("endpoint".to_owned(), service.endpoint.clone()),
+            ("access_key".to_owned(), "key".to_owned()),
+            ("buckets".to_owned(), "packages".to_owned()),
+        ]);
+        if !secret.is_empty() {
+            values.insert("secret_key".to_owned(), secret.to_owned());
+        }
+        let form = ext::ConnectionTestForm {
+            name,
+            values: &values,
+        };
+        assert!(!format!("{form:?}").contains("typed-secret"));
+        runtime::block_on(conns.test(&form, &types::CancelToken::new()))
+    };
+    // Edit, secret left empty: the keychain's stands in.
+    assert!(run(Some("test"), "").good);
+    // A typed secret, in Add and in Edit.
+    assert!(run(None, "typed-secret").good);
+    assert!(run(Some("test"), "typed-secret").good);
+    // Add without a secret, and Edit of a connection the keychain has
+    // nothing for: the first check says what is missing.
+    let missing = run(None, "");
+    assert!(!missing.good);
+    assert_eq!(missing.checks[0].outcome, ext::CheckOutcome::Failed);
+    assert!(
+        missing.checks[0].detail.contains("secret key"),
+        "{missing:?}"
+    );
+    assert!(!run(Some("nobody"), "").good);
+    // The test builds its own client and leaves the connection's alone.
+    assert!(!conns.is_connected("test"), "the test left a client behind");
+}
