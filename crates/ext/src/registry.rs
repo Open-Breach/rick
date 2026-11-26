@@ -207,8 +207,14 @@ use crate::search::SearchIndex;
 /// dialogue opens, after each edit and before it saves, and answers with a
 /// [`ConnectionReaction`](crate::ConnectionReaction): values to fill where
 /// the user has not typed, the user's input rewritten into the fields it
-/// belongs to, and a short note by a field.
-pub const API_VERSION: u32 = 24;
+/// belongs to, and a short note by a field; 25 a connection can be tested
+/// before it is saved (#310, specs/s3-connection.md Part 3): [`Connector`]
+/// gained `checks`, what its test checks and, when not empty, what gives
+/// its dialogue a *Test* button, and `test`, which runs the checks on a
+/// [`ConnectionTestForm`](crate::ConnectionTestForm) and answers with a
+/// [`ConnectionTest`](crate::ConnectionTest); both are defaulted, and a
+/// connector without a test is saved as before.
+pub const API_VERSION: u32 = 25;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
