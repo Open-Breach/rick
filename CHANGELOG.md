@@ -29,9 +29,40 @@ the pull request that brought the change.
   fields the user has not edited, move pasted input into the fields it
   belongs to and put a short note by a field. A plugin that does not
   react is only rebuilt.
+- **A cloud connection is tested before it is saved.** The *Add
+  connection…* and *Edit…* dialogues of S3, Azure Blob and Google Cloud
+  Storage have a *Test* button, which tests what is in the form and
+  saves nothing. *Add* and *Save* run the test first: a good test saves
+  and closes; one that is not good keeps the dialogue open with its
+  checks, each passed, failed with the service's code and reason, or not
+  run, and offers *Save anyway* beside going back to the fields. A test
+  only reads, each check gives up after ten seconds, and the test can be
+  cancelled (#320).
+- S3 tests four things: the host is reachable, the credentials are
+  accepted, the key may list buckets, and each bucket named in *Buckets*
+  can be opened. With buckets named, a key that may not list them is a
+  note and not a failure; with none it fails with the hint to name them
+  (#322).
+- Azure Blob and Google Cloud Storage test three things each: the host
+  is reachable, the credentials are accepted, and the containers or
+  buckets can be listed (#323).
+- The extension API is 25 (#320): a connection can be tested.
+  `ext::Connector` gained `checks` and `test`, both with defaults. A
+  plugin without a test shows no *Test* button and is saved as before;
+  it is only rebuilt.
+
+### Changed
+
+- The first button of a connection dialogue reads *Add*, or *Save* when
+  editing; it read *OK* (#322).
 
 ### Fixed
 
+- A debug log no longer holds a connection's secret. Adding or editing
+  a connection wrote the command with all its values, the secret key or
+  password among them, into the log at debug level. The log now names
+  the fields and no value. A log written at debug level by 0.6.0 or
+  earlier may hold such a secret (#320).
 - S3: a refusal says what it was. Every 403 used to read "permission
   denied"; now a key that may not list buckets is told to name them in
   the *Buckets* field, and a wrong access key, a wrong secret key, a
