@@ -697,7 +697,7 @@ pub fn show(
 /// The connectors whose provider belongs to `section`: the cloud plugins
 /// under Cloud, the network plugins under Network, none under This
 /// Machine.
-fn connectors_of(app: &App, section: Section) -> Vec<Arc<dyn Connector>> {
+pub(crate) fn connectors_of(app: &App, section: Section) -> Vec<Arc<dyn Connector>> {
     app.registry()
         .connectors()
         .iter()
