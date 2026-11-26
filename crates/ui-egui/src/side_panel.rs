@@ -487,13 +487,13 @@ impl ConnectionDialog {
     pub fn command(&self, taken: &[String]) -> Result<Command, String> {
         let name = self.name.trim();
         if name.is_empty() {
-            return Err("The connection needs a name".to_owned());
+            return Err(t!("connection-needs-name"));
         }
         if name.contains(['/', '\\']) {
-            return Err("The name cannot contain a slash".to_owned());
+            return Err(t!("connection-name-slash"));
         }
         if !self.editing && taken.iter().any(|t| t == name) {
-            return Err(format!("A connection called {name} exists already"));
+            return Err(t!("connection-name-taken", name = name));
         }
         let mut values = Vec::with_capacity(self.values.len());
         for (field, value) in &self.values {
@@ -501,7 +501,7 @@ impl ConnectionDialog {
             if value.is_empty() {
                 // An edited connection keeps the secret it has.
                 if field.required && !(self.editing && field.kind == ConnectionFieldKind::Secret) {
-                    return Err(format!("{} needs a value", field.label));
+                    return Err(t!("connection-field-required", field = field.label.get()));
                 }
                 continue;
             }
@@ -509,9 +509,11 @@ impl ConnectionDialog {
                 match value.parse::<i64>() {
                     Ok(n) if (min..=max).contains(&n) => {}
                     _ => {
-                        return Err(format!(
-                            "{} must be a number from {min} to {max}",
-                            field.label
+                        return Err(t!(
+                            "connection-field-range",
+                            field = field.label.get(),
+                            min = min,
+                            max = max
                         ));
                     }
                 }
