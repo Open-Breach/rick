@@ -36,6 +36,7 @@
 #![deny(unsafe_code)]
 
 pub mod auth;
+mod check;
 mod client;
 mod connection;
 mod provider;
