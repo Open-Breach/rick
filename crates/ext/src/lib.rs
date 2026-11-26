@@ -68,8 +68,8 @@ pub use action::{
 pub use async_trait::async_trait;
 pub use cli::{CliCommand, CliCtx, CliOutcome, CommandSpec};
 pub use connection::{
-    Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, ConnectionSection,
-    ConnectionSpec, Connector, secret_key,
+    Connection, ConnectionField, ConnectionFieldKind, ConnectionForm, ConnectionReaction,
+    ConnectionSchema, ConnectionSection, ConnectionSpec, Connector, secret_key,
 };
 pub use decorator::{
     Badge, CellValue, Color, ColumnDef, ColumnId, DecorateCtx, Decoration, Decorator, PanelSection,
