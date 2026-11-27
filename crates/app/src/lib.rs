@@ -438,6 +438,9 @@ enum Msg {
     Network(Vec<Entry>),
     /// A new connection's secrets are in the keychain: write the rest.
     ConnectionSaved(ConnectionEntry),
+    /// The connection test `request` ended: its result, or `None` when it
+    /// was cancelled.
+    ConnectionTested(u64, Option<ext::ConnectionTest>),
     /// A connection of this provider was connected or disconnected: its
     /// rows may read differently.
     ConnectionChanged(ProviderId),
@@ -1728,7 +1731,7 @@ impl App {
     /// produced right away. Listings and jobs the command started report
     /// through [`poll`](Self::poll) and [`tick`](Self::tick).
     pub fn handle(&mut self, command: Command, events: &mut Vec<Event>) {
-        debug!(?command, "command");
+        debug!(command = ?command::Logged(&command), "command");
         self.dispatch(command, events);
         self.sync_panes(events);
         self.sync_consoles(events);
@@ -1933,6 +1936,12 @@ impl App {
                 name,
                 values,
             } => self.add_connection(provider, &name, values, true, events),
+            Command::TestConnection {
+                provider,
+                name,
+                values,
+                request,
+            } => self.test_connection(provider, name, values, request),
             Command::Connection { provider, name, op } => {
                 self.connection_op(provider, &name, op, events);
             }
@@ -2666,6 +2675,71 @@ impl App {
                     tx.send(Msg::ConnectionSaved(entry));
                     Ok(())
                 });
+        self.pane_jobs.insert(handle.id, self.model.focused);
+    }
+
+    /// Runs the connector's test on the dialogue's values as a job, which
+    /// *Cancel* in the dialogue or in the operations area ends. Nothing is
+    /// saved: the values live in the job and go to the connector's test
+    /// alone. The result, or the news that the run was cancelled, comes
+    /// back through [`Msg::ConnectionTested`].
+    fn test_connection(
+        &mut self,
+        provider: ProviderId,
+        name: Option<String>,
+        values: Vec<(String, String)>,
+        request: u64,
+    ) {
+        /// Tells the loop the run ended without a result unless it is
+        /// disarmed: the runner drops a cancelled job's future.
+        struct Ended {
+            tx: Mailbox,
+            request: u64,
+            done: bool,
+        }
+        impl Drop for Ended {
+            fn drop(&mut self) {
+                if !self.done {
+                    self.tx.send(Msg::ConnectionTested(self.request, None));
+                }
+            }
+        }
+        let Some(connector) = self.registry.connector_of(provider).cloned() else {
+            self.model.connection_tested(request, None);
+            return;
+        };
+        let tx = self.mailbox.clone();
+        let label = name.clone().unwrap_or_else(|| provider.0.to_owned());
+        // Made before the job runs: a job cancelled before its first poll
+        // reports back as well.
+        let ended = Ended {
+            tx,
+            request,
+            done: false,
+        };
+        let handle = self.jobs.spawn_named(
+            ext::t!("job-test-connection", name = label),
+            move |job| async move {
+                let mut ended = ended;
+                let values: std::collections::BTreeMap<String, String> = values
+                    .into_iter()
+                    .map(|(key, value)| (key, value.trim().to_owned()))
+                    .filter(|(_, value)| !value.is_empty())
+                    .collect();
+                let form = ext::ConnectionTestForm {
+                    name: name.as_deref(),
+                    values: &values,
+                };
+                let result = connector.test(&form, &job.cancel).await;
+                if job.cancel.is_cancelled() {
+                    return Err(Error::Cancelled);
+                }
+                ended.done = true;
+                ended.tx.send(Msg::ConnectionTested(request, Some(result)));
+                Ok(())
+            },
+        );
+        self.model.connection_test_started(request, handle.id);
         self.pane_jobs.insert(handle.id, self.model.focused);
     }
 
@@ -5068,6 +5142,9 @@ impl App {
                 self.model.network = entries;
             }
             Msg::ConnectionSaved(entry) => self.connection_saved(entry),
+            Msg::ConnectionTested(request, result) => {
+                self.model.connection_tested(request, result);
+            }
             Msg::ConnectionChanged(provider) => self.refresh_rows_of(provider),
             Msg::IntegrationChecked {
                 generation,

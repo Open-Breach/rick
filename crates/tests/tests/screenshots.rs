@@ -7009,3 +7009,359 @@ fn readme_window(theme: Theme) -> Harness<'static, RickUi> {
     hold_still(&mut harness, 8);
     harness
 }
+
+/// One provider's connection dialogue in the shell: only its plugin is
+/// loaded, so its section offers the one *Add connection…* row.
+fn connection_shell(
+    extension: Arc<dyn ext::Extension>,
+    theme: Theme,
+    density: Density,
+) -> (Harness<'static, RickUi>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![extension],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1100.0, 900.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    for change in [
+        SettingsChange::Theme(theme),
+        SettingsChange::Density(density),
+    ] {
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::Settings(change), &mut Vec::new());
+    }
+    settle(&mut harness);
+    (harness, dir)
+}
+
+fn click_point(harness: &mut Harness<'_, RickUi>, at: egui::Pos2, button: egui::PointerButton) {
+    harness.event(egui::Event::PointerMoved(at));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.step();
+    }
+    for _ in 0..4 {
+        harness.step();
+    }
+}
+
+/// Issue 311: the *Add connection…* and *Edit…* dialogues of S3, Azure
+/// Blob, Google Cloud Storage and SSH, in light and dark, Comfortable and
+/// Compact, for the pull request to show against the style guide.
+#[test]
+#[ignore = "renders screenshots; run with --ignored on a machine with a GPU adapter"]
+fn screenshots_of_the_connection_dialogues() {
+    type Make = fn() -> Arc<dyn ext::Extension>;
+    let providers: [(&str, &str, Make, &[(&str, &str)]); 4] = [
+        (
+            "s3",
+            "s3",
+            || Arc::new(ext_vfs_s3::S3Extension::new()),
+            &[
+                ("endpoint", "https://abc123.r2.cloudflarestorage.com"),
+                ("region", "auto"),
+                ("access_key", "0123456789abcdef"),
+                ("secret_key", "not-a-real-secret"),
+                ("buckets", "packages, media"),
+                ("path_style", "true"),
+            ],
+        ),
+        (
+            "azure",
+            "azure",
+            || Arc::new(ext_vfs_azure::AzureExtension::new()),
+            &[("account", "rickstorage"), ("key", "bm90LWEtcmVhbC1rZXk=")],
+        ),
+        (
+            "gcs",
+            "gcs",
+            || Arc::new(ext_vfs_gcs::GcsExtension::new()),
+            &[("project", "rick-project")],
+        ),
+        (
+            "ssh",
+            "ssh",
+            || Arc::new(ext_ssh::SshExtension::new()),
+            &[("host", "nas.example.org"), ("user", "serge")],
+        ),
+    ];
+    for (name, provider, make, values) in providers {
+        for (theme, density) in LOOKS {
+            let look = look(theme, density);
+            let (mut harness, _dir) = connection_shell(make(), theme, density);
+            let add = harness
+                .query_all_by_label_contains("Add connection")
+                .next()
+                .unwrap_or_else(|| panic!("{name}: the Add connection row"))
+                .rect()
+                .center();
+            click_point(&mut harness, add, egui::PointerButton::Primary);
+            // A long form finds its height over a few frames.
+            hold_still(&mut harness, 8);
+            shoot(&mut harness, &format!("connection-add-{name}-{look}"));
+            let cancel = harness.get_by_label("Cancel").rect().center();
+            click_point(&mut harness, cancel, egui::PointerButton::Primary);
+            settle(&mut harness);
+
+            // A saved connection, and its Edit… dialogue from the row's menu.
+            harness.state_mut().app_mut().handle(
+                app::Command::AddConnection {
+                    provider: types::ProviderId::intern(provider),
+                    name: "acme-prod".into(),
+                    values: values
+                        .iter()
+                        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                        .collect(),
+                },
+                &mut Vec::new(),
+            );
+            settle(&mut harness);
+            // The side panel's row: the job in the operations area may
+            // name the connection too.
+            let row = harness
+                .query_all_by_label_contains("acme-prod")
+                .map(|node| node.rect())
+                .filter(|rect| rect.center().x < 400.0)
+                .min_by(|a, b| a.top().total_cmp(&b.top()))
+                .unwrap_or_else(|| panic!("{name}: the connection's row"))
+                .center();
+            click_point(&mut harness, row, egui::PointerButton::Secondary);
+            let edit = harness
+                .query_all_by_label_contains("Edit")
+                .next()
+                .unwrap_or_else(|| panic!("{name}: Edit… in the row's menu"))
+                .rect()
+                .center();
+            click_point(&mut harness, edit, egui::PointerButton::Primary);
+            hold_still(&mut harness, 8);
+            shoot(&mut harness, &format!("connection-edit-{name}-{look}"));
+        }
+    }
+}
+
+/// Issue 311: the connection test in the S3 dialogue, light and dark: the
+/// card of its checks after *Test*, and the warning with *Save anyway*
+/// after *Save*. The endpoint is a local port nothing listens on, so the
+/// first check fails and the rest is not run; no account is involved.
+#[test]
+#[ignore = "renders screenshots; run with --ignored on a machine with a GPU adapter"]
+fn screenshots_of_the_connection_test() {
+    for theme in [Theme::Light, Theme::Dark] {
+        let look = look(theme, Density::Comfortable);
+        let (mut harness, _dir) = connection_shell(
+            Arc::new(ext_vfs_s3::S3Extension::new()),
+            theme,
+            Density::Comfortable,
+        );
+        harness.state_mut().app_mut().handle(
+            app::Command::AddConnection {
+                provider: types::ProviderId::intern("s3"),
+                name: "acme-prod".into(),
+                values: [
+                    ("endpoint", "http://127.0.0.1:1"),
+                    ("region", "us-east-1"),
+                    ("access_key", "0123456789abcdef"),
+                    ("secret_key", "not-a-real-secret"),
+                    ("buckets", "packages, media"),
+                    ("path_style", "true"),
+                ]
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+            },
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+        let row = harness
+            .query_all_by_label_contains("acme-prod")
+            .map(|node| node.rect())
+            .filter(|rect| rect.center().x < 400.0)
+            .min_by(|a, b| a.top().total_cmp(&b.top()))
+            .unwrap_or_else(|| panic!("the connection's row"))
+            .center();
+        click_point(&mut harness, row, egui::PointerButton::Secondary);
+        let edit = harness
+            .query_all_by_label_contains("Edit")
+            .next()
+            .unwrap_or_else(|| panic!("Edit… in the row's menu"))
+            .rect()
+            .center();
+        click_point(&mut harness, edit, egui::PointerButton::Primary);
+        hold_still(&mut harness, 8);
+        for (button, name) in [("Test", "tested"), ("Save", "held")] {
+            let at = harness.get_by_label(button).rect().center();
+            click_point(&mut harness, at, egui::PointerButton::Primary);
+            step_until(&mut harness, Duration::from_secs(15), |h| {
+                h.query_all_by_label_contains("Not run").next().is_some()
+            });
+            hold_still(&mut harness, 8);
+            shoot(&mut harness, &format!("connection-test-{name}-{look}"));
+            if name == "tested" {
+                // An edit forgets the result, so *Save* starts afresh.
+                harness.key_press(egui::Key::Tab);
+                hold_still(&mut harness, 4);
+            }
+        }
+    }
+}
+
+/// Issue 311: the Cloud overview at `rick://cloud` and the connections of
+/// the Network overview, which share its table, in light and dark.
+#[test]
+#[ignore = "renders screenshots; run with --ignored on a machine with a GPU adapter"]
+fn screenshots_of_the_connection_overviews() {
+    type Make = fn() -> Arc<dyn ext::Extension>;
+    let overviews: [(&str, &str, Make, &str, vfs_rick::Virtual); 2] = [
+        (
+            "cloud",
+            "s3",
+            || Arc::new(ext_vfs_s3::S3Extension::new()),
+            "endpoint",
+            vfs_rick::Virtual::Cloud,
+        ),
+        (
+            "network",
+            "ssh",
+            || Arc::new(ext_ssh::SshExtension::new()),
+            "host",
+            vfs_rick::Virtual::Network,
+        ),
+    ];
+    for (name, provider, make, field, overview) in overviews {
+        for theme in [Theme::Light, Theme::Dark] {
+            let look = look(theme, Density::Comfortable);
+            let (mut harness, _dir) = connection_shell(make(), theme, Density::Comfortable);
+            for connection in ["acme-prod", "backups", "media-archive-2026"] {
+                harness.state_mut().app_mut().handle(
+                    app::Command::AddConnection {
+                        provider: types::ProviderId::intern(provider),
+                        name: connection.into(),
+                        values: vec![
+                            (field.to_owned(), "127.0.0.1".to_owned()),
+                            ("access_key".to_owned(), "0123456789abcdef".to_owned()),
+                            ("secret_key".to_owned(), "not-a-real-secret".to_owned()),
+                            ("buckets".to_owned(), "packages".to_owned()),
+                        ],
+                    },
+                    &mut Vec::new(),
+                );
+                settle(&mut harness);
+            }
+            let pane = harness.state().app().model().focused;
+            harness.state_mut().app_mut().handle(
+                app::Command::Navigate {
+                    pane,
+                    to: overview.location(),
+                },
+                &mut Vec::new(),
+            );
+            settle(&mut harness);
+            hold_still(&mut harness, 4);
+            shoot(&mut harness, &format!("overview-{name}-{look}"));
+        }
+    }
+}
+
+/// The This Machine overview with three drives, and the Cloud and Network
+/// overviews with no connection yet, in light and dark.
+#[test]
+#[ignore = "renders screenshots; run with --ignored on a machine with a GPU adapter"]
+fn screenshots_of_the_drive_table_and_the_empty_overviews() {
+    for theme in [Theme::Light, Theme::Dark] {
+        let look = look(theme, Density::Comfortable);
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let drive = |name: &str, kind, total: u64, free: u64| {
+            let mount = dir.path().join(name);
+            fs::create_dir_all(&mount).unwrap_or_else(|e| panic!("{e}"));
+            platform::Volume {
+                name: name.into(),
+                mount_point: mount,
+                kind,
+                fs_type: "ext4".into(),
+                device: None,
+                total: Some(total),
+                free: Some(free),
+                read_only: false,
+            }
+        };
+        fake.add_volume(drive(
+            "system",
+            platform::VolumeKind::Fixed,
+            512 << 30,
+            200 << 30,
+        ));
+        fake.add_volume(drive(
+            "data-archive-2026",
+            platform::VolumeKind::Fixed,
+            4 << 40,
+            300 << 30,
+        ));
+        fake.add_volume(drive(
+            "usb-stick",
+            platform::VolumeKind::Removable,
+            64 << 30,
+            60 << 30,
+        ));
+        let host = Arc::new(EguiHost::new());
+        let app = app::App::new(app::Config {
+            platform: fake.clone(),
+            ui: host.clone(),
+            extensions: vec![
+                Arc::new(ext_vfs_s3::S3Extension::new()),
+                Arc::new(ext_vfs_azure::AzureExtension::new()),
+                Arc::new(ext_vfs_gcs::GcsExtension::new()),
+                Arc::new(ext_ssh::SshExtension::new()),
+            ],
+            config_dir: Some(fake.config_dir()),
+            start: Some(local(dir.path())),
+        });
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1400.0, 800.0))
+            .with_pixels_per_point(2.0)
+            .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(Density::Comfortable),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        for (name, overview) in [
+            ("machine", vfs_rick::Virtual::Machine),
+            ("empty-cloud", vfs_rick::Virtual::Cloud),
+            ("empty-network", vfs_rick::Virtual::Network),
+        ] {
+            let pane = harness.state().app().model().focused;
+            harness.state_mut().app_mut().handle(
+                app::Command::Navigate {
+                    pane,
+                    to: overview.location(),
+                },
+                &mut Vec::new(),
+            );
+            settle(&mut harness);
+            hold_still(&mut harness, 4);
+            shoot(&mut harness, &format!("overview-{name}-{look}"));
+        }
+    }
+}

@@ -7,13 +7,14 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use ext::Text;
 use ext::platform::Platform;
 use ext::{
-    Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, Connector, async_trait,
-    secret_key,
+    Connection, ConnectionField, ConnectionFieldKind, ConnectionForm, ConnectionReaction,
+    ConnectionSchema, ConnectionTest, ConnectionTestForm, Connector, async_trait, secret_key, t,
 };
-use types::{Error, ProviderId};
+use types::{CancelToken, Error, ProviderId};
 
 use crate::PROVIDER_ID;
-use crate::client::{S3Client, message};
+use crate::client::{Bucket, S3Client, message};
+use crate::recognition::recognise;
 
 /// The field keys of the *Add connection…* dialogue and `rick.toml`.
 pub mod field {
@@ -25,10 +26,17 @@ pub mod field {
     pub const ACCESS_KEY: &str = "access_key";
     /// The secret access key, in the keychain.
     pub const SECRET_KEY: &str = "secret_key";
+    /// The buckets the connection shows at its root, as typed: names
+    /// separated by commas. Empty, the root lists the account's buckets.
+    pub const BUCKETS: &str = "buckets";
     /// Path-style addressing (`endpoint/bucket/key`) rather than the
     /// bucket as a host name; on by default, what `MinIO` and R2 take.
     pub const PATH_STYLE: &str = "path_style";
 }
+
+/// The region a connection signs with when nothing says another: what
+/// the generic S3-compatible stores take.
+const DEFAULT_REGION: &str = "us-east-1";
 
 /// The fields of the dialogue, in display order.
 #[must_use]
@@ -48,7 +56,7 @@ pub fn schema() -> ConnectionSchema {
                 key: field::REGION,
                 label: Text("s3-region"),
                 kind: ConnectionFieldKind::Text {
-                    default: "us-east-1".to_owned(),
+                    default: DEFAULT_REGION.to_owned(),
                 },
                 required: false,
             },
@@ -67,6 +75,14 @@ pub fn schema() -> ConnectionSchema {
                 required: true,
             },
             ConnectionField {
+                key: field::BUCKETS,
+                label: Text("s3-buckets"),
+                kind: ConnectionFieldKind::Text {
+                    default: String::new(),
+                },
+                required: false,
+            },
+            ConnectionField {
                 key: field::PATH_STYLE,
                 label: Text("s3-path-style-addressing"),
                 kind: ConnectionFieldKind::Bool { default: true },
@@ -76,9 +92,112 @@ pub fn schema() -> ConnectionSchema {
     }
 }
 
+/// The names in a *Buckets* field: split on commas, trimmed, without the
+/// empty entries and the repeats, in the order typed
+/// (specs/s3-connection.md 1.1).
+#[must_use]
+pub fn bucket_names(text: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for name in text.split(',').map(str::trim) {
+        if !name.is_empty() && !names.iter().any(|known| known == name) {
+            names.push(name.to_owned());
+        }
+    }
+    names
+}
+
+/// An endpoint as typed or pasted, taken apart: the endpoint without a
+/// path, and the bucket its path named. The address Cloudflare's dashboard
+/// shows for a bucket, `https://<account>.r2.cloudflarestorage.com/<bucket>`,
+/// is an endpoint and a bucket; the client would drop the path on every
+/// request, so the name goes to *Buckets* instead (specs/s3-connection.md
+/// 1.1). The first segment of the path is the bucket; a query is dropped
+/// with the path.
+#[must_use]
+pub fn split_endpoint(text: &str) -> (String, Option<String>) {
+    let text = text.trim();
+    let host_at = text.find("://").map_or(0, |at| at + 3);
+    let Some(slash) = text[host_at..].find(['/', '?', '#']) else {
+        return (text.to_owned(), None);
+    };
+    let (endpoint, path) = text.split_at(host_at + slash);
+    let path = path.split(['?', '#']).next().unwrap_or_default();
+    let bucket = path
+        .split('/')
+        .map(str::trim)
+        .find(|segment| !segment.is_empty())
+        .map(str::to_owned);
+    (endpoint.to_owned(), bucket)
+}
+
+/// The endpoint and the bucket names of a connection's fields: the
+/// endpoint without its path, and the names of *Buckets* with the bucket
+/// the path named, when it is not among them already.
+pub(crate) fn endpoint_and_buckets(endpoint: &str, buckets: &str) -> (String, Vec<String>) {
+    let (endpoint, pasted) = split_endpoint(endpoint);
+    let mut names = bucket_names(buckets);
+    if let Some(bucket) = pasted
+        && !names.contains(&bucket)
+    {
+        names.push(bucket);
+    }
+    (endpoint, names)
+}
+
+/// What the dialogue does after an edit.
+///
+/// An endpoint that carries a path, once it is whole, is left clean and
+/// the bucket its path named joins *Buckets*; nothing is dropped silently
+/// (specs/s3-connection.md 1.1).
+///
+/// The provider is recognised from the endpoint's host as it is typed:
+/// its name shows by the endpoint, and the region and the addressing
+/// style it settles fill their fields where the user has not typed. An
+/// empty endpoint is AWS, where the user enters the region; a host no row
+/// of the table knows gets the generic form, with the schema's defaults
+/// (specs/s3-connection.md 1.3).
+#[must_use]
+pub fn react(form: &ConnectionForm<'_>) -> ConnectionReaction {
+    let mut reaction = ConnectionReaction::default();
+    let typed = form.get(field::ENDPOINT);
+    let mut endpoint = typed.to_owned();
+    if form.settled {
+        let (clean, buckets) = endpoint_and_buckets(typed, form.get(field::BUCKETS));
+        if clean != typed {
+            reaction.rewrite.push((field::ENDPOINT, clean.clone()));
+            reaction.rewrite.push((field::BUCKETS, buckets.join(", ")));
+            endpoint = clean;
+        }
+    }
+    // What the host does not settle starts at the schema's defaults: the
+    // region of AWS with an empty endpoint is the user's to enter.
+    let (region, path_style) = match recognise(&endpoint) {
+        Some(known) => {
+            reaction.notes.push((field::ENDPOINT, known.provider.get()));
+            (known.region, known.path_style)
+        }
+        None => (None, true),
+    };
+    reaction.fill.push((
+        field::REGION,
+        region.unwrap_or_else(|| DEFAULT_REGION.to_owned()),
+    ));
+    reaction
+        .fill
+        .push((field::PATH_STYLE, path_style.to_string()));
+    reaction.notes.push((field::BUCKETS, t!("s3-buckets-note")));
+    reaction
+}
+
 /// One connection as the user made it, and its client once built.
 struct Conn {
     settings: Connection,
+    /// Its endpoint without a path: a connection saved with a bucket's
+    /// address as its endpoint is read as the endpoint and that bucket.
+    endpoint: String,
+    /// The names of its *Buckets* field; empty when the root lists the
+    /// account's buckets.
+    buckets: Vec<String>,
     client: tokio::sync::Mutex<Option<Arc<S3Client>>>,
 }
 
@@ -120,8 +239,52 @@ impl S3Connections {
         lock(&self.conns).keys().cloned().collect()
     }
 
+    /// The buckets the connection `name` names in its *Buckets* field, in
+    /// the order typed; empty when it names none, and the root is then
+    /// filled from `ListBuckets`.
+    ///
+    /// # Errors
+    ///
+    /// `Error::NotFound` for a name the connector does not know.
+    pub fn buckets(&self, name: &str) -> Result<Vec<String>, Error> {
+        Ok(self.conn(name)?.buckets.clone())
+    }
+
+    /// The buckets at the root of the connection `name`: the names of its
+    /// *Buckets* field, as typed and without a request, or, with the
+    /// field empty, what `ListBuckets` answers (specs/s3-connection.md
+    /// 1.1). A key that may not list buckets gets in through the names.
+    pub(crate) async fn account_buckets(&self, name: &str) -> Result<Vec<Bucket>, Error> {
+        let named = self.buckets(name)?;
+        if named.is_empty() {
+            return self.client(name).await?.list_buckets().await;
+        }
+        Ok(named
+            .into_iter()
+            .map(|name| Bucket {
+                name,
+                created: None,
+            })
+            .collect())
+    }
+
     fn conn(&self, name: &str) -> Result<Arc<Conn>, Error> {
         lock(&self.conns).get(name).cloned().ok_or(Error::NotFound)
+    }
+
+    /// The secret key of the connection `name`, from the keychain.
+    async fn secret_of(&self, name: &str) -> Result<String, Error> {
+        let platform = Arc::clone(&self.platform);
+        let key = secret_key(PROVIDER_ID, name, field::SECRET_KEY);
+        ext::runtime::handle()
+            .spawn_blocking(move || platform.get_secret(&key))
+            .await
+            .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))))?
+            .ok_or_else(|| {
+                message(format!(
+                    "connection {name} has no secret key in the keychain"
+                ))
+            })
     }
 
     /// The client of `name`, built on first use with the secret from the
@@ -136,19 +299,9 @@ impl S3Connections {
         let access_key = settings
             .get(field::ACCESS_KEY)
             .ok_or_else(|| message(format!("connection {name} has no access key")))?;
-        let platform = Arc::clone(&self.platform);
-        let key = secret_key(PROVIDER_ID, name, field::SECRET_KEY);
-        let secret = ext::runtime::handle()
-            .spawn_blocking(move || platform.get_secret(&key))
-            .await
-            .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))))?
-            .ok_or_else(|| {
-                message(format!(
-                    "connection {name} has no secret key in the keychain"
-                ))
-            })?;
+        let secret = self.secret_of(name).await?;
         let client = Arc::new(S3Client::new(
-            settings.get(field::ENDPOINT).unwrap_or_default(),
+            &conn.endpoint,
             settings.get(field::REGION).unwrap_or_default(),
             access_key,
             &secret,
@@ -180,7 +333,13 @@ impl Connector for S3Connections {
                 .filter(|c| c.settings == connection)
                 .cloned();
             let conn = kept.unwrap_or_else(|| {
+                let (endpoint, buckets) = endpoint_and_buckets(
+                    connection.get(field::ENDPOINT).unwrap_or_default(),
+                    connection.get(field::BUCKETS).unwrap_or_default(),
+                );
                 Arc::new(Conn {
+                    endpoint,
+                    buckets,
                     settings: connection.clone(),
                     client: tokio::sync::Mutex::new(None),
                 })
@@ -190,9 +349,13 @@ impl Connector for S3Connections {
     }
 
     /// Builds the client and lists the buckets, so wrong credentials are
-    /// reported now.
+    /// reported now. A connection that names its buckets sends no request
+    /// (specs/s3-connection.md 1.1): its key may not be allowed to list.
     async fn connect(&self, name: &str) -> Result<(), Error> {
         let client = self.client(name).await?;
+        if !self.conn(name)?.buckets.is_empty() {
+            return Ok(());
+        }
         client.list_buckets().await.map(|_| ())
     }
 
@@ -207,5 +370,26 @@ impl Connector for S3Connections {
     fn is_connected(&self, name: &str) -> bool {
         self.conn(name)
             .is_ok_and(|conn| conn.client.try_lock().is_ok_and(|slot| slot.is_some()))
+    }
+
+    fn react(&self, form: &ConnectionForm<'_>) -> ConnectionReaction {
+        react(form)
+    }
+
+    fn checks(&self) -> Vec<String> {
+        crate::check::labels()
+    }
+
+    /// The four checks of specs/s3-connection.md 3.2 on the form's values.
+    /// The secret key is the one typed; in *Edit…*, left empty, it is the
+    /// keychain's, read and never written.
+    async fn test(&self, form: &ConnectionTestForm<'_>, cancel: &CancelToken) -> ConnectionTest {
+        let typed = form.get(field::SECRET_KEY);
+        let secret = match (typed.is_empty(), form.name) {
+            (false, _) => Ok(typed.to_owned()),
+            (true, Some(name)) => self.secret_of(name).await,
+            (true, None) => Err(message(t!("s3-test-no-secret"))),
+        };
+        crate::check::run(form, secret, ext::CHECK_TIMEOUT, cancel).await
     }
 }

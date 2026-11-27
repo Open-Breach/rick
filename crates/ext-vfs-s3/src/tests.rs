@@ -160,6 +160,19 @@ fn the_schema_names_the_fields_and_the_secret() {
     assert_eq!(schema.title.key(), "s3-s3");
     assert_eq!(schema.secret_fields().collect::<Vec<_>>(), ["secret_key"]);
     assert!(schema.field("access_key").is_some_and(|f| f.required));
+    assert!(schema.field("buckets").is_some_and(|f| !f.required));
+    assert_eq!(
+        schema.fields.iter().map(|f| f.key).collect::<Vec<_>>(),
+        [
+            "endpoint",
+            "region",
+            "access_key",
+            "secret_key",
+            "buckets",
+            "path_style"
+        ],
+        "the order of specs/s3-connection.md 1.3"
+    );
     assert!(matches!(
         schema.field("path_style").map(|f| &f.kind),
         Some(ConnectionFieldKind::Bool { default: true })
@@ -602,4 +615,1157 @@ fn a_refused_connection_is_a_lost_connection() {
         .unwrap_or_else(|| panic!("the request was answered"));
     let error = super::client::transport(failure);
     assert!(error.is_unreachable(), "{error}");
+}
+
+/// A local stand-in for an S3 service: it answers every request with what
+/// `answer` returns for the method and the path with its query, and keeps
+/// the request lines it saw. No real account is involved.
+pub(crate) struct FakeService {
+    /// `http://127.0.0.1:<port>`.
+    pub endpoint: String,
+    seen: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl FakeService {
+    pub(crate) fn start(
+        answer: impl Fn(&str, &str) -> (u16, String) + Send + Sync + 'static,
+    ) -> Self {
+        use std::io::{BufRead as _, BufReader, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("{e}"));
+        let port = listener
+            .local_addr()
+            .unwrap_or_else(|e| panic!("{e}"))
+            .port();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = BufReader::new(match stream.try_clone() {
+                    Ok(clone) => clone,
+                    Err(_) => continue,
+                });
+                let mut request = String::new();
+                if reader.read_line(&mut request).is_err() {
+                    continue;
+                }
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 0) && line != "\r\n" {
+                    line.clear();
+                }
+                let mut parts = request.split_whitespace();
+                let method = parts.next().unwrap_or_default().to_owned();
+                let target = parts.next().unwrap_or_default().to_owned();
+                log.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(format!("{method} {target}"));
+                let (status, body) = answer(&method, &target);
+                let body = if method == "HEAD" {
+                    String::new()
+                } else {
+                    body
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\ncontent-type: application/xml\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        Self {
+            endpoint: format!("http://127.0.0.1:{port}"),
+            seen,
+        }
+    }
+
+    /// The request lines so far, `GET /bucket?list-type=2…`.
+    pub(crate) fn seen(&self) -> Vec<String> {
+        self.seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// An S3 error body, as the services send it.
+pub(crate) fn error_body(code: &str, message: &str) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>{code}</Code><Message>{message}</Message></Error>"
+    )
+}
+
+/// A listing with the one object `key`.
+pub(crate) fn listing_body(key: &str) -> String {
+    format!(
+        "<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>{key}</Key><Size>3</Size><LastModified>2026-11-19T10:00:00.000Z</LastModified></Contents></ListBucketResult>"
+    )
+}
+
+/// A provider with the one connection `test` to `endpoint`, with the
+/// field `buckets` as typed.
+pub(crate) fn connected(endpoint: &str, buckets: &str) -> (Arc<S3Connections>, S3Provider) {
+    use platform::Secrets as _;
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let conns = Arc::new(S3Connections::new(fake.clone()));
+    let provider = S3Provider::new(Arc::clone(&conns));
+    let mut conn = ext::Connection {
+        name: "test".into(),
+        ..ext::Connection::default()
+    };
+    conn.settings.insert("endpoint".into(), endpoint.to_owned());
+    conn.settings.insert("access_key".into(), "key".into());
+    if !buckets.is_empty() {
+        conn.settings.insert("buckets".into(), buckets.to_owned());
+    }
+    fake.store_secret(
+        &ext::secret_key(PROVIDER_ID, "test", "secret_key"),
+        "secret",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    conns.update(vec![conn]);
+    (conns, provider)
+}
+
+/// The names a listing of `path` gives, or its error.
+pub(crate) async fn names_at(
+    provider: &S3Provider,
+    path: &str,
+    depth: ext::Depth,
+) -> Result<Vec<String>, types::Error> {
+    use futures::StreamExt as _;
+    let mut stream = provider.list(
+        &Location::new(PROVIDER_ID, path),
+        ext::ListOptions {
+            depth,
+            ..ext::ListOptions::default()
+        },
+        types::CancelToken::new(),
+    );
+    let mut names = Vec::new();
+    while let Some(batch) = stream.next().await {
+        names.extend(batch?.into_iter().map(|e| e.name));
+    }
+    Ok(names)
+}
+
+#[test]
+fn bucket_names_are_split_trimmed_deduplicated_and_kept_in_order() {
+    assert_eq!(
+        bucket_names(" packages , ,media,packages,, logs "),
+        ["packages", "media", "logs"]
+    );
+    assert_eq!(bucket_names(""), Vec::<String>::new());
+    assert_eq!(bucket_names(" , ,"), Vec::<String>::new());
+}
+
+/// specs/s3-connection.md 1.4, first line: a key that may not list buckets
+/// (every `ListBuckets` is refused here, as R2 refuses a bucket-scoped
+/// token) with the bucket named in *Buckets*: the root shows the bucket
+/// without a request, and opening it lists its objects.
+#[test]
+fn a_named_bucket_shows_at_the_root_without_a_request_and_opens() {
+    let service = FakeService::start(|_, target| {
+        if target == "/" {
+            (403, error_body("AccessDenied", "Access Denied"))
+        } else {
+            (200, listing_body("readme.txt"))
+        }
+    });
+    let (conns, provider) = connected(&service.endpoint, "packages, media");
+    runtime::block_on(async {
+        let root = names_at(&provider, "/test", ext::Depth::One).await;
+        assert_eq!(
+            root.unwrap_or_else(|e| panic!("{e}")),
+            ["packages", "media"]
+        );
+        // *Connect* sends nothing either.
+        conns
+            .connect("test")
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(conns.is_connected("test"));
+        assert!(service.seen().is_empty(), "{:?}", service.seen());
+        let inside = names_at(&provider, "/test/packages", ext::Depth::One).await;
+        assert_eq!(inside.unwrap_or_else(|e| panic!("{e}")), ["readme.txt"]);
+        // A bucket that is not in the list opens from the address bar too.
+        let other = names_at(&provider, "/test/elsewhere", ext::Depth::One).await;
+        assert_eq!(other.unwrap_or_else(|e| panic!("{e}")), ["readme.txt"]);
+        assert!(
+            service.seen().iter().all(|line| line != "GET /"),
+            "ListBuckets was called: {:?}",
+            service.seen()
+        );
+    });
+}
+
+/// The listing of unlimited depth beneath an account goes through the
+/// names too, without `ListBuckets`.
+#[test]
+fn everything_beneath_an_account_with_named_buckets_goes_through_the_names() {
+    let service = FakeService::start(|_, target| {
+        if target == "/" {
+            (403, error_body("AccessDenied", "Access Denied"))
+        } else if target.starts_with("/packages") {
+            (200, listing_body("a.txt"))
+        } else {
+            (200, listing_body("b.txt"))
+        }
+    });
+    let (_conns, provider) = connected(&service.endpoint, "packages,media");
+    runtime::block_on(async {
+        let all = names_at(&provider, "/test", ext::Depth::Unlimited).await;
+        assert_eq!(
+            all.unwrap_or_else(|e| panic!("{e}")),
+            ["packages", "media", "a.txt", "b.txt"]
+        );
+        assert!(service.seen().iter().all(|line| line != "GET /"));
+    });
+}
+
+/// specs/s3-connection.md 1.4: a key that may list, with *Buckets* empty,
+/// lists every bucket as before, and *Connect* asks the service.
+#[test]
+fn an_empty_buckets_field_lists_the_account_as_before() {
+    let service = FakeService::start(|_, _| {
+        (
+            200,
+            "<ListAllMyBucketsResult><Buckets><Bucket><Name>one</Name></Bucket><Bucket><Name>two</Name></Bucket></Buckets></ListAllMyBucketsResult>".to_owned(),
+        )
+    });
+    let (conns, provider) = connected(&service.endpoint, "");
+    runtime::block_on(async {
+        conns
+            .connect("test")
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        let root = names_at(&provider, "/test", ext::Depth::One).await;
+        assert_eq!(root.unwrap_or_else(|e| panic!("{e}")), ["one", "two"]);
+        assert_eq!(service.seen(), ["GET /", "GET /"]);
+    });
+}
+
+/// The plugin's English messages, as `register` hands them to the host.
+pub(crate) fn english() {
+    ext::Registry::new().translations(&[("en", include_str!("../locales/en.ftl"))]);
+}
+
+/// The message of listing `path` on a service that answers every request
+/// with `status` and the error `code`.
+fn refusal(status: u16, code: &'static str, buckets: &str, path: &str) -> String {
+    english();
+    let service = FakeService::start(move |_, _| (status, error_body(code, "as the service said")));
+    let (_conns, provider) = connected(&service.endpoint, buckets);
+    let error = runtime::block_on(names_at(&provider, path, ext::Depth::One))
+        .err()
+        .unwrap_or_else(|| panic!("{code} was not an error"));
+    assert!(
+        !matches!(error, types::Error::PermissionDenied),
+        "{code} was folded into a bare permission denied"
+    );
+    error.to_string()
+}
+
+/// specs/s3-connection.md 1.4, second line: a key that may not list
+/// buckets, with *Buckets* empty, gets the list-buckets message with the
+/// hint and the service's code, not a bare "permission denied". The test
+/// fails before the fix: every 403 was `Error::PermissionDenied`.
+#[test]
+fn a_refused_bucket_listing_names_the_buckets_field() {
+    let text = refusal(403, "AccessDenied", "", "/test");
+    assert!(text.contains("not allowed to list buckets"), "{text}");
+    assert!(text.contains("Buckets field"), "{text}");
+    assert!(text.contains("AccessDenied"), "{text}");
+}
+
+/// specs/s3-connection.md 1.4, third line, and the table of 1.2: each
+/// refusal has its own message with the service's code.
+#[test]
+fn each_refusal_has_its_own_message_with_the_service_s_code() {
+    let denied = refusal(403, "AccessDenied", "packages", "/test/packages");
+    assert!(
+        denied.contains("Access to this bucket or object was denied"),
+        "{denied}"
+    );
+    assert!(denied.contains("AccessDenied"), "{denied}");
+    assert!(!denied.contains("Buckets field"), "{denied}");
+
+    let key = refusal(403, "InvalidAccessKeyId", "", "/test");
+    assert!(key.contains("The access key is not recognised"), "{key}");
+    assert!(key.contains("InvalidAccessKeyId"), "{key}");
+
+    let secret = refusal(403, "SignatureDoesNotMatch", "", "/test");
+    assert!(secret.contains("usually a wrong secret key"), "{secret}");
+    assert!(secret.contains("SignatureDoesNotMatch"), "{secret}");
+
+    let missing = refusal(404, "NoSuchBucket", "pakages", "/test/pakages");
+    assert!(
+        missing.contains("The bucket does not exist; check the name"),
+        "{missing}"
+    );
+    assert!(missing.contains("NoSuchBucket"), "{missing}");
+
+    let other = refusal(503, "SlowDown", "", "/test");
+    assert!(
+        other.contains("SlowDown (503): as the service said"),
+        "{other}"
+    );
+}
+
+/// A missing key stays `NotFound`, which the kernel reads, and so does a
+/// 404 without a body, what a `HEAD` gets.
+#[test]
+fn a_missing_key_is_still_not_found() {
+    let service = FakeService::start(|method, _| {
+        if method == "HEAD" {
+            (404, String::new())
+        } else {
+            (
+                404,
+                error_body("NoSuchKey", "The specified key does not exist."),
+            )
+        }
+    });
+    let (_conns, provider) = connected(&service.endpoint, "");
+    runtime::block_on(async {
+        let bucket = provider
+            .stat(&Location::new(PROVIDER_ID, "/test/gone"))
+            .await;
+        assert!(matches!(bucket, Err(types::Error::NotFound)), "{bucket:?}");
+        let object = provider
+            .open_read(&Location::new(PROVIDER_ID, "/test/b/k"))
+            .await;
+        assert!(matches!(object.err(), Some(types::Error::NotFound)));
+    });
+}
+
+#[test]
+fn an_endpoint_is_split_into_the_endpoint_and_the_bucket_of_its_path() {
+    let split = |text: &str| {
+        let (endpoint, bucket) = split_endpoint(text);
+        (endpoint, bucket.unwrap_or_default())
+    };
+    assert_eq!(
+        split("https://abc123.r2.cloudflarestorage.com/packages"),
+        (
+            "https://abc123.r2.cloudflarestorage.com".into(),
+            "packages".into()
+        )
+    );
+    assert_eq!(
+        split(" https://abc123.r2.cloudflarestorage.com/packages/sub/key?x=1 "),
+        (
+            "https://abc123.r2.cloudflarestorage.com".into(),
+            "packages".into()
+        )
+    );
+    assert_eq!(
+        split("127.0.0.1:9000/media/"),
+        ("127.0.0.1:9000".into(), "media".into())
+    );
+    // A trailing slash names no bucket and is cleaned all the same.
+    assert_eq!(
+        split("http://127.0.0.1:9000/"),
+        ("http://127.0.0.1:9000".into(), String::new())
+    );
+    assert_eq!(
+        split("http://127.0.0.1:9000"),
+        ("http://127.0.0.1:9000".into(), String::new())
+    );
+    assert_eq!(split(""), (String::new(), String::new()));
+}
+
+/// The form of the S3 dialogue with these values, the endpoint just
+/// edited.
+fn reaction_to(values: &[(&str, &str)], edited: &[&str], settled: bool) -> ext::ConnectionReaction {
+    let values: std::collections::BTreeMap<String, String> = values
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+    let edited: std::collections::BTreeSet<String> =
+        edited.iter().map(|k| (*k).to_owned()).collect();
+    react(&ext::ConnectionForm {
+        values: &values,
+        edited: &edited,
+        changed: Some("endpoint"),
+        settled,
+    })
+}
+
+/// specs/s3-connection.md 1.4, sixth line, the dialogue's half: pasting an
+/// endpoint that ends in `/packages` leaves the endpoint clean and puts
+/// `packages` into *Buckets*, after the names already there.
+#[test]
+fn a_bucket_path_pasted_onto_the_endpoint_moves_to_the_buckets_field() {
+    let pasted = "https://abc123.r2.cloudflarestorage.com/packages";
+    let reaction = reaction_to(&[("endpoint", pasted)], &["endpoint"], true);
+    assert_eq!(
+        reaction.rewrite,
+        [
+            (
+                "endpoint",
+                "https://abc123.r2.cloudflarestorage.com".to_owned()
+            ),
+            ("buckets", "packages".to_owned())
+        ]
+    );
+    let reaction = reaction_to(
+        &[("endpoint", pasted), ("buckets", "media,packages , logs")],
+        &["endpoint", "buckets"],
+        true,
+    );
+    assert_eq!(
+        reaction.rewrite[1],
+        ("buckets", "media, packages, logs".to_owned())
+    );
+    let reaction = reaction_to(
+        &[("endpoint", pasted), ("buckets", "media")],
+        &["endpoint"],
+        true,
+    );
+    assert_eq!(
+        reaction.rewrite[1],
+        ("buckets", "media, packages".to_owned())
+    );
+    // While it is being typed the address stays under the cursor.
+    assert_eq!(
+        reaction_to(&[("endpoint", pasted)], &["endpoint"], false).rewrite,
+        []
+    );
+    // An endpoint without a path is left as typed.
+    let plain = "https://abc123.r2.cloudflarestorage.com";
+    assert_eq!(
+        reaction_to(&[("endpoint", plain)], &["endpoint"], true).rewrite,
+        []
+    );
+}
+
+/// specs/s3-connection.md 1.4, sixth line, the provider's half, and the
+/// connection saved before 0.6.1 with a path on its endpoint: the bucket
+/// of the path shows at the root, and the requests go to the endpoint
+/// without it. The test fails before the fix: the path was dropped and the
+/// root called `ListBuckets`.
+#[test]
+fn a_connection_saved_with_a_bucket_path_on_its_endpoint_opens_showing_that_bucket() {
+    let service = FakeService::start(|_, target| {
+        if target == "/" {
+            (403, error_body("AccessDenied", "Access Denied"))
+        } else {
+            (200, listing_body("readme.txt"))
+        }
+    });
+    let (conns, provider) = connected(&format!("{}/packages", service.endpoint), "");
+    assert_eq!(conns.buckets("test").unwrap_or_default(), ["packages"]);
+    runtime::block_on(async {
+        let root = names_at(&provider, "/test", ext::Depth::One).await;
+        assert_eq!(root.unwrap_or_else(|e| panic!("{e}")), ["packages"]);
+        assert!(service.seen().is_empty(), "{:?}", service.seen());
+        let inside = names_at(&provider, "/test/packages", ext::Depth::One).await;
+        assert_eq!(inside.unwrap_or_else(|e| panic!("{e}")), ["readme.txt"]);
+        let seen = service.seen();
+        assert!(seen[0].starts_with("GET /packages/?"), "{seen:?}");
+    });
+}
+
+/// What an endpoint is recognised as: the provider's name, the region and
+/// whether path-style is on.
+fn recognised(endpoint: &str) -> Option<(String, Option<String>, bool)> {
+    english();
+    recognise(endpoint).map(|r| (r.provider.get(), r.region, r.path_style))
+}
+
+/// The table of specs/s3-connection.md 1.3, each row as the provider's own
+/// documentation has it.
+#[test]
+fn providers_are_recognised_from_the_endpoint_host() {
+    let known = |endpoint: &str, name: &str, region: &str, path_style: bool| {
+        assert_eq!(
+            recognised(endpoint),
+            Some((name.to_owned(), Some(region.to_owned()), path_style)),
+            "{endpoint}"
+        );
+    };
+    assert_eq!(recognised(""), Some(("Amazon S3".into(), None, false)));
+    known(
+        "https://s3.eu-central-1.amazonaws.com",
+        "Amazon S3",
+        "eu-central-1",
+        false,
+    );
+    known(
+        "s3.dualstack.us-west-2.amazonaws.com",
+        "Amazon S3",
+        "us-west-2",
+        false,
+    );
+    known("https://s3.amazonaws.com", "Amazon S3", "us-east-1", false);
+    known(
+        "https://abc123.r2.cloudflarestorage.com",
+        "Cloudflare R2",
+        "auto",
+        true,
+    );
+    known(
+        "https://ABC123.eu.r2.cloudflarestorage.com/packages",
+        "Cloudflare R2",
+        "auto",
+        true,
+    );
+    known(
+        "https://s3.us-west-004.backblazeb2.com",
+        "Backblaze B2",
+        "us-west-004",
+        true,
+    );
+    known(
+        "https://s3.eu-central-1.wasabisys.com",
+        "Wasabi",
+        "eu-central-1",
+        true,
+    );
+    known("https://s3.wasabisys.com", "Wasabi", "us-east-1", true);
+    known(
+        "https://s3.nl-1.wasabisys.com",
+        "Wasabi",
+        "eu-central-1",
+        true,
+    );
+    known(
+        "https://nyc3.digitaloceanspaces.com",
+        "DigitalOcean Spaces",
+        "nyc3",
+        true,
+    );
+    known("https://s3.fr-par.scw.cloud", "Scaleway", "fr-par", true);
+    known(
+        "https://s3.gra.io.cloud.ovh.net:443",
+        "OVHcloud",
+        "gra",
+        true,
+    );
+    known(
+        "https://storage.googleapis.com",
+        "Google Cloud Storage (S3-compatible)",
+        "auto",
+        true,
+    );
+    // Anything else is the generic form.
+    for unknown in [
+        "http://127.0.0.1:9000",
+        "https://minio.example.org",
+        "https://r2.cloudflarestorage.com",
+        "https://s3.a.b.amazonaws.com",
+        "https://evil-r2.cloudflarestorage.com.example.org",
+        "https://fsn1.your-objectstorage.com",
+    ] {
+        assert_eq!(recognised(unknown), None, "{unknown}");
+    }
+    for row in TABLE {
+        assert!(row.source.starts_with("https://"), "{row:?}");
+    }
+}
+
+/// What the dialogue's reaction fills and notes for these values.
+fn filled(
+    values: &[(&str, &str)],
+    edited: &[&str],
+) -> (Vec<(&'static str, String)>, Option<String>) {
+    english();
+    let reaction = reaction_to(values, edited, true);
+    let note = reaction
+        .notes
+        .iter()
+        .find(|(key, _)| *key == "endpoint")
+        .map(|(_, note)| note.clone());
+    let values: std::collections::BTreeMap<String, String> = values
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+    let edited: std::collections::BTreeSet<String> =
+        edited.iter().map(|k| (*k).to_owned()).collect();
+    let mut after = values.clone();
+    reaction.apply(&mut after, &edited);
+    let changed = ["endpoint", "region", "buckets", "path_style"]
+        .into_iter()
+        .filter_map(|key| after.get(key).map(|value| (key, value.clone())))
+        .collect();
+    (changed, note)
+}
+
+/// specs/s3-connection.md 1.4, fifth line: pasting an R2 endpoint sets
+/// region `auto` and path style on and shows *Cloudflare R2*; a hand-typed
+/// region is left alone.
+#[test]
+fn an_r2_endpoint_settles_region_and_path_style_and_leaves_a_typed_region_alone() {
+    let r2 = "https://abc123.r2.cloudflarestorage.com";
+    let (values, note) = filled(
+        &[
+            ("endpoint", r2),
+            ("region", "us-east-1"),
+            ("path_style", "false"),
+        ],
+        &["endpoint"],
+    );
+    assert_eq!(note.as_deref(), Some("Cloudflare R2"));
+    assert_eq!(
+        values,
+        [
+            ("endpoint", r2.to_owned()),
+            ("region", "auto".to_owned()),
+            ("path_style", "true".to_owned())
+        ]
+    );
+    let (values, note) = filled(
+        &[
+            ("endpoint", r2),
+            ("region", "weur"),
+            ("path_style", "false"),
+        ],
+        &["endpoint", "region", "path_style"],
+    );
+    assert_eq!(note.as_deref(), Some("Cloudflare R2"));
+    assert_eq!(values[1], ("region", "weur".to_owned()));
+    assert_eq!(values[2], ("path_style", "false".to_owned()));
+}
+
+/// The sixth line of 1.4 in one step: the bucket's address pasted whole is
+/// recognised by its host, and the name goes to *Buckets*.
+#[test]
+fn an_r2_bucket_address_is_recognised_and_taken_apart_at_once() {
+    let (values, note) = filled(
+        &[
+            (
+                "endpoint",
+                "https://abc123.r2.cloudflarestorage.com/packages",
+            ),
+            ("region", "us-east-1"),
+        ],
+        &["endpoint"],
+    );
+    assert_eq!(note.as_deref(), Some("Cloudflare R2"));
+    assert_eq!(
+        values,
+        [
+            (
+                "endpoint",
+                "https://abc123.r2.cloudflarestorage.com".to_owned()
+            ),
+            ("region", "auto".to_owned()),
+            ("buckets", "packages".to_owned()),
+            ("path_style", "true".to_owned())
+        ]
+    );
+}
+
+/// An empty endpoint is AWS, and a host nothing knows is the generic form:
+/// both start from the schema's region, and what recognition had filled
+/// for another host does not stay behind.
+#[test]
+fn an_empty_endpoint_is_aws_and_an_unknown_host_is_the_generic_form() {
+    let (values, note) = filled(
+        &[("endpoint", ""), ("region", "auto"), ("path_style", "true")],
+        &[],
+    );
+    assert_eq!(note.as_deref(), Some("Amazon S3"));
+    assert_eq!(
+        values[1..],
+        [
+            ("region", "us-east-1".to_owned()),
+            ("path_style", "false".to_owned())
+        ]
+    );
+    let (values, note) = filled(
+        &[
+            ("endpoint", "http://127.0.0.1:9000"),
+            ("region", "auto"),
+            ("path_style", "false"),
+        ],
+        &["endpoint"],
+    );
+    assert_eq!(note, None);
+    assert_eq!(
+        values[1..],
+        [
+            ("region", "us-east-1".to_owned()),
+            ("path_style", "true".to_owned())
+        ]
+    );
+}
+
+/// The fields of specs/s3-connection.md 1.1 and the messages of 1.2
+/// against a real store (issue 309): `MinIO` as the round trip uses it,
+/// with its administrator's key, which may list buckets. The refusals a
+/// bucket-scoped key meets are in the tests above, against a local server
+/// that answers with the service's own error body. Skips with a note
+/// without `RICK_S3_ENDPOINT`, and fails instead under
+/// `RICK_REQUIRE_CONTAINERS`.
+#[test]
+// One scenario against one store, start to finish.
+#[allow(clippy::too_many_lines)]
+fn against_a_store_named_buckets_show_without_listing_and_refusals_keep_their_code() {
+    use platform::Secrets as _;
+
+    let Ok(endpoint) = std::env::var("RICK_S3_ENDPOINT") else {
+        eprintln!("RICK_S3_ENDPOINT is not set: no S3 store to test against; skipped");
+        assert!(
+            std::env::var_os("RICK_REQUIRE_CONTAINERS").is_none(),
+            "RICK_REQUIRE_CONTAINERS is set but RICK_S3_ENDPOINT is not"
+        );
+        return;
+    };
+    english();
+    let access = std::env::var("RICK_S3_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".into());
+    let secret = std::env::var("RICK_S3_SECRET_KEY").unwrap_or_else(|_| "minioadmin".into());
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let bucket = format!("rick-named-{stamp}");
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let conns = Arc::new(S3Connections::new(fake.clone()));
+    let provider = S3Provider::new(Arc::clone(&conns));
+    // admin: lists; named: the same key with the bucket and a mistyped one
+    // named; pasted: the bucket's address as the endpoint; badkey and
+    // badsecret: wrong credentials.
+    let connection = |name: &str, endpoint: &str, access: &str, secret: &str, buckets: &str| {
+        let mut conn = ext::Connection {
+            name: name.into(),
+            ..ext::Connection::default()
+        };
+        conn.settings.insert("endpoint".into(), endpoint.to_owned());
+        conn.settings.insert("access_key".into(), access.to_owned());
+        if !buckets.is_empty() {
+            conn.settings.insert("buckets".into(), buckets.to_owned());
+        }
+        fake.store_secret(&ext::secret_key(PROVIDER_ID, name, "secret_key"), secret)
+            .unwrap_or_else(|e| panic!("{e}"));
+        conn
+    };
+    let missing = format!("rick-missing-{stamp}");
+    conns.update(vec![
+        connection("admin", &endpoint, &access, &secret, ""),
+        connection(
+            "named",
+            &endpoint,
+            &access,
+            &secret,
+            &format!("{bucket}, {missing}"),
+        ),
+        connection(
+            "pasted",
+            &format!("{endpoint}/{bucket}"),
+            &access,
+            &secret,
+            "",
+        ),
+        connection("badkey", &endpoint, "rick-no-such-key", &secret, ""),
+        connection("badsecret", &endpoint, &access, "rick-wrong-secret", ""),
+    ]);
+    let at = |path: &str| Location::new(PROVIDER_ID, path);
+    runtime::block_on(async {
+        provider
+            .create_dir(&at(&format!("/admin/{bucket}")))
+            .await
+            .unwrap_or_else(|e| panic!("create bucket: {e}"));
+
+        // An admin key with *Buckets* empty lists every bucket, as before.
+        let all = names_at(&provider, "/admin", ext::Depth::One).await;
+        assert!(all.unwrap_or_else(|e| panic!("{e}")).contains(&bucket));
+
+        // Named buckets are the root, as typed, and open.
+        let named = names_at(&provider, "/named", ext::Depth::One).await;
+        assert_eq!(
+            named.unwrap_or_else(|e| panic!("{e}")),
+            [bucket.clone(), missing.clone()]
+        );
+        let inside = names_at(&provider, &format!("/named/{bucket}"), ext::Depth::One).await;
+        assert_eq!(
+            inside.unwrap_or_else(|e| panic!("{e}")),
+            Vec::<String>::new()
+        );
+        // A name that was saved all the same is reported when it is
+        // opened, with the service's reason.
+        let gone = names_at(&provider, &format!("/named/{missing}"), ext::Depth::One)
+            .await
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(gone.contains("NoSuchBucket"), "{gone}");
+        assert!(gone.contains("does not exist"), "{gone}");
+
+        // The bucket's address as the endpoint: the root shows the bucket.
+        let pasted = names_at(&provider, "/pasted", ext::Depth::One).await;
+        assert_eq!(
+            pasted.unwrap_or_else(|e| panic!("{e}")),
+            std::slice::from_ref(&bucket)
+        );
+        let inside = names_at(&provider, &format!("/pasted/{bucket}"), ext::Depth::One).await;
+        assert_eq!(
+            inside.unwrap_or_else(|e| panic!("{e}")),
+            Vec::<String>::new()
+        );
+
+        // Wrong credentials say which they were.
+        let key = conns.connect("badkey").await.err().map(|e| e.to_string());
+        let key = key.unwrap_or_default();
+        assert!(key.contains("InvalidAccessKeyId"), "{key}");
+        assert!(key.contains("not recognised"), "{key}");
+        let sig = conns
+            .connect("badsecret")
+            .await
+            .err()
+            .map(|e| e.to_string());
+        let sig = sig.unwrap_or_default();
+        assert!(sig.contains("SignatureDoesNotMatch"), "{sig}");
+        assert!(sig.contains("wrong secret key"), "{sig}");
+
+        provider
+            .remove(&at(&format!("/admin/{bucket}")), ext::RemoveMode::Permanent)
+            .await
+            .unwrap_or_else(|e| panic!("remove bucket: {e}"));
+    });
+}
+
+/// One check of a test's result, for an assertion: the label, the outcome
+/// and the detail.
+type Line = (String, ext::CheckOutcome, String);
+
+/// Runs the connection test on a form for `endpoint` with *Buckets* as
+/// typed, the secret typed, and each check limited to `limit`.
+fn tested(
+    endpoint: &str,
+    buckets: &str,
+    limit: Duration,
+    cancel: &types::CancelToken,
+) -> (bool, Vec<Line>) {
+    english();
+    let mut values = std::collections::BTreeMap::from([
+        ("endpoint".to_owned(), endpoint.to_owned()),
+        ("access_key".to_owned(), "key".to_owned()),
+        ("secret_key".to_owned(), "typed-secret".to_owned()),
+    ]);
+    if !buckets.is_empty() {
+        values.insert("buckets".to_owned(), buckets.to_owned());
+    }
+    let form = ext::ConnectionTestForm {
+        name: None,
+        values: &values,
+    };
+    let result = runtime::block_on(super::check::run(
+        &form,
+        Ok("typed-secret".to_owned()),
+        limit,
+        cancel,
+    ));
+    let lines = result
+        .checks
+        .into_iter()
+        .map(|c| (c.label, c.outcome, c.detail))
+        .collect();
+    (result.good, lines)
+}
+
+fn test_of(endpoint: &str, buckets: &str) -> (bool, Vec<Line>) {
+    tested(
+        endpoint,
+        buckets,
+        Duration::from_secs(10),
+        &types::CancelToken::new(),
+    )
+}
+
+/// A service like R2 for a bucket-scoped key: `ListBuckets` is refused,
+/// the bucket `packages` lists, every other bucket does not exist.
+fn scoped_service() -> FakeService {
+    FakeService::start(|_, target| {
+        if target == "/" {
+            (403, error_body("AccessDenied", "Access Denied"))
+        } else if target.starts_with("/packages/") {
+            (200, listing_body("readme.txt"))
+        } else {
+            (
+                404,
+                error_body("NoSuchBucket", "The specified bucket does not exist."),
+            )
+        }
+    })
+}
+
+const REACHABLE: &str = "The host is reachable";
+const CREDENTIALS: &str = "The credentials are accepted";
+const LIST: &str = "The key may list buckets";
+
+fn outcomes(lines: &[Line]) -> Vec<(&str, ext::CheckOutcome)> {
+    lines
+        .iter()
+        .map(|(label, outcome, _)| (label.as_str(), *outcome))
+        .collect()
+}
+
+/// specs/s3-connection.md 3.6, first line: a bucket-scoped key with the
+/// bucket named is a good test, and the list-buckets line shows as
+/// information. The test only reads: every request is a `GET`.
+#[test]
+fn a_scoped_key_with_its_bucket_named_tests_good_with_the_listing_as_information() {
+    use ext::CheckOutcome::{Info, Passed};
+    let service = scoped_service();
+    let (good, lines) = test_of(&service.endpoint, "packages");
+    assert!(good, "{lines:?}");
+    assert_eq!(
+        outcomes(&lines),
+        [
+            (REACHABLE, Passed),
+            (CREDENTIALS, Passed),
+            (LIST, Info),
+            ("The bucket packages can be opened", Passed)
+        ]
+    );
+    assert!(lines[2].2.contains("may not list buckets"), "{lines:?}");
+    assert!(lines[2].2.contains("AccessDenied"), "{lines:?}");
+    let seen = service.seen();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(seen[0], "GET /");
+    assert!(seen[1].starts_with("GET /packages/?"), "{seen:?}");
+    assert!(seen[1].contains("max-keys=1"), "{seen:?}");
+}
+
+/// specs/s3-connection.md 3.6, second line, first case: the same key with
+/// *Buckets* empty is not good, and says to add bucket names.
+#[test]
+fn a_scoped_key_without_bucket_names_tests_not_good_with_the_hint() {
+    use ext::CheckOutcome::{Failed, Passed};
+    let service = scoped_service();
+    let (good, lines) = test_of(&service.endpoint, "");
+    assert!(!good);
+    assert_eq!(
+        outcomes(&lines),
+        [(REACHABLE, Passed), (CREDENTIALS, Passed), (LIST, Failed)]
+    );
+    assert!(lines[2].2.contains("Buckets field"), "{lines:?}");
+    assert!(lines[2].2.contains("AccessDenied"), "{lines:?}");
+}
+
+/// 3.6, second line: a wrong secret fails the credentials with the
+/// service's code, and the checks that depend on it are not run.
+#[test]
+fn a_wrong_secret_fails_the_credentials_and_the_rest_is_not_run() {
+    use ext::CheckOutcome::{Failed, NotRun, Passed};
+    let service = FakeService::start(|_, _| {
+        (
+            403,
+            error_body(
+                "SignatureDoesNotMatch",
+                "The request signature we calculated does not match.",
+            ),
+        )
+    });
+    let (good, lines) = test_of(&service.endpoint, "packages, media");
+    assert!(!good);
+    assert_eq!(
+        outcomes(&lines),
+        [
+            (REACHABLE, Passed),
+            (CREDENTIALS, Failed),
+            (LIST, NotRun),
+            ("The bucket packages can be opened", NotRun),
+            ("The bucket media can be opened", NotRun)
+        ]
+    );
+    assert!(lines[1].2.contains("SignatureDoesNotMatch"), "{lines:?}");
+    assert!(lines[1].2.contains("wrong secret key"), "{lines:?}");
+    assert_eq!(
+        service.seen(),
+        ["GET /"],
+        "nothing is asked after the refusal"
+    );
+    let unknown = FakeService::start(|_, _| {
+        (
+            403,
+            error_body("InvalidAccessKeyId", "The key does not exist."),
+        )
+    });
+    let (good, lines) = test_of(&unknown.endpoint, "");
+    assert!(!good);
+    assert!(lines[1].2.contains("InvalidAccessKeyId"), "{lines:?}");
+}
+
+/// 3.6, second line: a mistyped bucket name is caught per name, whether
+/// or not the key may list buckets.
+#[test]
+fn a_mistyped_bucket_name_is_caught_per_name_either_way() {
+    use ext::CheckOutcome::{Failed, Info, Passed};
+    let service = scoped_service();
+    let (good, lines) = test_of(&service.endpoint, "packages, pakages");
+    assert!(!good);
+    assert_eq!(
+        outcomes(&lines),
+        [
+            (REACHABLE, Passed),
+            (CREDENTIALS, Passed),
+            (LIST, Info),
+            ("The bucket packages can be opened", Passed),
+            ("The bucket pakages can be opened", Failed)
+        ]
+    );
+    assert!(lines[4].2.contains("NoSuchBucket"), "{lines:?}");
+    assert!(lines[4].2.contains("does not exist"), "{lines:?}");
+
+    // A key that may list buckets: the name is checked all the same.
+    let admin = FakeService::start(|_, target| {
+        if target == "/" {
+            (
+                200,
+                "<ListAllMyBucketsResult><Buckets/></ListAllMyBucketsResult>".to_owned(),
+            )
+        } else {
+            (403, error_body("AccessDenied", "Access Denied"))
+        }
+    });
+    let (good, lines) = test_of(&admin.endpoint, "private");
+    assert!(!good);
+    assert_eq!(lines[2].1, Passed);
+    assert_eq!(lines[3].1, Failed);
+    assert!(
+        lines[3]
+            .2
+            .contains("Access to this bucket or object was denied"),
+        "{lines:?}"
+    );
+}
+
+/// 3.6, second line: a host that cannot be reached fails the first check,
+/// and nothing else is run.
+#[test]
+fn an_unreachable_host_fails_the_first_check_and_the_rest_is_not_run() {
+    use ext::CheckOutcome::{Failed, NotRun};
+    let (good, lines) = test_of(&format!("http://{}", refusing_address()), "packages");
+    assert!(!good);
+    assert_eq!(
+        outcomes(&lines),
+        [
+            (REACHABLE, Failed),
+            (CREDENTIALS, NotRun),
+            (LIST, NotRun),
+            ("The bucket packages can be opened", NotRun)
+        ]
+    );
+    assert_ne!(lines[0].2, "");
+    // An endpoint that is no address fails there too.
+    let (good, lines) = test_of("http://", "");
+    assert!(!good);
+    assert_eq!(lines[0].1, Failed);
+}
+
+/// 3.6, fourth line: a key that may list buckets, with *Buckets* empty,
+/// is a good test.
+#[test]
+fn an_admin_key_without_bucket_names_tests_good() {
+    use ext::CheckOutcome::Passed;
+    let service = FakeService::start(|_, _| {
+        (
+            200,
+            "<ListAllMyBucketsResult><Buckets/></ListAllMyBucketsResult>".to_owned(),
+        )
+    });
+    let (good, lines) = test_of(&service.endpoint, "");
+    assert!(good);
+    assert_eq!(
+        outcomes(&lines),
+        [(REACHABLE, Passed), (CREDENTIALS, Passed), (LIST, Passed)]
+    );
+    assert_eq!(service.seen(), ["GET /"]);
+}
+
+/// specs/s3-connection.md 3.5: a check gives up after its time limit, and
+/// a cancelled test ends at once with the rest not run.
+#[test]
+fn a_check_gives_up_after_its_limit_and_a_cancelled_test_ends_at_once() {
+    use ext::CheckOutcome::{Failed, NotRun};
+    let silent = FakeService::start(|_, _| {
+        std::thread::sleep(Duration::from_secs(3));
+        (200, String::new())
+    });
+    let started = std::time::Instant::now();
+    let (good, lines) = tested(
+        &silent.endpoint,
+        "packages",
+        Duration::from_millis(200),
+        &types::CancelToken::new(),
+    );
+    assert!(!good);
+    assert_eq!(lines[0].1, Failed);
+    assert!(lines[0].2.contains("No answer within"), "{lines:?}");
+    assert_eq!(lines[3].1, NotRun);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+
+    let cancel = types::CancelToken::new();
+    let later = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        later.cancel();
+    });
+    let started = std::time::Instant::now();
+    let (good, lines) = tested(
+        &silent.endpoint,
+        "packages",
+        Duration::from_secs(10),
+        &cancel,
+    );
+    assert!(!good);
+    assert!(
+        lines.iter().all(|(_, outcome, _)| *outcome == NotRun),
+        "{lines:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// specs/s3-connection.md 3.1 and 3.5 through the connector: in *Edit…* a
+/// secret left empty is the keychain's, a typed secret is used and stored
+/// nowhere, and *Add* without a secret says so.
+#[test]
+fn the_connector_tests_with_the_typed_secret_or_the_keychain_s_and_stores_nothing() {
+    use ext::Connector as _;
+    english();
+    let service = scoped_service();
+    let (conns, _provider) = connected(&service.endpoint, "");
+    assert_eq!(conns.checks().len(), 4);
+    let run = |name: Option<&str>, secret: &str| {
+        let mut values = std::collections::BTreeMap::from([
+            ("endpoint".to_owned(), service.endpoint.clone()),
+            ("access_key".to_owned(), "key".to_owned()),
+            ("buckets".to_owned(), "packages".to_owned()),
+        ]);
+        if !secret.is_empty() {
+            values.insert("secret_key".to_owned(), secret.to_owned());
+        }
+        let form = ext::ConnectionTestForm {
+            name,
+            values: &values,
+        };
+        assert!(!format!("{form:?}").contains("typed-secret"));
+        runtime::block_on(conns.test(&form, &types::CancelToken::new()))
+    };
+    // Edit, secret left empty: the keychain's stands in.
+    assert!(run(Some("test"), "").good);
+    // A typed secret, in Add and in Edit.
+    assert!(run(None, "typed-secret").good);
+    assert!(run(Some("test"), "typed-secret").good);
+    // Add without a secret, and Edit of a connection the keychain has
+    // nothing for: the first check says what is missing.
+    let missing = run(None, "");
+    assert!(!missing.good);
+    assert_eq!(missing.checks[0].outcome, ext::CheckOutcome::Failed);
+    assert!(
+        missing.checks[0].detail.contains("secret key"),
+        "{missing:?}"
+    );
+    assert!(!run(Some("nobody"), "").good);
+    // The test builds its own client and leaves the connection's alone.
+    assert!(!conns.is_connected("test"), "the test left a client behind");
 }

@@ -47,7 +47,7 @@ NFS v3/v4, SMB/CIFS, CephFS, GlusterFS, SSHFS (FUSE) and 9p are mounted by the O
 
 | Service | Plugin | Notes |
 | --- | --- | --- |
-| AWS S3, Cloudflare R2, MinIO and other S3-compatible stores | `ext-vfs-s3` | One plugin with an endpoint setting; flat keys shown as folders by prefix |
+| AWS S3, Cloudflare R2, MinIO and other S3-compatible stores | `ext-vfs-s3` | One plugin with an endpoint setting; flat keys shown as folders by prefix; a connection can name its buckets, for a key that may not list them, and the provider is recognised from the endpoint (`specs/s3-connection.md`) |
 | Azure Blob | `ext-vfs-azure` | Containers as top-level folders |
 | Google Cloud Storage | `ext-vfs-gcs` | Buckets as top-level folders |
 

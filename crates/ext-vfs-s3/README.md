@@ -13,9 +13,15 @@ bucket or across two buckets, runs on the service as a `CopyObject` per
 object (and a delete for a move) through `transfer()` under
 `NATIVE_TRANSFER`, so nothing streams through the machine. Accounts are
 made from the Cloud section's *Add connection…* dialogue, whose fields the
-plugin's `Connector` declares (endpoint, region, access key and the
-addressing style in `rick.toml`; the secret key in the platform keychain
-through `platform::Secrets`). Requests carry Signature Version 4 and travel
+plugin's `Connector` declares (endpoint, region, access key, the optional
+bucket names and the addressing style in `rick.toml`; the secret key in the
+platform keychain through `platform::Secrets`). A connection that names its
+buckets shows those names at its root without asking the service, which is
+how a key that may not list buckets gets in. The dialogue recognises the
+provider from the endpoint's host (a small table in `recognition.rs`, one
+row per provider, each checked against the provider's documentation), shows
+its name by the endpoint and fills the region and the addressing style
+where the user has not typed. Requests carry Signature Version 4 and travel
 over rustls with ring. The store is a remote-latency mount (`REMOTE`): no
 thumbnails, no watch, the kernel polls.
 It is a plugin (`plugins/vfs-s3/`) that depends on `ext` and `types` only;

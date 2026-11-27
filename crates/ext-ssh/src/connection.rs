@@ -1245,6 +1245,27 @@ impl Connector for SshConnector {
         schema
     }
 
+    /// What there is to say about four of the fields, under each: the
+    /// labels stay short (SPEC.md *Connection dialogue*). The form itself
+    /// stays as typed.
+    fn react(&self, _form: &ext::ConnectionForm<'_>) -> ext::ConnectionReaction {
+        ext::ConnectionReaction {
+            notes: vec![
+                (
+                    field::REMEMBER_PASSWORD,
+                    ext::t!("ssh-remember-password-note"),
+                ),
+                (field::PREVIEW_CAP, ext::t!("ssh-preview-size-cap-note")),
+                (field::PREVIEW_ALWAYS, ext::t!("ssh-always-preview-note")),
+                (
+                    field::PASSPHRASE,
+                    ext::t!("ssh-identity-file-passphrase-note"),
+                ),
+            ],
+            ..ext::ConnectionReaction::default()
+        }
+    }
+
     /// Replaces Rick's hosts; the connections of hosts that went, or whose
     /// settings changed, are closed.
     fn update(&self, connections: Vec<Connection>) {

@@ -2272,6 +2272,7 @@ impl RickUi {
             || self.drive_properties.is_open()
             || self.hash.is_open()
             || self.integration.is_open()
+            || self.side.connection.is_some()
             || !self.app.model().conflicts.is_empty()
             || !self.app.model().questions.is_empty()
     }

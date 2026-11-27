@@ -7,6 +7,108 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-27
+
+An S3 connection works with a key that may not list buckets, such as a
+bucket-scoped Cloudflare R2 token: the connection names its buckets, and
+a refusal says what it was. A cloud connection is tested before it is
+saved. The connection dialogues and the overviews of This Machine,
+Network and Cloud follow the style guide. The extension API is 25: a
+plugin built for 0.6.0 is refused until it is rebuilt.
+
+### Added
+
+- **S3: a *Buckets* field for keys that may not list buckets.** A
+  connection can name its buckets, separated by commas. Its root then
+  shows exactly those names, without asking the service, which is the way
+  in for a bucket-scoped Cloudflare R2 token or an AWS key limited to one
+  bucket. With the field empty the root lists the account's buckets as
+  before, and `s3:/<connection>/<bucket>` in the address bar opens a
+  bucket whether or not it is named (#312).
+- S3: the provider is recognised from the endpoint as it is typed or
+  pasted. Its name shows under the endpoint, and the region and the
+  addressing style fill in where nothing was typed: Amazon S3, Cloudflare
+  R2, Backblaze B2, Wasabi, DigitalOcean Spaces, Scaleway, OVHcloud and
+  Google Cloud Storage through its S3-compatible API. An empty endpoint
+  is AWS; any other host gets the full form as before. A value typed by
+  hand is never replaced (#316).
+- The extension API is 24 (#315): a connection dialogue can react while
+  the user types. `ext::Connector` gained `react`, with a default: the
+  dialogue hands it the form after each edit, and the plugin may fill
+  fields the user has not edited, move pasted input into the fields it
+  belongs to and put a short note by a field. A plugin that does not
+  react is only rebuilt.
+- **A cloud connection is tested before it is saved.** The *Add
+  connection…* and *Edit…* dialogues of S3, Azure Blob and Google Cloud
+  Storage have a *Test* button, which tests what is in the form and
+  saves nothing. *Add* and *Save* run the test first: a good test saves
+  and closes; one that is not good keeps the dialogue open with its
+  checks, each passed, failed with the service's code and reason, or not
+  run, and offers *Save anyway* beside going back to the fields. A test
+  only reads, each check gives up after ten seconds, and the test can be
+  cancelled (#320).
+- S3 tests four things: the host is reachable, the credentials are
+  accepted, the key may list buckets, and each bucket named in *Buckets*
+  can be opened. With buckets named, a key that may not list them is a
+  note and not a failure; with none it fails with the hint to name them
+  (#322).
+- Azure Blob and Google Cloud Storage test three things each: the host
+  is reachable, the credentials are accepted, and the containers or
+  buckets can be listed (#323).
+- The extension API is 25 (#320): a connection can be tested.
+  `ext::Connector` gained `checks` and `test`, both with defaults. A
+  plugin without a test shows no *Test* button and is saved as before;
+  it is only rebuilt.
+
+### Changed
+
+- The first button of a connection dialogue reads *Add*, or *Save* when
+  editing; it read *OK* (#322).
+- **The connection dialogues follow the style guide.** *Add
+  connection…* and *Edit…* of S3, Azure Blob, Google Cloud Storage and
+  SSH are one dialogue in the frame of the others: a header with the
+  section's icon, the title and the section or the connection's name;
+  the fields in a grid, labels left of their controls and every control
+  as wide as its column; a footer with *Test*, *Cancel* and *Add* or
+  *Save*. The connection test is a card with a row per check, and a
+  refused save says why inside the dialogue. The long SSH form scrolls
+  while header and footer stay (#326).
+- The labels of the connection dialogues are short, and what a label
+  said in brackets stands under its field: *Endpoint* in place of
+  *Endpoint (empty for AWS)*, *Preview size cap* with *In MiB. 0 for the
+  default.* under it. No setting changed its key (#326).
+- The Cloud overview and the connections of the Network overview are
+  drawn with the table of the details view: the columns fit their
+  content, a drag on a divider resizes, a double-click fits again. A
+  connection's name is no longer cut to an ellipsis (#327).
+- The drive table of This Machine, and of the mounted shares in the
+  Network overview, is that table too: the same header, columns that
+  fit, resize by dragging and fit again on a double-click (#330).
+- A Cloud or Network overview without a connection is a centred screen
+  with a button for each kind of connection, which opens its *Add
+  connection…* dialogue right there (#330).
+
+### Fixed
+
+- A debug log no longer holds a connection's secret. Adding or editing
+  a connection wrote the command with all its values, the secret key or
+  password among them, into the log at debug level. The log now names
+  the fields and no value. A log written at debug level by 0.6.0 or
+  earlier may hold such a secret (#320).
+- Escape closes a connection dialogue. The side panel behind the
+  dialogue took the key, and Enter with it (#326).
+- S3: a refusal says what it was. Every 403 used to read "permission
+  denied"; now a key that may not list buckets is told to name them in
+  the *Buckets* field, and a wrong access key, a wrong secret key, a
+  missing bucket and a denied bucket or object each have their own
+  message, with the service's code (#314).
+- S3: a bucket's address pasted as the endpoint no longer loses its
+  bucket. The path was dropped silently on every request; now the
+  endpoint is left clean and the bucket goes into *Buckets*, in the
+  dialogue as it is pasted and for a connection that was saved that way
+  (#316).
+- `url` 2.5.9, for RUSTSEC-2026-0592 (#313).
+
 ## [0.6.0] - 2026-11-20
 
 Plugins come in two kinds from here on: the ones every install has, and
@@ -1859,7 +1961,8 @@ text, code, images and PDF, and Git, on Linux, macOS and Windows.
   in the middle of a write can no longer read a truncated file and lose
   the pinned folders (#14).
 
-[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/Open-Breach/rick/releases/tag/v0.6.1
 [0.6.0]: https://github.com/Open-Breach/rick/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Open-Breach/rick/releases/tag/v0.5.0
 [0.4.1]: https://github.com/Open-Breach/rick/releases/tag/v0.4.1

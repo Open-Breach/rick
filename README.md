@@ -3,9 +3,9 @@
 Rick is a fast, lean file manager for professionals. It runs on Linux, macOS and Windows from a single codebase and behaves the same on all three. A small core does the basics; everything else comes from an extensible plugin ecosystem.
 
 <!-- generated:status -->
-v0.6.0 · Rick is early and not fully tested yet, so expect bugs. Tab navigation and some performance work are still unfinished. Please help us find what's broken and tell us what you see.
+v0.6.1 · Rick is early and not fully tested yet, so expect bugs. Tab navigation and some performance work are still unfinished. Please help us find what's broken and tell us what you see.
 
-[Download v0.6.0](#install) for Linux, macOS or Windows, try it, and tell us [what breaks](https://github.com/Open-Breach/rick/issues). [Opinions](https://github.com/Open-Breach/rick/issues) welcome too, good or bad, as long as they're respectful.
+[Download v0.6.1](#install) for Linux, macOS or Windows, try it, and tell us [what breaks](https://github.com/Open-Breach/rick/issues). [Opinions](https://github.com/Open-Breach/rick/issues) welcome too, good or bad, as long as they're respectful.
 <!-- /generated:status -->
 
 ## Why Rick exists
@@ -73,7 +73,7 @@ Coming:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-dark.png">
-  <img alt="Rick with two panes side by side and the preview pane showing a 3D model of a pig" src="docs/screenshots/readme-light.png">
+  <img alt="Rick with two panes side by side and the preview pane showing a 3D model of a crab" src="docs/screenshots/readme-light.png">
 </picture>
 
 ## Install
@@ -87,19 +87,19 @@ curl -fsSL https://get.openbreach.dev/install.sh | sh -s rick
 
 This adds the Open-Breach repository and installs Rick with apt or dnf; updates then arrive with your system's. [Which releases, and the same steps by hand](https://github.com/Open-Breach/trebuchet/blob/main/docs/install.md).
 
-Or run it from the archive, with nothing installed: [x64](https://github.com/Open-Breach/rick/releases/download/v0.6.0/rick-0.6.0-linux-x64.tar.gz) · [arm64](https://github.com/Open-Breach/rick/releases/download/v0.6.0/rick-0.6.0-linux-arm64.tar.gz)
+Or run it from the archive, with nothing installed: [x64](https://github.com/Open-Breach/rick/releases/download/v0.6.1/rick-0.6.1-linux-x64.tar.gz) · [arm64](https://github.com/Open-Breach/rick/releases/download/v0.6.1/rick-0.6.1-linux-arm64.tar.gz)
 
 ```bash
-tar xzf rick-0.6.0-linux-x64.tar.gz && ./rick-0.6.0-linux-x64/rick
+tar xzf rick-0.6.1-linux-x64.tar.gz && ./rick-0.6.1-linux-x64/rick
 ```
 
 Needs glibc 2.36 or later (Debian 12, Ubuntu 24.04). The first start offers to set Rick up in your desktop: the launcher entry, the default file manager, the `rick` command.
 
-**macOS** · [arm64](https://github.com/Open-Breach/rick/releases/download/v0.6.0/rick-0.6.0-macos-arm64.zip)
+**macOS** · [arm64](https://github.com/Open-Breach/rick/releases/download/v0.6.1/rick-0.6.1-macos-arm64.zip)
 
 Unzip, drag `Rick.app` to Applications and open it. The app is not notarised yet: allow it under System Settings → Privacy & Security.
 
-**Windows** · [x64](https://github.com/Open-Breach/rick/releases/download/v0.6.0/rick-0.6.0-windows-x64.zip)
+**Windows** · [x64](https://github.com/Open-Breach/rick/releases/download/v0.6.1/rick-0.6.1-windows-x64.zip)
 
 Unpack and run `rick.exe`. SmartScreen may warn the first time.
 

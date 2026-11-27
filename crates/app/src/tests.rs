@@ -2566,6 +2566,47 @@ mod net {
         fn is_connected(&self, name: &str) -> bool {
             lock(&self.connected).iter().any(|n| n == name)
         }
+        fn checks(&self) -> Vec<String> {
+            vec![
+                "The host answers".to_owned(),
+                "The password is right".to_owned(),
+            ]
+        }
+        /// The host `10.0.0.2` answers and takes `hunter2`; the host
+        /// `slow` never answers. Reads nothing and writes nothing.
+        async fn test(
+            &self,
+            form: &ext::ConnectionTestForm<'_>,
+            cancel: &CancelToken,
+        ) -> ext::ConnectionTest {
+            use ext::{CheckOutcome, ConnectionCheck};
+            if form.get("host") == "slow" {
+                cancel.cancelled().await;
+            }
+            let reachable = form.get("host") == "10.0.0.2";
+            let accepted = reachable && form.get("password") == "hunter2";
+            let check = |label: &str, outcome, detail: &str| ConnectionCheck {
+                label: label.to_owned(),
+                outcome,
+                detail: detail.to_owned(),
+            };
+            let second = match (reachable, accepted) {
+                (false, _) => check("The password is right", CheckOutcome::NotRun, ""),
+                (true, true) => check("The password is right", CheckOutcome::Passed, ""),
+                (true, false) => check("The password is right", CheckOutcome::Failed, "refused"),
+            };
+            ext::ConnectionTest {
+                checks: vec![
+                    if reachable {
+                        check("The host answers", CheckOutcome::Passed, "")
+                    } else {
+                        check("The host answers", CheckOutcome::Failed, "no route")
+                    },
+                    second,
+                ],
+                good: accepted,
+            }
+        }
     }
 
     #[async_trait]
@@ -2680,6 +2721,152 @@ mod net {
             Ok(())
         }
     }
+}
+
+/// specs/s3-connection.md 3.1, 3.4 and 3.5 at the application: a test
+/// runs the connector's checks on the dialogue's values and saves
+/// nothing, a cancelled test ends without a result, and the typed secret
+/// reaches no file, no keychain and no log text.
+#[test]
+// One scenario, start to finish: good, not good, cancelled, nothing saved.
+#[allow(clippy::too_many_lines)]
+fn a_connection_test_runs_the_connector_s_checks_and_saves_nothing() {
+    let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let stub = net::Stub::new();
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: Arc::new(Scripted::default()),
+        extensions: vec![Arc::new(net::StubExtension::new(Arc::clone(&stub)))],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(root.path())),
+    });
+    let mut h = Harness {
+        root,
+        fake,
+        ui: Arc::new(Scripted::default()),
+        app,
+        events: Vec::new(),
+    };
+    h.settle();
+    let test = |host: &str, password: &str, request| Command::TestConnection {
+        provider: net::ID,
+        name: None,
+        values: vec![
+            ("host".into(), host.into()),
+            ("password".into(), password.into()),
+        ],
+        request,
+    };
+    let state = |h: &Harness, request: u64| {
+        h.app
+            .model()
+            .connection_test
+            .clone()
+            .filter(|run| run.request == request)
+            .map(|run| run.state)
+    };
+    let wait = |h: &mut Harness, request: u64| {
+        let until = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            h.settle();
+            match state(h, request) {
+                Some(model::ConnectionTestState::Running) | None => {
+                    assert!(std::time::Instant::now() < until, "the test never ended");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Some(ended) => return ended,
+            }
+        }
+    };
+
+    // A good test.
+    let command = test("10.0.0.2", "hunter2", 1);
+    let logged = format!("{:?}", crate::command::Logged(&command));
+    assert!(logged.contains("TestConnection"), "{logged}");
+    assert!(logged.contains("password"), "{logged}");
+    assert!(
+        !logged.contains("hunter2"),
+        "the secret is in the log text: {logged}"
+    );
+    h.send(command);
+    let model::ConnectionTestState::Done(result) = wait(&mut h, 1) else {
+        panic!("the test was cancelled");
+    };
+    assert!(result.good);
+    assert_eq!(result.checks.len(), 2);
+
+    // A test that is not good, with the reason and the check not run.
+    h.send(test("10.0.0.2", "guess", 2));
+    let model::ConnectionTestState::Done(result) = wait(&mut h, 2) else {
+        panic!("the test was cancelled");
+    };
+    assert!(!result.good);
+    assert_eq!(result.checks[1].outcome, ext::CheckOutcome::Failed);
+    assert_eq!(result.checks[1].detail, "refused");
+    h.send(test("10.9.9.9", "hunter2", 3));
+    let model::ConnectionTestState::Done(result) = wait(&mut h, 3) else {
+        panic!("the test was cancelled");
+    };
+    assert_eq!(result.checks[0].outcome, ext::CheckOutcome::Failed);
+    assert_eq!(result.checks[1].outcome, ext::CheckOutcome::NotRun);
+
+    // A test that is cancelled ends without a result.
+    h.send(test("slow", "hunter2", 4));
+    assert_eq!(state(&h, 4), Some(model::ConnectionTestState::Running));
+    let job = h
+        .app
+        .model()
+        .connection_test
+        .as_ref()
+        .and_then(|run| run.job)
+        .unwrap_or_else(|| panic!("the running test has a job"));
+    h.send(Command::CancelJob(job));
+    assert_eq!(wait(&mut h, 4), model::ConnectionTestState::Cancelled);
+
+    // Nothing was saved: no connection, no secret, and the typed secret is
+    // in no file of the configuration directory.
+    assert_eq!(h.app.model().settings.connections, Vec::new());
+    assert_eq!(h.fake.secrets().len(), 0, "{:?}", h.fake.secrets());
+    assert_eq!(
+        stub.connections
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len(),
+        0
+    );
+    for entry in files_beneath(&h.fake.config_dir()) {
+        let bytes = std::fs::read(&entry).unwrap_or_default();
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains("hunter2"),
+            "the typed secret is in {}",
+            entry.display()
+        );
+    }
+    // The commands that save carry the secret too, and show it no more.
+    let add = Command::AddConnection {
+        provider: net::ID,
+        name: "nas".into(),
+        values: vec![("password".into(), "hunter2".into())],
+    };
+    assert!(!format!("{:?}", crate::command::Logged(&add)).contains("hunter2"));
+}
+
+/// Every file beneath `dir`.
+fn files_beneath(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(dir) = todo.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                todo.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    files
 }
 
 /// Acceptance (issue 21): a connection's secret goes to the platform

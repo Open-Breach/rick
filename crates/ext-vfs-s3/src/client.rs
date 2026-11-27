@@ -12,6 +12,8 @@ use tokio::io::AsyncRead;
 use tracing::debug;
 use types::Error;
 
+use ext::t;
+
 use crate::ID;
 
 /// The characters S3 leaves as they are in a URI: the unreserved set.
@@ -40,6 +42,10 @@ pub(crate) fn install_crypto() {
 }
 
 /// What went wrong with a request, as the service said it.
+///
+/// Its text is the user's message (specs/s3-connection.md 1.2): the five
+/// refusals a connection meets first have their own wording, and every
+/// message carries the service's code.
 #[derive(Debug)]
 pub struct S3Error {
     /// The HTTP status.
@@ -48,40 +54,66 @@ pub struct S3Error {
     pub code: String,
     /// The service's message.
     pub message: String,
+    /// The request was `ListBuckets`: a refusal then says how to get in
+    /// without it.
+    pub listing_buckets: bool,
 }
 
 impl std::fmt::Display for S3Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.code.is_empty() {
-            write!(f, "HTTP {}: {}", self.status, self.message)
-        } else {
-            write!(f, "{} ({}): {}", self.code, self.status, self.message)
-        }
+        let code = self.code.as_str();
+        let text = match code {
+            "AccessDenied" if self.listing_buckets => {
+                t!("s3-error-list-buckets-denied", code = code)
+            }
+            "AccessDenied" => t!("s3-error-access-denied", code = code),
+            "InvalidAccessKeyId" => t!("s3-error-invalid-access-key", code = code),
+            "SignatureDoesNotMatch" => t!("s3-error-signature", code = code),
+            "NoSuchBucket" => t!("s3-error-no-such-bucket", code = code),
+            "" => t!(
+                "s3-error-http",
+                status = i64::from(self.status),
+                message = self.message.as_str()
+            ),
+            _ => t!(
+                "s3-error-other",
+                code = code,
+                status = i64::from(self.status),
+                message = self.message.as_str()
+            ),
+        };
+        f.write_str(&text)
     }
 }
 
 impl std::error::Error for S3Error {}
 
-/// The kernel error for a failed request: a missing key or bucket is
-/// `NotFound`, a refusal `PermissionDenied`, the rest the service's words.
+/// The kernel error for a failed request. A missing key is `NotFound`,
+/// and so is a 404 without a code, which is what a `HEAD` gets; every
+/// other failure keeps the service's code and words as an [`S3Error`], so
+/// a refusal says which one it was instead of "permission denied"
+/// (specs/s3-connection.md 1.2).
 fn failed(status: StatusCode, body: &str) -> Error {
-    let (code, message) = parse_error(body);
+    let (code, mut message) = parse_error(body);
     match (status, code.as_str()) {
-        (StatusCode::NOT_FOUND, _) | (_, "NoSuchKey" | "NoSuchBucket" | "NoSuchUpload") => {
-            Error::NotFound
+        (_, "NoSuchKey" | "NoSuchUpload") | (StatusCode::NOT_FOUND, "") => Error::NotFound,
+        _ => {
+            if message.is_empty() {
+                status
+                    .canonical_reason()
+                    .unwrap_or_default()
+                    .clone_into(&mut message);
+            }
+            Error::Extension {
+                ext: ID,
+                source: Box::new(S3Error {
+                    status: status.as_u16(),
+                    code,
+                    message,
+                    listing_buckets: false,
+                }),
+            }
         }
-        (StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED, _)
-        | (_, "AccessDenied" | "InvalidAccessKeyId" | "SignatureDoesNotMatch") => {
-            Error::PermissionDenied
-        }
-        _ => Error::Extension {
-            ext: ID,
-            source: Box::new(S3Error {
-                status: status.as_u16(),
-                code,
-                message,
-            }),
-        },
     }
 }
 
@@ -488,7 +520,15 @@ impl S3Client {
     pub(crate) async fn list_buckets(&self) -> Result<Vec<Bucket>, Error> {
         let text = self
             .send(Req::new(Method::GET, None, None))
-            .await?
+            .await
+            .map_err(|mut error| {
+                if let Error::Extension { source, .. } = &mut error
+                    && let Some(said) = source.downcast_mut::<S3Error>()
+                {
+                    said.listing_buckets = true;
+                }
+                error
+            })?
             .text()
             .await
             .map_err(transport)?;

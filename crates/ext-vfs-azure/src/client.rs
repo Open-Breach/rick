@@ -67,21 +67,28 @@ impl std::fmt::Display for AzureError {
 
 impl std::error::Error for AzureError {}
 
-/// The kernel error for a failed request.
-fn failed(status: StatusCode, body: &str) -> Error {
+/// What the service said about a request it did not carry out.
+fn refusal(status: StatusCode, body: &str) -> AzureError {
     let (code, message) = parse_error(body);
-    match (status, code.as_str()) {
-        (StatusCode::NOT_FOUND, _)
-        | (_, "BlobNotFound" | "ContainerNotFound" | "ResourceNotFound") => Error::NotFound,
-        (StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED, _)
-        | (_, "AuthenticationFailed" | "AuthorizationFailure") => Error::PermissionDenied,
+    AzureError {
+        status: status.as_u16(),
+        code,
+        message,
+    }
+}
+
+/// The kernel error for a failed request.
+fn failed(said: AzureError) -> Error {
+    match (said.status, said.code.as_str()) {
+        (404, _) | (_, "BlobNotFound" | "ContainerNotFound" | "ResourceNotFound") => {
+            Error::NotFound
+        }
+        (401 | 403, _) | (_, "AuthenticationFailed" | "AuthorizationFailure") => {
+            Error::PermissionDenied
+        }
         _ => Error::Extension {
             ext: ID,
-            source: Box::new(AzureError {
-                status: status.as_u16(),
-                code,
-                message,
-            }),
+            source: Box::new(said),
         },
     }
 }
@@ -380,6 +387,24 @@ impl AzureClient {
     /// Sends one signed request and returns the response, or the error the
     /// service described.
     async fn send(&self, req: Req<'_>) -> Result<reqwest::Response, Error> {
+        self.exchange(req).await?.map_err(failed)
+    }
+
+    /// Whether the account's containers can be listed, for the connection
+    /// test: one `List Containers` asking for a single name. `Err` is a
+    /// request that got no answer; the inner error is the service's own
+    /// refusal, with its code and message as sent.
+    pub(crate) async fn probe(&self) -> Result<Result<(), AzureError>, Error> {
+        let query = [("comp", "list"), ("maxresults", "1")];
+        let answer = self
+            .exchange(Req::new(Method::GET, None, None).query(&query))
+            .await?;
+        Ok(answer.map(|_| ()))
+    }
+
+    /// Sends one signed request. `Err` is a request that got no answer;
+    /// the inner error is what the service said about one it refused.
+    async fn exchange(&self, req: Req<'_>) -> Result<Result<reqwest::Response, AzureError>, Error> {
         let Req {
             method,
             container,
@@ -441,10 +466,10 @@ impl AzureClient {
         let response = request.send().await.map_err(transport)?;
         let status = response.status();
         if status.is_success() {
-            return Ok(response);
+            return Ok(Ok(response));
         }
         let body = response.text().await.unwrap_or_default();
-        Err(failed(status, &body))
+        Ok(Err(refusal(status, &body)))
     }
 
     /// The account's containers.

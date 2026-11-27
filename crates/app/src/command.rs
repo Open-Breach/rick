@@ -41,6 +41,43 @@ pub enum ConnectionOp {
     Remove,
 }
 
+/// A command as the log shows it: a command that carries a connection's
+/// field values names the fields and never a value, since one of them is a
+/// secret key; every other command is shown as it is.
+pub(crate) struct Logged<'a>(pub &'a Command);
+
+impl fmt::Debug for Logged<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (kind, provider, name, values) = match self.0 {
+            Command::AddConnection {
+                provider,
+                name,
+                values,
+            } => ("AddConnection", provider, Some(name.as_str()), values),
+            Command::EditConnection {
+                provider,
+                name,
+                values,
+            } => ("EditConnection", provider, Some(name.as_str()), values),
+            Command::TestConnection {
+                provider,
+                name,
+                values,
+                ..
+            } => ("TestConnection", provider, name.as_deref(), values),
+            other => return other.fmt(f),
+        };
+        f.debug_struct(kind)
+            .field("provider", provider)
+            .field("name", &name)
+            .field(
+                "fields",
+                &values.iter().map(|(key, _)| key).collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
 /// What the UI asks the application to do. The UI never touches the model;
 /// it sends one of these and re-renders from the model afterwards.
 #[derive(Debug, Clone)]
@@ -236,6 +273,23 @@ pub enum Command {
         /// The field values by key, secrets included; an empty value is
         /// left out.
         values: Vec<(String, String)>,
+    },
+    /// Test a connection as its dialogue has it, before anything is saved
+    /// (specs/s3-connection.md Part 3): the provider's connector runs its
+    /// checks on the values as a job, and the result lands in the model's
+    /// `connection_test` under `request`. The values go to the connector's
+    /// test and nowhere else: into no file, no keychain and no log.
+    TestConnection {
+        /// The provider.
+        provider: ProviderId,
+        /// The connection being edited, whose keychain secrets stand for
+        /// the secret fields left empty; `None` in *Add connection…*.
+        name: Option<String>,
+        /// The field values by key, secrets included; an empty value is
+        /// left out.
+        values: Vec<(String, String)>,
+        /// The dialogue's number for this run, which the result carries.
+        request: u64,
     },
     /// Connect, disconnect or remove a connection of a network or cloud
     /// provider.

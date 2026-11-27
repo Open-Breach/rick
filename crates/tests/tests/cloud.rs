@@ -653,3 +653,833 @@ fn a_100_mb_upload_streams_with_progress_and_cancelled_half_way_leaves_no_object
     runtime::block_on(provider.remove(&at(&format!("/test/{bucket}")), ext::RemoveMode::Permanent))
         .unwrap_or_else(|e| panic!("remove bucket: {e}"));
 }
+
+/// A point inside the control of the connection dialogue's row whose
+/// label starts with `label`. The label column is 128 px wide whatever
+/// the font, so the point is taken from the label's left edge and not
+/// from how wide the system's font makes the labels.
+fn dialogue_field(harness: &Harness<'_, RickUi>, label: &str) -> egui::Pos2 {
+    let row = harness
+        .query_all_by_label_contains(label)
+        .next()
+        .unwrap_or_else(|| panic!("the row {label}"))
+        .rect();
+    egui::pos2(row.left() + 128.0 + 80.0, row.center().y)
+}
+
+/// Issue 309, `specs/s3-connection.md` 1.4, through the real dialogue:
+/// pasting the address of an R2 bucket leaves the endpoint clean, puts the
+/// bucket into *Buckets*, sets the region to `auto`, shows *Cloudflare R2*
+/// by the endpoint, and a region typed by hand is left alone afterwards.
+#[test]
+fn pasting_an_r2_bucket_address_fills_the_s3_dialogue() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![Arc::new(ext_vfs_s3::S3Extension::new())],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1400.0, 800.0))
+        .with_step_dt(0.05)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let shows = |harness: &Harness<'_, RickUi>, value: &str| {
+        harness.query_all_by_value(value).next().is_some()
+    };
+    let add = panel_rects(&harness, "Add connection");
+    click_at(&mut harness, add[0].center(), egui::PointerButton::Primary);
+    harness.step();
+    // An empty endpoint is AWS, and says so.
+    assert!(harness.query_by_label("Amazon S3").is_some());
+    assert!(shows(&harness, "us-east-1"));
+
+    let endpoint = dialogue_field(&harness, "Endpoint");
+    let region = dialogue_field(&harness, "Region");
+    click_at(&mut harness, endpoint, egui::PointerButton::Primary);
+    harness.event(egui::Event::Paste(
+        "https://abc123.r2.cloudflarestorage.com/packages".to_owned(),
+    ));
+    harness.step();
+    harness.step();
+    assert!(
+        harness.query_by_label("Cloudflare R2").is_some(),
+        "clicked {endpoint:?}: {}",
+        dialogue_state(&harness)
+    );
+    assert!(harness.query_by_label("Amazon S3").is_none());
+    assert!(
+        shows(&harness, "https://abc123.r2.cloudflarestorage.com"),
+        "the endpoint is left clean"
+    );
+    assert!(shows(&harness, "packages"));
+    assert!(shows(&harness, "auto"));
+    assert!(!shows(&harness, "us-east-1"));
+
+    // A region typed by hand stays when the endpoint changes again.
+    click_at(&mut harness, region, egui::PointerButton::Primary);
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    harness.step();
+    harness.event(egui::Event::Text("weur".to_owned()));
+    harness.step();
+    click_at(&mut harness, endpoint, egui::PointerButton::Primary);
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    harness.step();
+    harness.event(egui::Event::Paste(
+        "https://s3.eu-central-1.wasabisys.com".to_owned(),
+    ));
+    harness.step();
+    harness.step();
+    assert!(harness.query_by_label("Wasabi").is_some());
+    assert!(shows(&harness, "weur"));
+    assert!(!shows(&harness, "eu-central-1"));
+}
+
+/// Issue 309, `specs/s3-connection.md` 1.4, last line: a connection that
+/// 0.6.0 wrote into `rick.toml`, without the fields 0.6.1 adds, loads as
+/// it is and is written back unchanged.
+#[test]
+fn a_connection_saved_before_the_buckets_field_loads_unchanged() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let saved = "[[connections]]\nprovider = \"s3\"\nname = \"old\"\naccess_key = \"minio\"\n\
+                 endpoint = \"http://127.0.0.1:1\"\npath_style = \"true\"\nregion = \"us-east-1\"\n";
+    fs::create_dir_all(fake.config_dir()).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(fake.config_dir().join(app::SETTINGS_FILE), saved).unwrap_or_else(|e| panic!("{e}"));
+    let s3 = Arc::new(ext_vfs_s3::S3Extension::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: Arc::new(EguiHost::new()),
+        extensions: vec![s3],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let entry = app
+        .model()
+        .settings
+        .connections
+        .iter()
+        .find(|c| c.name == "old")
+        .unwrap_or_else(|| panic!("the connection loaded"));
+    assert_eq!(
+        entry
+            .settings
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["access_key", "endpoint", "path_style", "region"]
+    );
+    let connector = app
+        .registry()
+        .connector_of(ProviderId("s3"))
+        .unwrap_or_else(|| panic!("the S3 connector"));
+    // Its root would list the buckets, as before: it names none.
+    let dialog = ui_egui::side_panel::ConnectionDialog::edit(&**connector, entry);
+    let value = |key: &str| {
+        dialog
+            .values
+            .iter()
+            .find(|(field, _)| field.key == key)
+            .map_or("", |(_, value)| value.as_str())
+    };
+    assert_eq!(value("buckets"), "");
+    assert_eq!(value("region"), "us-east-1");
+    assert_eq!(value("endpoint"), "http://127.0.0.1:1");
+}
+
+/// A local stand-in for an S3 service with a bucket-scoped key: listing
+/// the buckets is refused, the bucket `packages` lists, every other
+/// bucket does not exist. Returns its endpoint. No real account.
+fn scoped_s3_service() -> String {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("{e}"));
+    let port = listener
+        .local_addr()
+        .unwrap_or_else(|e| panic!("{e}"))
+        .port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let Ok(clone) = stream.try_clone() else {
+                continue;
+            };
+            let mut reader = BufReader::new(clone);
+            let mut request = String::new();
+            if reader.read_line(&mut request).is_err() {
+                continue;
+            }
+            let mut line = String::new();
+            while reader.read_line(&mut line).is_ok_and(|n| n > 0) && line != "\r\n" {
+                line.clear();
+            }
+            let target = request.split_whitespace().nth(1).unwrap_or_default();
+            let error =
+                |code: &str| format!("<Error><Code>{code}</Code><Message>{code}</Message></Error>");
+            let (status, body) = if target == "/" {
+                (403, error("AccessDenied"))
+            } else if target.starts_with("/packages/") {
+                (
+                    200,
+                    "<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>"
+                        .to_owned(),
+                )
+            } else {
+                (404, error("NoSuchBucket"))
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} X\r\ncontent-type: application/xml\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+/// What the open connection dialogue holds, for an assertion's message:
+/// the name, the fields (none of the tests' values is a real secret), the
+/// refusal and where the test stands; and where the pointer is.
+fn dialogue_state(harness: &Harness<'_, RickUi>) -> String {
+    let pointer = harness.ctx.input(|i| i.pointer.latest_pos());
+    harness
+        .state()
+        .side_panel_state()
+        .connection
+        .as_ref()
+        .map_or_else(
+            || format!("no dialogue; pointer {pointer:?}"),
+            |dialog| {
+                let values: Vec<String> = dialog
+                    .values
+                    .iter()
+                    .map(|(field, value)| format!("{}={value:?}", field.key))
+                    .collect();
+                format!(
+                    "name={:?} {} error={:?} test={:?} pointer={pointer:?}",
+                    dialog.name,
+                    values.join(" "),
+                    dialog.error,
+                    dialog.test
+                )
+            },
+        )
+}
+
+/// Pastes `text` over what the field of the row `label` holds.
+fn fill_field(harness: &mut Harness<'_, RickUi>, label: &str, text: &str) {
+    // The dialogue moves when a row comes or goes: let it rest.
+    for _ in 0..4 {
+        harness.step();
+    }
+    let at = dialogue_field(harness, label);
+    click_at(harness, at, egui::PointerButton::Primary);
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    harness.step();
+    harness.event(egui::Event::Paste(text.to_owned()));
+    harness.step();
+    harness.step();
+}
+
+fn click_label(harness: &mut Harness<'_, RickUi>, label: &str) {
+    for _ in 0..4 {
+        harness.step();
+    }
+    let at = harness.get_by_label(label).rect().center();
+    click_at(harness, at, egui::PointerButton::Primary);
+}
+
+fn shows(harness: &Harness<'_, RickUi>, text: &str) -> bool {
+    harness.query_all_by_label_contains(text).next().is_some()
+}
+
+fn saved_connections(harness: &Harness<'_, RickUi>) -> usize {
+    harness.state().app().model().settings.connections.len()
+}
+
+/// The *Add S3 connection* dialogue, filled in for a bucket-scoped key on
+/// a local stand-in, with *Buckets* as given.
+fn s3_dialogue(dir: &Path, buckets: &str) -> (Harness<'static, RickUi>, Arc<Fake>) {
+    let endpoint = scoped_s3_service();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![Arc::new(ext_vfs_s3::S3Extension::new())],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1400.0, 800.0))
+        .with_step_dt(0.05)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let add = panel_rects(&harness, "Add connection");
+    click_at(&mut harness, add[0].center(), egui::PointerButton::Primary);
+    harness.step();
+    assert!(shows(&harness, "Test"), "the S3 dialogue has a Test button");
+    // The name has the focus when the dialogue opens.
+    harness.event(egui::Event::Paste("scoped".to_owned()));
+    harness.step();
+    fill_field(&mut harness, "Endpoint", &endpoint);
+    fill_field(&mut harness, "Access key", "key");
+    fill_field(&mut harness, "Secret key", "typed-secret");
+    fill_field(&mut harness, "Buckets", buckets);
+    (harness, fake)
+}
+
+/// *Add* was clicked: steps until the test that is not good holds the save.
+fn held(harness: &mut Harness<'_, RickUi>) {
+    let held = step_until(harness, Duration::from_secs(10), |h| {
+        shows(h, "Save anyway")
+    });
+    assert!(held, "{}", dialogue_state(harness));
+    assert!(shows(harness, "The test did not pass"));
+}
+
+/// Issue 310, `specs/s3-connection.md` 3.6, through the real dialogue:
+/// *Add* with a test that is not good saves nothing, and neither does
+/// going back to the fields or the *Test* button; with the bucket's name
+/// put right the test is good and *Add* saves at once. The typed secret
+/// reaches the keychain only then, and no file.
+#[test]
+fn a_test_that_is_not_good_saves_nothing_and_going_back_saves_nothing() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, fake) = s3_dialogue(dir.path(), "pakages");
+
+    click_label(&mut harness, "Add");
+    held(&mut harness);
+    assert!(shows(&harness, "The bucket pakages can be opened"));
+    assert!(shows(&harness, "NoSuchBucket"));
+    assert_eq!(saved_connections(&harness), 0);
+    assert_eq!(fake.secrets().len(), 0, "{:?}", fake.secrets());
+
+    click_label(&mut harness, "Back to the fields");
+    settle(&mut harness);
+    assert!(!shows(&harness, "Save anyway"));
+    assert!(shows(&harness, "Add S3 connection"), "the dialogue stays");
+    assert_eq!(saved_connections(&harness), 0);
+
+    // The Test button shows the result and offers no save.
+    click_label(&mut harness, "Test");
+    assert!(step_until(&mut harness, Duration::from_secs(10), |h| {
+        shows(h, "NoSuchBucket")
+    }));
+    assert!(!shows(&harness, "Save anyway"));
+    assert_eq!(saved_connections(&harness), 0);
+    assert_eq!(fake.secrets().len(), 0, "{:?}", fake.secrets());
+
+    // The name put right: the result of the old form goes, the test is
+    // good, and Add saves and closes.
+    fill_field(&mut harness, "Buckets", "packages");
+    assert!(
+        !shows(&harness, "NoSuchBucket"),
+        "an edit forgets the result"
+    );
+    click_label(&mut harness, "Add");
+    assert!(step_until(&mut harness, Duration::from_secs(10), |h| {
+        saved_connections(h) == 1
+    }));
+    assert!(!shows(&harness, "Add S3 connection"), "the dialogue closed");
+    settle(&mut harness);
+    assert_eq!(
+        fake.secrets()
+            .get("s3/scoped/secret_key")
+            .map(String::as_str),
+        Some("typed-secret")
+    );
+    for file in fs::read_dir(fake.config_dir())
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let text = fs::read(file.path()).unwrap_or_default();
+        assert!(
+            !String::from_utf8_lossy(&text).contains("typed-secret"),
+            "the secret is in {}",
+            file.path().display()
+        );
+    }
+}
+
+/// The other choice of 3.4: *Save anyway* saves the connection as typed,
+/// mistyped name and all, which is also how one is added while offline.
+#[test]
+fn save_anyway_saves_a_connection_whose_test_is_not_good() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, fake) = s3_dialogue(dir.path(), "pakages");
+    click_label(&mut harness, "Add");
+    held(&mut harness);
+    assert_eq!(saved_connections(&harness), 0);
+    click_label(&mut harness, "Save anyway");
+    assert!(step_until(&mut harness, Duration::from_secs(10), |h| {
+        saved_connections(h) == 1
+    }));
+    assert!(!shows(&harness, "Add S3 connection"), "the dialogue closed");
+    let entry = harness.state().app().model().settings.connections[0].clone();
+    assert_eq!(entry.name, "scoped");
+    assert_eq!(
+        entry.settings.get("buckets").map(String::as_str),
+        Some("pakages")
+    );
+    settle(&mut harness);
+    assert_eq!(
+        fake.secrets()
+            .get("s3/scoped/secret_key")
+            .map(String::as_str),
+        Some("typed-secret")
+    );
+}
+
+/// Issue 311: the connection dialogue has the keyboard while it is open.
+/// Escape is *Cancel*, with the focus in a field too. Before the fix the
+/// side panel behind the dialogue took the key, and the dialogue stayed.
+#[test]
+fn escape_closes_the_connection_dialogue() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, _fake) = s3_dialogue(dir.path(), "packages");
+    assert!(shows(&harness, "Add S3 connection"));
+    harness.key_press(egui::Key::Escape);
+    for _ in 0..4 {
+        harness.step();
+    }
+    assert!(!shows(&harness, "Add S3 connection"), "Escape left it open");
+    assert_eq!(saved_connections(&harness), 0);
+}
+
+/// The left edge of the label `text` in the focused pane, right of the
+/// side panel.
+fn pane_label_left(harness: &Harness<'_, RickUi>, text: &str) -> f32 {
+    let pane = harness.state().app().model().focused;
+    let pane_left = harness
+        .state()
+        .pane_rects()
+        .into_iter()
+        .find(|(p, _)| *p == pane)
+        .map_or(400.0, |(_, r)| r.left());
+    harness
+        .query_all_by_label(text)
+        .map(|node| node.rect())
+        .find(|rect| rect.left() >= pane_left)
+        .unwrap_or_else(|| panic!("{text} in the pane"))
+        .left()
+}
+
+/// Issue 311, `specs/s3-connection.md` 2.3: the columns of the Cloud
+/// overview fit themselves to their content, a drag on a divider resizes,
+/// and a double-click fits again, as in the details view.
+#[test]
+fn the_cloud_overview_s_columns_fit_their_content_resize_and_fit_again() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![Arc::new(ext_vfs_s3::S3Extension::new())],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1400.0, 800.0))
+        .with_step_dt(0.05)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let long = "a-connection-with-a-rather-long-name-for-a-column";
+    for name in ["short", long] {
+        harness.state_mut().app_mut().handle(
+            Command::AddConnection {
+                provider: ProviderId("s3"),
+                name: name.into(),
+                values: vec![
+                    ("endpoint".into(), "http://127.0.0.1:1".into()),
+                    ("access_key".into(), "key".into()),
+                    ("secret_key".into(), "secret".into()),
+                    ("buckets".into(), "packages".into()),
+                ],
+            },
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+    }
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        Command::Navigate {
+            pane,
+            to: vfs_rick::Virtual::Cloud.location(),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+
+    // The titles are there, and the Name column is as wide as its longest
+    // name: the next column starts right of it, and no further than a
+    // cell's padding and the button's away.
+    let name = pane_label_left(&harness, "Name");
+    let fitted = pane_label_left(&harness, "Provider");
+    let path = pane_label_left(&harness, "Path");
+    assert!(name < fitted && fitted < path);
+    let longest = harness
+        .query_all_by_label_contains(long)
+        .map(|node| node.rect())
+        .filter(|rect| rect.left() >= name - 20.0 && rect.left() < fitted)
+        .map(|rect| rect.right())
+        .fold(0.0, f32::max);
+    assert!(longest > 0.0, "the long name's row");
+    assert!(fitted >= longest, "{fitted} cuts the name at {longest}");
+    assert!(fitted - longest < 60.0, "{fitted} is far from {longest}");
+
+    // A drag on the divider between Name and Provider resizes.
+    let header_y = harness
+        .query_all_by_label("Provider")
+        .map(|node| node.rect())
+        .find(|rect| rect.left() >= name)
+        .map_or(0.0, |rect| rect.center().y);
+    let divider = egui::pos2(fitted - 12.0, header_y);
+    let button = |harness: &mut Harness<'_, RickUi>, pos, pressed| {
+        harness.event(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.step();
+    };
+    harness.event(egui::Event::PointerMoved(divider));
+    harness.step();
+    button(&mut harness, divider, true);
+    let target = divider + egui::vec2(-120.0, 0.0);
+    for step in 1..=4u8 {
+        let at = divider + egui::vec2(-30.0 * f32::from(step), 0.0);
+        harness.event(egui::Event::PointerMoved(at));
+        harness.step();
+    }
+    button(&mut harness, target, false);
+    settle(&mut harness);
+    let narrowed = pane_label_left(&harness, "Provider");
+    assert!(
+        (narrowed - (fitted - 120.0)).abs() < 4.0,
+        "dragged from {fitted} to {narrowed}"
+    );
+
+    // A double-click on it fits the column to its content again.
+    let divider = egui::pos2(narrowed - 12.0, header_y);
+    harness.event(egui::Event::PointerMoved(divider));
+    harness.step();
+    for _ in 0..2 {
+        button(&mut harness, divider, true);
+        button(&mut harness, divider, false);
+    }
+    settle(&mut harness);
+    let again = pane_label_left(&harness, "Provider");
+    assert!(
+        (again - fitted).abs() < 4.0,
+        "fitted again at {again}, was {fitted}"
+    );
+}
+
+/// An overview with no connection is a centred screen with a button per
+/// kind of connection, and the button opens that kind's dialogue there.
+#[test]
+fn an_empty_cloud_overview_offers_to_add_a_connection_right_there() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_vfs_s3::S3Extension::new()),
+            Arc::new(ext_vfs_azure::AzureExtension::new()),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1400.0, 800.0))
+        .with_step_dt(0.05)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        Command::Navigate {
+            pane,
+            to: vfs_rick::Virtual::Cloud.location(),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let pane_rect = harness
+        .state()
+        .pane_rects()
+        .into_iter()
+        .find(|(p, _)| *p == pane)
+        .map_or(egui::Rect::NOTHING, |(_, r)| r);
+    let in_pane = |harness: &Harness<'_, RickUi>, text: &str| {
+        harness
+            .query_all_by_label(text)
+            .map(|node| node.rect())
+            .find(|rect| pane_rect.contains(rect.center()))
+            .unwrap_or_else(|| panic!("{text} in the pane"))
+    };
+    // The message is centred in the pane, and so is the row of buttons.
+    let title = in_pane(&harness, "No cloud connections yet");
+    assert!(
+        (title.center().x - pane_rect.center().x).abs() < 2.0,
+        "{title:?}"
+    );
+    let s3 = in_pane(&harness, "Add S3 connection…");
+    let azure = in_pane(&harness, "Add Azure Blob connection…");
+    let row = s3.union(azure);
+    assert!(
+        (row.center().x - pane_rect.center().x).abs() < 2.0,
+        "{row:?}"
+    );
+    assert!(s3.top() > title.bottom());
+    assert!((title.center().y - pane_rect.center().y).abs() < 80.0);
+
+    // A button opens its kind's dialogue.
+    click_at(&mut harness, azure.center(), egui::PointerButton::Primary);
+    for _ in 0..4 {
+        harness.step();
+    }
+    assert!(shows(&harness, "Add Azure Blob connection"));
+    assert!(
+        harness
+            .state()
+            .side_panel_state()
+            .connection
+            .as_ref()
+            .is_some_and(|dialog| dialog.provider == ProviderId("azure"))
+    );
+}
+
+/// The drive table of This Machine is the overviews' table too: its
+/// titles are there, the Name column is as wide as its longest name, and
+/// a drag on a divider resizes.
+#[test]
+fn the_drive_table_s_columns_fit_their_content_and_resize() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let long = "a-drive-with-a-rather-long-name-for-a-column";
+    for name in ["system", long] {
+        let mount = dir.path().join(name);
+        fs::create_dir_all(&mount).unwrap_or_else(|e| panic!("{e}"));
+        fake.add_volume(platform::Volume {
+            name: name.into(),
+            mount_point: mount,
+            kind: platform::VolumeKind::Fixed,
+            fs_type: "ext4".into(),
+            device: None,
+            total: Some(100 << 20),
+            free: Some(40 << 20),
+            read_only: false,
+        });
+    }
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: Vec::new(),
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1600.0, 800.0))
+        .with_step_dt(0.05)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().volumes.len() == 2
+    }));
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        Command::Navigate {
+            pane,
+            to: vfs_rick::Virtual::Machine.location(),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let name = pane_label_left(&harness, "Name");
+    let fitted = pane_label_left(&harness, "Mount point");
+    for title in [
+        "File system",
+        "Total",
+        "Used",
+        "Free",
+        "Utilisation",
+        "Removable",
+    ] {
+        assert!(pane_label_left(&harness, title) > fitted, "{title}");
+    }
+    let longest = harness
+        .query_all_by_label_contains(long)
+        .map(|node| node.rect())
+        .filter(|rect| rect.left() >= name - 20.0 && rect.left() < fitted)
+        .map(|rect| rect.right())
+        .fold(0.0, f32::max);
+    assert!(longest > 0.0, "the long name's row");
+    assert!(fitted >= longest, "{fitted} cuts the name at {longest}");
+
+    let header_y = harness
+        .query_all_by_label("Mount point")
+        .map(|node| node.rect())
+        .find(|rect| rect.left() >= name)
+        .map_or(0.0, |rect| rect.center().y);
+    let divider = egui::pos2(fitted - 12.0, header_y);
+    harness.event(egui::Event::PointerMoved(divider));
+    harness.step();
+    let button = |harness: &mut Harness<'_, RickUi>, pos, pressed| {
+        harness.event(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.step();
+    };
+    button(&mut harness, divider, true);
+    for step in 1..=4u8 {
+        let at = divider + egui::vec2(-25.0 * f32::from(step), 0.0);
+        harness.event(egui::Event::PointerMoved(at));
+        harness.step();
+    }
+    button(&mut harness, divider + egui::vec2(-100.0, 0.0), false);
+    settle(&mut harness);
+    let narrowed = pane_label_left(&harness, "Mount point");
+    assert!(
+        (narrowed - (fitted - 100.0)).abs() < 4.0,
+        "dragged from {fitted} to {narrowed}"
+    );
+}
+
+/// The columns keep fitting while the user has not resized one: a drive
+/// with a long name that is mounted while the overview is open widens the
+/// Name column, and is not cut. The drive that is there first has nothing
+/// but dashes in its other columns, the narrowest a column gets.
+#[test]
+fn a_drive_mounted_later_widens_the_name_column() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let drive = |name: &str| {
+        let mount = dir.path().join(name);
+        fs::create_dir_all(&mount).unwrap_or_else(|e| panic!("{e}"));
+        platform::Volume {
+            name: name.into(),
+            mount_point: mount,
+            kind: platform::VolumeKind::Fixed,
+            // Nothing wider than a dash in these columns.
+            fs_type: String::new(),
+            device: None,
+            total: None,
+            free: None,
+            read_only: false,
+        }
+    };
+    fake.add_volume(drive("a"));
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: Vec::new(),
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1600.0, 800.0))
+        .with_step_dt(0.05)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        Command::Navigate {
+            pane,
+            to: vfs_rick::Virtual::Machine.location(),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let before = pane_label_left(&harness, "Mount point");
+
+    // A drive with a long name is mounted while the overview is open.
+    let long = "a-drive-with-a-rather-long-name-for-a-column";
+    fake.add_volume(drive(long));
+    assert!(step_until(&mut harness, Duration::from_secs(10), |h| {
+        h.query_all_by_label_contains(long).next().is_some()
+    }));
+    settle(&mut harness);
+    let name = pane_label_left(&harness, "Name");
+    let after = pane_label_left(&harness, "Mount point");
+    let longest = harness
+        .query_all_by_label_contains(long)
+        .map(|node| node.rect())
+        .filter(|rect| rect.left() >= name - 20.0 && rect.left() < after)
+        .map(|rect| rect.right())
+        .fold(0.0, f32::max);
+    assert!(
+        after > before + 100.0,
+        "the Name column stayed at {before}: {after}"
+    );
+    assert!(after >= longest, "{after} cuts the name at {longest}");
+}
+
+/// The empty Network overview stays on screen while the overview is read
+/// again in the background. It flickered: every re-reading took the
+/// message away for a frame or more, until the reading was complete.
+#[test]
+fn the_empty_network_overview_does_not_flicker_while_it_is_read_again() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![Arc::new(ext_ssh::SshExtension::new())],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1400.0, 800.0))
+        .with_step_dt(0.05)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        Command::Navigate {
+            pane,
+            to: vfs_rick::Virtual::Network.location(),
+        },
+        &mut Vec::new(),
+    );
+    assert!(step_until(&mut harness, Duration::from_secs(10), |h| {
+        shows(h, "Nothing on the network yet")
+    }));
+    // Four seconds of frames, with a refresh asked for on the way: the
+    // message is there in every one of them.
+    let until = Instant::now() + Duration::from_secs(4);
+    let mut frames = 0u32;
+    let mut missing = 0u32;
+    while Instant::now() < until {
+        if frames == 20 {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(Command::Refresh(pane), &mut Vec::new());
+        }
+        harness.step();
+        frames += 1;
+        if !shows(&harness, "Nothing on the network yet") {
+            missing += 1;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        missing, 0,
+        "the message was gone in {missing} of {frames} frames"
+    );
+}

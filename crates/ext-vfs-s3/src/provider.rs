@@ -354,24 +354,23 @@ impl S3Provider {
             };
             if state.whole_account {
                 state.whole_account = false;
-                return match client.list_buckets().await {
-                    Ok(buckets) => {
-                        let mut entries = Vec::with_capacity(buckets.len());
-                        for b in buckets {
-                            let place = Place::Bucket {
-                                account: state.account.clone(),
-                                bucket: b.name.clone(),
-                            };
-                            let entry = folder(&place, &b.name, b.created);
-                            if state.hidden || !entry.attrs.contains(Attrs::HIDDEN) {
-                                entries.push(entry);
-                                state.todo.push_back((b.name, String::new()));
-                            }
-                        }
-                        Some((Ok(entries), Some(state)))
-                    }
-                    Err(error) => Some((Err(error), None)),
+                let buckets = match state.conns.account_buckets(&state.account).await {
+                    Ok(buckets) => buckets,
+                    Err(error) => return Some((Err(error), None)),
                 };
+                let mut entries = Vec::with_capacity(buckets.len());
+                for b in buckets {
+                    let place = Place::Bucket {
+                        account: state.account.clone(),
+                        bucket: b.name.clone(),
+                    };
+                    let entry = folder(&place, &b.name, b.created);
+                    if state.hidden || !entry.attrs.contains(Attrs::HIDDEN) {
+                        entries.push(entry);
+                        state.todo.push_back((b.name, String::new()));
+                    }
+                }
+                return Some((Ok(entries), Some(state)));
             }
             let (bucket, prefix) = state.todo.front()?.clone();
             match client
@@ -475,8 +474,7 @@ impl Provider for S3Provider {
                 stream::once(async move { Ok(entries) }).boxed()
             }
             Place::Account(account) => stream::once(async move {
-                let client = conns.client(&account).await?;
-                let buckets = client.list_buckets().await?;
+                let buckets = conns.account_buckets(&account).await?;
                 Ok(buckets
                     .into_iter()
                     .map(|b| {
