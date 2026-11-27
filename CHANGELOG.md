@@ -7,6 +7,15 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-27
+
+An S3 connection works with a key that may not list buckets, such as a
+bucket-scoped Cloudflare R2 token: the connection names its buckets, and
+a refusal says what it was. A cloud connection is tested before it is
+saved. The connection dialogues and the overviews of This Machine,
+Network and Cloud follow the style guide. The extension API is 25: a
+plugin built for 0.6.0 is refused until it is rebuilt.
+
 ### Added
 
 - **S3: a *Buckets* field for keys that may not list buckets.** A
@@ -1952,7 +1961,8 @@ text, code, images and PDF, and Git, on Linux, macOS and Windows.
   in the middle of a write can no longer read a truncated file and lose
   the pinned folders (#14).
 
-[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/Open-Breach/rick/releases/tag/v0.6.1
 [0.6.0]: https://github.com/Open-Breach/rick/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Open-Breach/rick/releases/tag/v0.5.0
 [0.4.1]: https://github.com/Open-Breach/rick/releases/tag/v0.4.1
