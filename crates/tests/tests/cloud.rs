@@ -1427,3 +1427,59 @@ fn a_drive_mounted_later_widens_the_name_column() {
     );
     assert!(after >= longest, "{after} cuts the name at {longest}");
 }
+
+/// The empty Network overview stays on screen while the overview is read
+/// again in the background. It flickered: every re-reading took the
+/// message away for a frame or more, until the reading was complete.
+#[test]
+fn the_empty_network_overview_does_not_flicker_while_it_is_read_again() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![Arc::new(ext_ssh::SshExtension::new())],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1400.0, 800.0))
+        .with_step_dt(0.05)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        Command::Navigate {
+            pane,
+            to: vfs_rick::Virtual::Network.location(),
+        },
+        &mut Vec::new(),
+    );
+    assert!(step_until(&mut harness, Duration::from_secs(10), |h| {
+        shows(h, "Nothing on the network yet")
+    }));
+    // Four seconds of frames, with a refresh asked for on the way: the
+    // message is there in every one of them.
+    let until = Instant::now() + Duration::from_secs(4);
+    let mut frames = 0u32;
+    let mut missing = 0u32;
+    while Instant::now() < until {
+        if frames == 20 {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(Command::Refresh(pane), &mut Vec::new());
+        }
+        harness.step();
+        frames += 1;
+        if !shows(&harness, "Nothing on the network yet") {
+            missing += 1;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        missing, 0,
+        "the message was gone in {missing} of {frames} frames"
+    );
+}

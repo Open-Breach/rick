@@ -96,9 +96,20 @@ fn volume_of<'a>(cx: &'a PaneCx<'_>, entry: &Entry) -> Option<&'a Volume> {
 pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, which: Virtual) {
     let entries: Vec<Entry> = cx.tab.listing.rows().cloned().collect();
     ui.add_space(6.0);
-    if entries.is_empty() && cx.tab.listing.complete {
-        empty(ui, cx, which);
-        return;
+    // An overview is read again and again, nothing tells it of a change,
+    // and while it is being read its listing is not complete. One that
+    // was empty stays the empty screen meanwhile, or it would flicker;
+    // one that is read for the first time waits for its rows.
+    let was_empty = egui::Id::new(("overview-was-empty", cx.tab_id, which.location()));
+    if entries.is_empty() {
+        let known: bool = ui.data(|data| data.get_temp(was_empty).unwrap_or(false));
+        if cx.tab.listing.complete || known {
+            ui.data_mut(|data| data.insert_temp(was_empty, true));
+            empty(ui, cx, which);
+            return;
+        }
+    } else {
+        ui.data_mut(|data| data.insert_temp(was_empty, false));
     }
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
