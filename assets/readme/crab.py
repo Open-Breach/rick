@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Writes pig.stl, the sample 3D model of the README's screenshot.
+"""Writes crab.stl, the sample 3D model of the README's screenshot.
 
-An original low-poly pig made for this repository (specs/readme.md,
-"Screenshot"), the animal of release 0.6.0: convex blocks put together, in
-millimetres, Z up, facing -Y as the 3D previewer's default view expects.
+An original low-poly crab made for this repository (specs/readme.md,
+"Screenshot"), the animal of release 0.6.1: convex blocks put together, in
+millimetres, Z up, standing across the 3D previewer's default view, which
+looks along Y: a crab is wider than long.
 Run it to regenerate the file beside it; the output is the same bytes
 every time.
 
-    python3 assets/readme/pig.py
+    python3 assets/readme/crab.py
 """
 
 import itertools
@@ -112,63 +113,64 @@ def ball(centre, radius):
     return points
 
 
-def lean(points, pivot, degrees):
-    """Tips `points` backwards (towards +Y) around the X axis through `pivot`."""
+def turn(points, pivot, degrees):
+    """Turns `points` around the vertical axis through `pivot`."""
     sin, cos = math.sin(math.radians(degrees)), math.cos(math.radians(degrees))
     out = []
     for x, y, z in points:
-        dy, dz = y - pivot[1], z - pivot[2]
-        out.append((x, pivot[1] + dy * cos + dz * sin, pivot[2] - dy * sin + dz * cos))
+        dx, dy = x - pivot[0], y - pivot[1]
+        out.append((pivot[0] + dx * cos - dy * sin, pivot[1] + dx * sin + dy * cos, z))
     return out
 
 
-def pig():
+def crab():
     parts = [
-        # The barrel of a body, and the rump rounding it off.
-        box((0, 6, 25), (13, 17, 11.5), 5.5),
-        ball((0, 20, 26), 13.5),
-        # The belly hangs a little.
-        box((0, 5, 16.5), (9.5, 12, 4), 2.5),
-        # The tail: a curl of three small knots.
-        ball((0, 33, 31), 2.4),
-        ball((1.8, 35.5, 33.5), 2.0),
-        ball((-0.6, 36.5, 36.5), 1.7),
+        # The shell: wide, thick and chamfered, with a lower plate under it.
+        box((0, 2, 21), (15, 11, 8), 4.5),
+        box((0, 2, 13), (11.5, 8, 2.5), 1.5),
+        # A ridge along the back of the shell.
+        box((0, 5, 28), (8.5, 4.5, 2.4), 1.6),
     ]
     for side in (-1, 1):
-        for y in (-5, 17):
-            # A short leg and its trotter.
-            parts.append(frustum((side * 7.5, y, 14), (3.6, 3.6), (side * 7.5, y, 3), (2.7, 2.7)))
-            parts.append(box((side * 7.5, y - 0.4, 1.6), (3.0, 3.3, 1.6), 0.6))
-    # The head, built level and nodding forward as one.
-    pivot = (0, -10, 28)
-    level = [
-        # Head and cheeks.
-        box((0, -18, 29), (9.5, 8.5, 9), 3.5),
-        # The snout, a flat disc with two nostrils sunk beside its middle.
-        prism((0, -29.5, 26.5), 5.2, 3.2, 10, 1),
-        prism((0, -33.2, 26.5), 4.4, 0.6, 10, 1),
-    ]
-    for side in (-1, 1):
-        # Ears standing and tipping forward, the eyes, the nostrils.
-        level.append(frustum((side * 6.2, -15, 36.5), (3.4, 2.2), (side * 8.2, -20.5, 44.5), (0.9, 0.7)))
-        level.append(prism((side * 9.4, -22, 32.5), 1.7, 0.5, 8, 0))
-        level.append(prism((side * 1.8, -34.0, 26.8), 0.9, 0.4, 6, 1))
-    for part in level:
-        parts.append(lean(part, pivot, -8))
+        # The eyes on their stalks, at the front edge.
+        parts.append(frustum((side * 4.5, -7.5, 27), (1.6, 1.6), (side * 5, -9.5, 34), (1.1, 1.1)))
+        parts.append(ball((side * 5.1, -9.8, 35.8), 3.0))
+        # Four walking legs, fanned out a little: a thigh rising from the
+        # shell to the knee, and a sturdy shin coming down to the foot.
+        for n, angle in enumerate((-24, -8, 8, 24)):
+            hip = (side * 12, 2 + (n - 1.5) * 4.6, 18)
+            knee = (side * 20.5, hip[1], 25)
+            thigh = frustum((side * 12, hip[1], 17), (3.0, 2.0), knee, (2.6, 1.8))
+            shin = frustum((side * 24, hip[1], 0), (1.5, 1.3), knee, (2.6, 1.8))
+            for part in (thigh, shin):
+                parts.append(turn(part, hip, side * angle))
+        # The claw, raised: an arm reaching up and forward, a thick hand
+        # and two fingers pointing at the sky.
+        parts.append(frustum((side * 12, -6, 19), (3.0, 3.0), (side * 17, -13, 31), (2.6, 2.6)))
+        parts.append(box((side * 18, -14, 36), (4.8, 4.4, 5.6), 1.9))
+        parts.append(frustum((side * 15.5, -14, 40), (2.1, 2.3), (side * 15, -14.5, 49), (0.7, 0.7)))
+        parts.append(frustum((side * 20.7, -14, 40), (1.9, 2.1), (side * 21.6, -14.5, 47), (0.7, 0.7)))
+    # A crab is wider than it is long, and it walks sideways: it stands
+    # across the view, its wide side along Y, and centred on the origin,
+    # which the default view looks at.
+    turned = [[(-y, x, z) for x, y, z in part] for part in parts]
+    xs = [p[0] for part in turned for p in part]
+    ys = [p[1] for part in turned for p in part]
+    shift = ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)
     triangles = []
-    for part in parts:
-        triangles.extend(hull(part))
+    for part in turned:
+        triangles.extend(hull([(x - shift[0], y - shift[1], z) for x, y, z in part]))
     return triangles
 
 
 def main():
-    triangles = pig()
-    header = b"pig: an original low-poly model made for Rick (Apache-2.0)"
+    triangles = crab()
+    header = b"crab: an original low-poly model made for Rick (Apache-2.0)"
     data = bytearray(header.ljust(80, b" "))
     data += struct.pack("<I", len(triangles))
     for normal, a, b, c in triangles:
         data += struct.pack("<12fH", *normal, *a, *b, *c, 0)
-    path = pathlib.Path(__file__).with_name("pig.stl")
+    path = pathlib.Path(__file__).with_name("crab.stl")
     path.write_bytes(data)
     print(f"{path}: {len(triangles)} triangles, {len(data)} bytes")
 
