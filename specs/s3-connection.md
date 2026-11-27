@@ -173,6 +173,23 @@ Parts 1 and 3 each need something the connection extension point does not have: 
 - Decided on 2026-11-26: both changes ship in 0.6.1, a patch release. A plugin build fits one Rick release anyway (`specs/plugin-distribution.md`), so every plugin is published again with it.
 - The shape of each change is proposed by the pull request that makes it. A docs pull request then records it here and where `specs/plugins.md` describes the versioned contract.
 
+### API 24: a form that can react
+
+Recorded from pull request #315 (issue #309, task 3), as built.
+
+- `Connector` has one more method, with a default that does nothing: `react(&self, form: &ConnectionForm) -> ConnectionReaction`. A plugin that does not override it changes only its API version.
+- The dialogue asks when it opens, after each edit, when a text field is left, and once more before it saves. `react` runs between two frames: it reads the form and answers, and does no I/O.
+- `ConnectionForm` is the dialogue as it stands:
+  - `values`: the fields by key, as typed. Secret fields are not in it; a secret reaches no reaction, and a reaction sets none.
+  - `edited`: the keys of the fields the user edited by hand. In *Edit…* a value that was saved counts as edited; a field saved empty does not.
+  - `changed`: the field just edited; none when the dialogue opens or is about to save.
+  - `settled`: whether the input is whole. It is not while the user types in the field. It is after a paste, when the field is left, for a checkbox or a choice, when the dialogue opens and before it saves.
+- `ConnectionReaction` is the plugin's answer, three lists by field key:
+  - `fill`: values the plugin settles, such as the region of a recognised host. The dialogue takes one only for a field the user has not edited by hand. That is the rule of 1.3, and the dialogue enforces it, not the plugin. A filled field stays unedited, so a later reaction can settle it again.
+  - `rewrite`: the user's own input moved into the fields it belongs to, such as a bucket address pasted as the endpoint (1.1). The dialogue takes it whatever the field's state, and the fields count as edited afterwards. A plugin rewrites only settled input: taking a half-typed address apart would move the text under the cursor.
+  - `notes`: a short text by a field, already worded in the user's language, such as the recognised provider. The notes of one reaction replace those of the one before. A note has the row under its field.
+- The S3 plugin's `react` is in `crates/ext-vfs-s3/src/connection.rs`, and its recognition table in `crates/ext-vfs-s3/src/recognition.rs`. The worked example is in the crate docs of `ext::connection`.
+
 ## Code pointers
 
 Not part of the decisions above: where each point lands in the code, read on `dev` at `f28c813` (2026-11-26, v0.6.0). Lines move.
