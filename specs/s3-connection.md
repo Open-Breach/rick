@@ -190,6 +190,25 @@ Recorded from pull request #315 (issue #309, task 3), as built.
   - `notes`: a short text by a field, already worded in the user's language, such as the recognised provider. The notes of one reaction replace those of the one before. A note has the row under its field.
 - The S3 plugin's `react` is in `crates/ext-vfs-s3/src/connection.rs`, and its recognition table in `crates/ext-vfs-s3/src/recognition.rs`. The worked example is in the crate docs of `ext::connection`.
 
+### API 25: a connection test
+
+Recorded from pull request #320 (issue #310, task 1), as built. The S3 test is pull request #322, the Azure Blob and Google Cloud Storage tests #323.
+
+- `Connector` has two more methods, both with defaults: `checks(&self) -> Vec<String>` and `async test(&self, form: &ConnectionTestForm, cancel: &CancelToken) -> ConnectionTest`. A plugin that overrides neither has no test: its dialogue shows no *Test* button and it is saved as before. It changes only its API version.
+- `checks` says what the test checks, in order, in the user's language. The dialogue lists these while the test runs. A list that is not empty is what gives the dialogue its *Test* button.
+- `ConnectionTestForm` is what is in the dialogue at that moment:
+  - `name`: the saved connection, in *Edit…*. A secret field left empty then stands for the one in the keychain. None in *Add connection…*.
+  - `values`: every field by key as typed, the secrets included. Its debug text names the fields and never a value.
+- `ConnectionTest` is the result: `checks`, in the order they ran, and `good`, which the plugin decides, because the rule differs by provider (3.3).
+- A `ConnectionCheck` has a `label`, an `outcome` and a `detail`. The outcome is passed, failed, information or not run. The detail is the service's own code and reason, as 1.2 has it; it is empty for a check that passed or was not run. Information is for a check that did not pass where that is not a failure, such as the list-buckets line of S3 with buckets named.
+- The contract of `test`: it only reads; each check gives up after `CHECK_TIMEOUT`, ten seconds; a check that depends on a failed one is not run; it ends early when `cancel` is cancelled; a typed secret is written to no file, no keychain and no log.
+- The application runs the test as a job (`Command::TestConnection`), which the dialogue or the operations area can cancel. The result comes back whole when the test ends, under the dialogue's request number. Nothing is saved by it.
+- The requests behind the checks:
+  - S3: `ListBuckets` answers checks 1 to 3. Each named bucket is checked with `ListObjectsV2` for a single key, which gives the service's code where a `HEAD` would give none.
+  - Azure Blob: `List Containers` for a single name answers all three.
+  - Google Cloud Storage: `buckets.list` for a single name without a token answers check 1; the sign-in at the token endpoint and the same request with the token answer checks 2 and 3.
+- The worked example is in the crate docs of `ext::connection`.
+
 ## Code pointers
 
 Not part of the decisions above: where each point lands in the code, read on `dev` at `f28c813` (2026-11-26, v0.6.0). Lines move.
